@@ -72,7 +72,7 @@ check('Playing / seeking / moved / invalid playback time rejected', () => {
 check('Default checkout has no write approval', () => assert(!fs.existsSync(path.join(__dirname, 'write-approval.json'))));
 // 绕过 disabled 按钮直接触发事件，确认保护存在于实际处理函数中。
 // 这是 VM 中的模拟运行，既没有真实 DOM，也没有 Eagle 媒体解码。
-async function simulatedReadOnly() {
+async function simulatedReadOnly(pageURL, pluginPath = __dirname, expectedFailure = null) {
   const vm = require('vm');
   const elements = new Map(); let startup, libraryChanged, apiWrites = 0, fileWrites = 0;
   class Element {
@@ -94,20 +94,35 @@ async function simulatedReadOnly() {
       if (String(name).endsWith('write-approval.json')) { const error = new Error('不存在授权文件'); error.code = 'ENOENT'; throw error; }
       return fs.readFileSync(name, ...args);
     }, writeFileSync() { fileWrites++; throw new Error('模拟只读操作不应写文件'); } };
-  const context = { document, location: { href: pathToFileURL(path.join(__dirname, 'index.html')).href }, process, URL,
+  // 页面可由 Eagle 的协议承载；磁盘项目位置必须来自启动事件 plugin.path。
+  const context = { document, location: { href: pageURL }, process, URL,
     require(name) { return name === 'fs' ? fakeFS : require(name); },
     eagle: { onPluginCreate(callback) { startup = callback; }, onLibraryChanged(callback) { libraryChanged = callback; },
       item: { async getSelected() { return [fakeItem]; }, async getById() { return fakeItem; } } } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8'), context);
-  startup(); await new Promise(setImmediate);
-  assert(elements.get('item').textContent.includes(item.id)); assert.equal(elements.get('add').disabled, true);
+  startup({ path: pluginPath }); await new Promise(setImmediate);
+  if (expectedFailure) {
+    assert(document.getElementById('status').textContent.includes(expectedFailure));
+    assert.equal(apiWrites, 0); assert.equal(fileWrites, 0); return;
+  }
+  assert(document.getElementById('item').textContent?.includes(item.id), document.getElementById('status').textContent);
+  assert.equal(elements.get('add').disabled, true);
   assert(elements.get('comments').children.length > 1);
   await elements.get('add').handlers.click(); assert(elements.get('status').textContent.includes('没有与此提案完全匹配'));
   assert.equal(apiWrites, 0); assert.equal(fileWrites, 0);
   libraryChanged(); assert.equal(elements.get('refresh').disabled, true); assert.equal(elements.get('add').disabled, true);
   await elements.get('remove').handlers.click(); assert.equal(apiWrites, 0); assert.equal(fileWrites, 0);
 }
-simulatedReadOnly().then(() => {
-  passed++; console.log('PASS Simulated startup, annotation rendering and direct unauthorized event rejection (not Eagle)');
+async function startupChecks() {
+  for (const url of [pathToFileURL(path.join(__dirname, 'index.html')).href, 'eagle://poc-a/index.html', 'http://localhost:12345/index.html']) {
+    await simulatedReadOnly(url); passed++;
+    console.log(`PASS Simulated startup/read-only controls with ${new URL(url).protocol} page (not Eagle)`);
+  }
+  await simulatedReadOnly('eagle://poc-a/index.html', '', '未提供有效的 plugin.path'); passed++;
+  console.log('PASS Missing plugin.path refused');
+  await simulatedReadOnly('eagle://poc-a/index.html', path.dirname(__dirname), '请从批准的实验目录加载'); passed++;
+  console.log('PASS Plugin outside approved directory refused');
+}
+startupChecks().then(() => {
   console.log(JSON.stringify({ source: 'local-node-and-vm-checks-only', passed, eagleInteractionTested: false, libraryWrites: 0 }));
 }).catch(error => { console.error(error); process.exitCode = 1; });

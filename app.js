@@ -267,12 +267,16 @@
     status('未检测到 Eagle Plugin API。请通过 Eagle 加载本目录；普通浏览器打开不算运行验证。', true); return;
   }
   // 核心入口：由 Eagle 触发，类似蓝图中的启动事件。
-  eagle.onPluginCreate(() => {
+  eagle.onPluginCreate(plugin => {
     try {
       fs = require('fs'); path = require('path'); crypto = require('crypto');
-      if (path.resolve(require('url').fileURLToPath(new URL('.', location.href))).toLowerCase() !== path.resolve(ROOT).toLowerCase())
+      // 页面 URL 不保证是 file:。官方启动事件的 path 才是插件所在的磁盘目录。
+      if (typeof plugin?.path !== 'string' || !path.isAbsolute(plugin.path))
+        throw new Error('启动事件未提供有效的 plugin.path，请反馈此错误。');
+      if (fs.realpathSync(plugin.path).toLowerCase() !== fs.realpathSync(ROOT).toLowerCase())
         throw new Error('请从批准的实验目录加载开发插件，不要复制到 Eagle 安装目录。');
-      state.ready = true; log('plugin-created', { node: process.versions.node, chrome: process.versions.chrome });
+      state.ready = true; log('plugin-created', { pluginPath: plugin.path,
+        node: process.versions.node, chrome: process.versions.chrome });
       controls(); run('启动读取', loadSelected);
     } catch (error) { status(`启动失败：${error.message}`, true); }
   });

@@ -21,6 +21,7 @@
 - `manifest.json`：告诉 Eagle 打开 `index.html`；不自动启动，不开多个实例。
 - `index.html`：HTML 摆放视频、秒数输入、时间轴和标注；少量 CSS 仅用于可读性。
 - `app.js`：JavaScript 响应事件，调用 API。搜索 `核心入口` 可找到 `eagle.onPluginCreate`，类似蓝图的启动事件。
+- 启动目录来自该事件传入的 `plugin.path`；插件页面的 URL 不保证使用 file 协议，不能用它反推磁盘目录。
 - `app.js` 中 `loadSelected` 读取素材；`mediaURL` 处理路径；`seek` 设置当前秒数；`renderComments` 显示标注；`addComment/removeComment` 是受保护的元数据操作。
 - `<video>` 使用 Eagle 窗口的媒体能力解码播放。即使扩展名是 MP4，具体编码是否能解码仍须实际验证。
 - Node.js 内置 `fs/path/url/crypto` 负责实验文件、路径转换和唯一测试编号；不安装第三方依赖。
@@ -39,6 +40,11 @@
 7. 向 Codex 报告是否正常，以及保存的证据文件名。Codex 读取证据后更新记录。无需用户使用终端。
 
 如果没有合适的专用素材，先反馈；导入副本和创建准备标注都需要单独授权，当前代码不会自动执行。
+
+告诉 Codex 测试素材时，先在 Eagle 中选中该素材即可，不需要提供 Eagle 安装路径或整个素材库路径。
+读取成功后可保存证据，里面包含素材 ID 与文件路径。只有明确核对专用素材并另行授权后，才会进行标注写入。
+
+更新代码后可在插件窗口按 F12，切到 Console（控制台），输入 `location.reload()` 后回车，重新执行本目录中的代码。单纯关闭再打开可能只隐藏/显示旧窗口；无需重新导入项目。
 
 ## 写入必须另行确认
 

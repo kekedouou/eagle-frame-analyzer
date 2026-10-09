@@ -21,8 +21,8 @@
 | 验证项 | 状态 | 证据 |
 | --- | --- | --- |
 | 现有 Node/Git 与 Eagle 版本 | 已确认 | evidence/environment.json |
-| 本地语法、路径、时间和授权边界检查 | 15 组通过，仅本地/模拟 | evidence/local-checks.json |
-| Eagle 加载此 Window 插件 | 待用户执行 | 尚无真实 Window 证据 |
+| 本地语法、路径、时间和授权边界检查 | 最新 19 组通过，仅本地/模拟 | evidence/startup-regression-after.json；初版见 local-checks.json |
+| Eagle 加载此 Window 插件 | 用户已打开页面；启动失败，修复待重测 | 用户报告的启动错误，见下文 |
 | Window 读取所选 MP4 的 ID/路径 | 未验证 | — |
 | 实际播放/暂停/定位及中文空格路径 | 未验证 | — |
 | 已有标注读取、时间轴显示、点击定位 | 未验证 | — |
@@ -37,3 +37,15 @@
 - 得到具体测试素材提案后，再请求一次添加/回退范围的确认。
 - 当前没有新证据推翻既有调查结论；原生播放器位置同步没有纳入实现。
 - 实验 B 未启动。
+
+## 用户首次运行反馈：启动 URL 协议错误
+
+- 用户原始反馈：`启动失败：The URL must be of scheme file`。
+- 出错层：启动路径校验。初版把 `location.href` 当成 file URL 传给 fileURLToPath，尚未进入 loadSelected，不能把这次错误归因于素材路径或解码。
+- 实际页面使用的具体协议未采集，不声称一定是 eagle: 或 http:。
+- 初版本地 VM 仅模拟 file: 页面，遗漏非 file: 场景；它的通过不能替代实际 Eagle 验收。
+- 回归复现：把模拟页面换为非 file: URL 后，旧代码产生与用户一致的报错。证据：evidence/startup-regression-before.json。最初回归断言自身未处理启动失败时元素尚未创建，随后修正测试诊断再复现原始错误。
+- 修复：采用官方 onPluginCreate(plugin) 的 plugin.path 获取磁盘目录，并用 realpathSync 核对批准目录；不再从页面 URL 推断磁盘路径。[官方事件文档](https://developer.eagle.cool/plugin-api/api/event)
+- 保留目录约束；缺失 plugin.path 或项目在其他目录仍拒绝启动。标注权限边界没有改变，没有创建授权文件。
+- 版本 0.1.1；新增 file:/eagle:/http: 模拟启动以及缺失/越界路径检查，19 组本地检查通过。证据：evidence/startup-regression-after.json，包含原始输出和源码 SHA256。
+- 真实 Eagle 修复后重测仍待用户执行；未读写任何素材库数据，实验 B 未启动。
