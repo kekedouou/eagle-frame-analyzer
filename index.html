@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eagle 视频分析 · 实验 A</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 20px; background: #f4f5f6; color: #20242a; }
+    h1 { font-size: 20px; } button,input,select { font: inherit; margin: 3px; padding: 5px 8px; }
+    button:disabled { opacity: .5; } video { display: block; width: 100%; max-height: 320px; background: #111; }
+    section { margin: 16px 0; padding: 12px; background: white; border: 1px solid #d5d9de; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+    #timeline { width: calc(100% - 24px); } #markers { position: relative; height: 40px; margin: 0 14px; }
+    #markers button { position: absolute; transform: translateX(-50%); padding: 0 4px; margin: 0; }
+    #status { padding: 8px; background: #e5ebf0; white-space: pre-wrap; }
+    .error { color: #a62222; } .muted { color: #58616b; } label { display: inline-block; }
+  </style>
+</head>
+<body>
+  <h1>Eagle Window 视频分析 · 实验 A</h1>
+  <p class="muted">只验证素材与标注集成。写入未获授权；当前没有预解码缓存。</p>
+  <div id="status" role="status">等待 Eagle 启动事件。若一直停在这里，请反馈此状态。</div>
+  <section>
+    <button id="load" disabled>读取当前选中的一个 MP4</button>
+    <button id="refresh" disabled>重新读取此素材标注</button>
+    <pre id="item">尚未读取素材</pre>
+    <video id="video" controls preload="metadata"></video>
+    <p><label>目标秒数 <input id="seconds" type="number" min="0" step="0.001" value="0" disabled></label>
+      <button id="seek" disabled>定位</button> <output id="time">0.000 / 未加载</output></p>
+    <input id="timeline" aria-label="自定义时间轴" type="range" min="0" max="1" step="0.001" value="0" disabled>
+    <div id="markers" aria-label="已有时间标注"></div>
+    <div id="comments">尚未读取标注</div>
+  </section>
+  <section>
+    <strong>一次测试标注（默认锁定）</strong>
+    <p class="muted">先暂停到目标时间，再准备提案。提案只保存到实验目录，不写 Eagle。取得聊天中的具体授权后，才会提供授权文件。</p>
+    <button id="prepare" disabled>暂停并准备写入提案</button>
+    <button id="approval" disabled>检查授权文件</button>
+    <button id="add" disabled>添加获准的这一条标注</button>
+    <button id="remove" disabled>回退：删除本次测试标注</button>
+    <pre id="proposal">未准备；未授权</pre>
+  </section>
+  <section>
+    <strong>人工观察（不会自动判定通过）</strong><br>
+    <label>定位后的画面 <select id="seekObservation"><option>未检查</option><option>与目标相符</option><option>与目标不符</option></select></label>
+    <label>原生写入后即时显示 <select id="nativeImmediate"><option>未检查</option><option>显示</option><option>未显示</option></select></label>
+    <label>原生重开后显示 <select id="nativeReopen"><option>未检查</option><option>显示</option><option>未显示</option></select></label>
+    <p><button id="export" disabled>保存当前证据</button> <span class="muted">保存到实验目录 evidence；日志包含所选素材路径和标注。</span></p>
+    <pre id="log" aria-label="诊断日志"></pre>
+  </section>
+  <script src="app.js"></script>
+</body>
+</html>
