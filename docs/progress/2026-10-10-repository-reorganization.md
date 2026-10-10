@@ -46,4 +46,12 @@
 - 检查记录生成新日期文件，原 b-local-checks.json 和 b-final-assessment.json 均未覆写。24 个本地 Markdown 链接有效，git diff --check、git fsck --full 通过；缓存测试目录已清理。
 - 初次迁移核对脚本把证据中的 Windows 反斜线路径与清单的正斜线路径直接匹配，报键不存在。统一比较用的路径分隔符后通过；没有修改原始 JSON 或待核对文件。
 
-待真实确认：用户在 Eagle 重新选择 `prototypes/window-player` 开发目录并检查启动、播放。当前会话没有操作 Eagle 加载界面，不能把本地检查作为该项通过。
+整理时尚待确认的项目为新路径下真实 Eagle 加载/运行；当时 Codex 没有操作 Eagle 加载界面。本地 migration-verification.json 的 actualEagleReloadVerified=false 保留其生成时的事实，不回写原证据。
+
+## 后续用户人工验收（2026-10-10）
+
+- 来源：用户在本对话主动反馈，执行者为用户，记录者为 Codex。
+- 用户原话：“我已经手动测试过重组后新路径下的 Eagle 插件，确认能够正常加载和运行。”
+- 结论：`prototypes/window-player` 新路径下加载与运行，用户人工验收通过。关联本次重组提交 9a77db8。
+- 范围：只记录用户明确确认的加载与运行；该反馈未附新窗口日志或分项操作清单，不扩展为标注、逐帧精度、性能等项目的重新验收。Codex 未亲自操作 Eagle，未重跑 A/B。
+- 项目收尾见 [阶段 2 综合验收总结](../progress.md#阶段-2-综合验收总结)。
