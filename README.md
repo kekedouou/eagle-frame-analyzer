@@ -2,9 +2,9 @@
 
 一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A 已结束；阶段 3B 正在讨论候选架构，用户已授权 S1 播放时钟专项验证。3C 与正式开发尚未启动。
 
-当前工作：[S1 实验计划](docs/experiments/S1/plan.md)与[实验记录](docs/experiments/S1/report.md)。S1 使用独立原型 `prototypes/playback-clock/`，本地检查已完成，等待用户按记录中的步骤手动加载新入口 `prototypes/playback-clock/manifest.json`。不覆盖 A/B 实现或旧证据，不据本地结果宣布声画或产品性能通过。
+当前工作：[S1 实验计划](docs/experiments/S1/plan.md)与[实验记录](docs/experiments/S1/report.md)。S1 使用独立原型 `prototypes/playback-clock/`，已取得实际 Eagle 窗口证据；用户确认本次观察未出现声画不同步，真实 HEVC 素材的拖动、暂停与最终定位得到人工确认。慢解码下画面更新变慢，逐帧交互、全编码矩阵与长期稳定性仍未充分验证；候选 C 尚未定稿，不宣布产品性能整体通过。
 
-S1 现可点击“读取 Eagle 选中视频”，测试当前单选的任意短 MP4（≤30秒，原文件只读）；三段合成样本仍用于已知帧/提示音验证。更新代码后请重新加载插件窗口，再执行真实有声素材验收。
+S1 入口为 `prototypes/playback-clock/manifest.json`，可点击“读取 Eagle 选中视频”，测试当前单选的任意短 MP4（≤30秒，原文件只读）；三段合成样本用于已知帧/提示音验证。证据范围、性能数据和用户反馈见[真实窗口验收](docs/experiments/S1/report.md#真实窗口证据与用户人工验收)。本次仅更新文档，未重跑实验。
 
 实验 A 已完成单素材集成与一次授权标注写入/回退；实验 B 已完成单视频缓存性能验证；重组后的新路径加载与运行已获用户人工确认。像素级逐帧准确性、长期内存稳定性及正式产品架构尚未充分验证。综合结论、数据与后续决策入口见 [阶段 2 综合验收总结](docs/progress.md#阶段-2-综合验收总结)。
 
