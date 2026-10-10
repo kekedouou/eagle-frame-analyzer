@@ -84,3 +84,14 @@
 - 程序化核对结果与证据 SHA256 保存于 evidence/final-assessment.json。当前单一素材案例的实验 A 通过，完整说明见 REPORT-A.md。
 - 一次性授权已结束：将本地 write-approval.json 的 allowAdd/allowRemove 均设为 false，保留回执与原始证据，不删除实验文件。
 - 没有运行 updateComment，没有生成缓存或执行性能基线，也没有验证原生播放进度同步。实验 B 未启动，停止等待用户决定。
+
+## 实验 B 实施与本地检查（2026-10-10）
+
+- 用户明确表示“可以进入实验 B”，据此实施已约定的最小缓存和对比流程，无需重复方案批准。
+- 只读确认原测试 ID MUXL6QI4AJIAG 当前已改名为火焰重锤_连击_HellfireBarbarian；未修改素材名称或文件。真实源探测为 VP9/4K/13.821 秒/828 帧，保存 evidence/b-probe.json。
+- 使用 Eagle 已有的 FFmpeg 6.1 与 ffprobe，没有安装软件、修改工具目录或素材库数据。
+- 新增 cache-b.cjs（有限 JPEG 输出、逐帧时间戳、安全清理）和 experiment-b.js（共用画布、请求队列、计时与资源采样）；接入现有 index.html/app.js。运行与架构说明见 EXPERIMENT-B.md。
+- 本地 check.cjs 19 项通过；check-b.cjs 通过语法/控件引用、非均匀 PTS 定位、队列/取消、合成 VFR 真实提取、源文件 SHA256、容量限制、拒删未知文件。具体证据 evidence/b-local-checks.json；合成 6 秒视频 24 帧，仅用于代码验证。
+- 测试发现并修正待处理队列取消回调引用错误；修正重置时普通视频控件恢复、重新探测清除旧比较记录，复用 A 的受限证据保存函数。A 的检查更新为允许“授权文件不存在或权限已关闭”，没有重新打开标注权限。
+- 测试缓存 cache-b-test 已通过专用清理函数移除；合成输入保留在隔离目录 b-test-fixtures。尚未为真实源生成 cache-b，以便先在 Eagle 窗口保存直接寻帧基线。
+- 真实 B 窗口交互、随机响应平均/P95、人工拖动与画面准确性尚未验证；代码完成不等于 B 通过。当前交付用户运行，取得窗口记录后再验收。

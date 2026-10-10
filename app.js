@@ -89,9 +89,9 @@
     return !!state.proposal && fs.existsSync(evidencePath(`attempt-${state.proposal.proposalId}.json`));
   }
   function controls() {
-    const active = state.ready && !state.busy;
+    const active = state.ready && !state.busy && !globalThis.pocB?.busy;
     const loaded = active && !!state.item;
-    const playable = loaded && Number.isFinite(video.duration) && video.duration > 0;
+    const playable = loaded && !globalThis.pocB?.active && Number.isFinite(video.duration) && video.duration > 0;
     $('load').disabled = !active; $('export').disabled = !active;
     $('refresh').disabled = !loaded;
     for (const id of ['seconds', 'seek', 'timeline', 'prepare']) $(id).disabled = !playable;
@@ -111,6 +111,7 @@
     finally { state.busy = false; controls(); }
   }
   function invalidate() {
+    globalThis.pocB?.reset();
     state.generation++; video.pause(); video.removeAttribute('src'); video.load();
     state.item = null; state.comments = []; state.proposal = null; state.grant = null; state.receipt = null;
     state.seekTarget = null; state.loadedAt = null;
@@ -139,6 +140,7 @@
     }
   }
   function seek(value, source, commentId = null) {
+    if (globalThis.pocB?.active || globalThis.pocB?.busy) throw new Error('请先退出 B 预览再使用 A 的定位。');
     if (!state.item) throw new Error('没有已加载素材。');
     const target = seconds(value, video.duration); video.pause();
     state.seekTarget = { requested: target, source, commentId, at: new Date().toISOString() };
@@ -277,6 +279,7 @@
         throw new Error('请从批准的实验目录加载开发插件，不要复制到 Eagle 安装目录。');
       state.ready = true; log('plugin-created', { pluginPath: plugin.path,
         node: process.versions.node, chrome: process.versions.chrome });
+      globalThis.pocB?.init({ root: ROOT, video, getItem: () => state.item, controls, save });
       controls(); run('启动读取', loadSelected);
     } catch (error) { status(`启动失败：${error.message}`, true); }
   });

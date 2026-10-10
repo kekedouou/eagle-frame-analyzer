@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Eagle 视频分析 · 实验 A</title>
+  <title>Eagle 视频分析 · 实验 A/B</title>
   <style>
     body { font: 14px/1.5 system-ui, sans-serif; margin: 20px; background: #f4f5f6; color: #20242a; }
     h1 { font-size: 20px; } button,input,select { font: inherit; margin: 3px; padding: 5px 8px; }
@@ -14,17 +14,20 @@
     #markers button { position: absolute; transform: translateX(-50%); padding: 0 4px; margin: 0; }
     #status { padding: 8px; background: #e5ebf0; white-space: pre-wrap; }
     .error { color: #a62222; } .muted { color: #58616b; } label { display: inline-block; }
+    #b-canvas { width: 100%; max-height: 400px; object-fit: contain; background: #111; } [hidden] { display: none !important; }
+    #b-slider { width: 95%; }
   </style>
 </head>
 <body>
-  <h1>Eagle Window 视频分析 · 实验 A</h1>
-  <p class="muted">只验证素材与标注集成。写入未获授权；当前没有预解码缓存。</p>
+  <h1>Eagle Window 视频分析 · 实验 A/B</h1>
+  <p class="muted">A 已完成。B 比较直接寻帧与 JPEG 帧缓存；不修改原始视频或素材标注。</p>
   <div id="status" role="status">等待 Eagle 启动事件。若一直停在这里，请反馈此状态。</div>
   <section>
     <button id="load" disabled>读取当前选中的一个 MP4</button>
     <button id="refresh" disabled>重新读取此素材标注</button>
     <pre id="item">尚未读取素材</pre>
     <video id="video" controls preload="metadata"></video>
+    <canvas id="b-canvas" hidden></canvas>
     <p><label>目标秒数 <input id="seconds" type="number" min="0" step="0.001" value="0" disabled></label>
       <button id="seek" disabled>定位</button> <output id="time">0.000 / 未加载</output></p>
     <input id="timeline" aria-label="自定义时间轴" type="range" min="0" max="1" step="0.001" value="0" disabled>
@@ -32,7 +35,29 @@
     <div id="comments">尚未读取标注</div>
   </section>
   <section>
-    <strong>一次测试标注（默认锁定）</strong>
+    <strong>实验 B：拖动预览对比</strong>
+    <p>保持窗口可见，依次执行：探测 → 基线 → 手动生成 → 对比。探测本身会读取整段视频，基线不代表冷磁盘启动。</p>
+    <label>预览尺寸 <select id="b-height"><option value="720">720p</option><option value="360">360p</option></select></label>
+    <button id="b-inspect" disabled>1. 探测视频</button>
+    <button id="b-baseline" disabled>2. 运行直接 MP4 基线</button>
+    <button id="b-build" disabled>3. 手动生成缓存</button>
+    <button id="b-compare" disabled>4. 运行对比</button>
+    <button id="b-stop" disabled>停止任务</button>
+    <p id="b-status" role="status">等待启动</p><pre id="b-info"></pre>
+    <button id="b-direct" disabled>直接 MP4 预览</button><button id="b-cache" disabled>缓存预览</button>
+    <button id="b-leave" disabled>退出预览，恢复播放</button>
+    <p><span id="b-mode"></span> <span id="b-frame"></span></p>
+    <input id="b-slider" type="range" min="0" max="1" step="0.001" value="0" aria-label="B 拖动预览" disabled>
+    <p>鼠标拖动观察（手动填写）：</p>
+    <label>直接寻帧 <select id="b-observe-direct"><option>未检查</option><option>流畅</option><option>明显延迟</option></select></label>
+    <label>缓存预览 <select id="b-observe-cache"><option>未检查</option><option>流畅</option><option>明显延迟</option></select></label>
+    <label>停止后的画面 <select id="b-observe-final"><option>未检查</option><option>符合目标且未见倒退</option><option>不符或出现旧画面</option></select></label>
+    <p><button id="b-export" disabled>保存 B 证据</button><button id="b-clean" disabled>清理本实验帧缓存</button></p>
+    <p class="muted">缓存上限 256 MiB、3600 帧；一次最多解码一个缓存图像。RSS 为本进程采样，非 Eagle 总内存。刷新机会估算不等于屏幕实际显示时间。</p>
+    <pre id="b-results"></pre>
+  </section>
+  <section>
+    <strong>实验 A：一次测试标注（授权已关闭）</strong>
     <p class="muted">先暂停到目标时间，再准备提案。提案只保存到实验目录，不写 Eagle。取得聊天中的具体授权后，才会提供授权文件。</p>
     <button id="prepare" disabled>暂停并准备写入提案</button>
     <button id="approval" disabled>检查授权文件</button>
@@ -48,6 +73,7 @@
     <p><button id="export" disabled>保存当前证据</button> <span class="muted">保存到实验目录 evidence；日志包含所选素材路径和标注。</span></p>
     <pre id="log" aria-label="诊断日志"></pre>
   </section>
+  <script src="experiment-b.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

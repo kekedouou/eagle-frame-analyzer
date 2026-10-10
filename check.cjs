@@ -69,7 +69,10 @@ check('Playing / seeking / moved / invalid playback time rejected', () => {
   for (const change of [{ paused: false }, { seeking: true }, { currentTime: 3 }, { currentTime: NaN }, { duration: 1 }])
     assert.throws(() => h.checkGrant(grant, proposal, item, { ...playback, ...change }, false));
 });
-check('Default checkout has no write approval', () => assert(!fs.existsSync(path.join(__dirname, 'write-approval.json'))));
+check('Write approval absent or closed', () => {
+  const file = path.join(__dirname, 'write-approval.json');
+  if (fs.existsSync(file)) { const grant = JSON.parse(fs.readFileSync(file)); assert.equal(grant.allowAdd, false); assert.equal(grant.allowRemove, false); }
+});
 // 绕过 disabled 按钮直接触发事件，确认保护存在于实际处理函数中。
 // 这是 VM 中的模拟运行，既没有真实 DOM，也没有 Eagle 媒体解码。
 async function simulatedReadOnly(pageURL, pluginPath = __dirname, expectedFailure = null) {
