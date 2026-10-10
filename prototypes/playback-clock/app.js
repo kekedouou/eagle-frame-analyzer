@@ -1,10 +1,10 @@
-/* S1 实验接线。Eagle 只提供窗口事件，不调用素材或标注写入 API。 */
+/* S1 实验接线。Eagle 提供窗口事件和显式选中项读取，不调用素材或标注写入 API。 */
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
   const MAX_EVENTS = 24000, MAX_SESSION_MS = 10 * 60 * 1000;
   let backend, player, info, controller, chain = Promise.resolve(), epoch = 0;
-  let events = [], memory = [], rounds = [], startedAt = 0, loadMetrics = null;
+  let events = [], memory = [], rounds = [], startedAt = 0, loadMetrics = null, loadRequest = null;
   let busy = true, testing = false, dragging = false, initialized = false, closing = false;
   let measureStopped = false, lastSaved = null, timer, startIso, peakRss = 0;
   const now = () => performance.now();
@@ -31,6 +31,7 @@
     for (const id of ['previous', 'play', 'pause', 'next', 'timeline', 'delay', 'script']) $(id).disabled = !usable;
     $('sample').disabled = !backend || testing || closing;
     $('reload').disabled = !backend || testing || closing;
+    $('selected').disabled = !backend || testing || closing;
     $('cancel').disabled = !busy || !controller;
     $('save').disabled = !backend || !startedAt || testing;
     $('cleanup').disabled = !backend || busy || testing || closing;
@@ -72,7 +73,7 @@
       origin: 'actual-window-session', executor: 'user-operated-window',
       environment: { node: process.versions.node, chrome: process.versions.chrome || null, electron: process.versions.electron || null, platform: process.platform, eagle: typeof eagle !== 'undefined' && eagle.app ? { version: eagle.app.version, build: eagle.app.build } : null },
       source: info && info.source, prepared: info && { width: info.width, height: info.height, duration: info.duration, frameCount: info.frames.length, audio: info.audio, metrics: info.metrics },
-      loadMetrics, snapshot: state(), verifyMarkers: $('verify').checked,
+      loadMetrics, loadRequest, snapshot: state(), verifyMarkers: $('verify').checked,
       summary: summarize(), rounds, events, memory, evidenceTruncated: measureStopped,
       manual: { source: 'user-entered-observation', sync: $('manualSync').value, drag: $('manualDrag').value, silence: $('manualSilence').value, final: $('manualFinal').value },
       lastSaved
@@ -85,26 +86,61 @@
     return file;
   }
   function newSession(t0) {
-    events = []; memory = []; rounds = []; loadMetrics = null; measureStopped = false; peakRss = 0;
+    events = []; memory = []; rounds = []; loadMetrics = null; loadRequest = null; measureStopped = false; peakRss = 0;
     startedAt = t0; startIso = new Date().toISOString(); lastSaved = null;
     for (const id of ['manualSync', 'manualDrag', 'manualSilence', 'manualFinal']) $(id).selectedIndex = 0;
   }
-  function requestLoad(key, requestedAt = now()) {
+  function captureSelected() {
+    try {
+      if (typeof eagle === 'undefined' || !eagle.item || typeof eagle.item.getSelected !== 'function') throw new Error('当前环境没有 Eagle 选中素材读取 API。');
+      // Invoke now, before entering the serial preparation queue. Do not retain Eagle item objects.
+      const response = eagle.item.getSelected();
+      return Promise.resolve(response).then(items => {
+        if (!Array.isArray(items) || items.length === 0) throw new Error('请先在 Eagle 中选中一个 MP4 视频。');
+        if (items.length !== 1) throw new Error('当前选中了多个素材，请只选中一个 MP4 视频。');
+        const item = items[0];
+        if (!item || String(item.ext).toLowerCase() !== 'mp4') throw new Error('当前选中的素材不是 MP4 视频。');
+        if (typeof item.id !== 'string' || !item.id.trim()) throw new Error('选中视频缺少素材 ID。');
+        if (typeof item.filePath !== 'string' || !item.filePath.trim()) throw new Error('选中视频缺少本地文件路径。');
+        return Object.freeze({ id: item.id, name: String(item.name || ''), filePath: item.filePath, ext: 'mp4' });
+      }).then(selected => ({ selected }), error => ({ error }));
+    } catch (error) { return Promise.resolve({ error }); }
+  }
+  function waitCapture(captured, signal) {
+    return new Promise((resolve, reject) => {
+      const aborted = () => { const error = new Error('已取消读取选中视频。'); error.name = 'AbortError'; reject(error); };
+      if (signal.aborted) { aborted(); return; }
+      signal.addEventListener('abort', aborted, { once: true });
+      captured.then(value => { signal.removeEventListener('abort', aborted); if (signal.aborted) aborted(); else resolve(value); },
+        error => { signal.removeEventListener('abort', aborted); reject(error); });
+    });
+  }
+  function requestLoad(key, requestedAt = now(), trigger = 'manual') {
     const ownEpoch = ++epoch, t0 = requestedAt;
+    const captured = key === 'selected' ? captureSelected() : Promise.resolve({ selected: null });
     if (controller) controller.abort();
+    const ownedController = new AbortController(); controller = ownedController;
     if (player) player.pause();
     busy = true; $('error').textContent = ''; controls();
     chain = chain.catch(() => {}).then(async () => {
       if (ownEpoch !== epoch || closing) return;
       if (events.length && startedAt) await save('window-switch').catch(fail);
       if (player) { await player.dispose(); player = null; }
-      info = null; newSession(t0); controller = new AbortController();
+      info = null; newSession(t0);
+      loadRequest = { key, trigger, requestedAt: t0, selected: null, error: null };
       $('status').textContent = '准备样本、帧与音频…'; controls();
       try {
+        const capture = await waitCapture(captured, ownedController.signal);
+        if (ownEpoch !== epoch || ownedController.signal.aborted) return;
+        if (capture.error) throw capture.error;
+        loadRequest.selected = capture.selected;
+        if (capture.selected) emit({ type: 'selected-captured', at: now(), id: capture.selected.id,
+          name: capture.selected.name, filePath: capture.selected.filePath, trigger });
         const backendBegin = now();
-        const prepared = await backend.prepare(key, { signal: controller.signal, onProgress: p => { if (ownEpoch === epoch) $('status').textContent = typeof p === 'string' ? p : JSON.stringify(p); } });
+        const prepared = await backend.prepare(key, { selected: capture.selected, signal: ownedController.signal,
+          onProgress: p => { if (ownEpoch === epoch) $('status').textContent = typeof p === 'string' ? p : JSON.stringify(p); } });
         const backendEnd = now();
-        if (ownEpoch !== epoch || controller.signal.aborted) return;
+        if (ownEpoch !== epoch || ownedController.signal.aborted) return;
         info = prepared;
         player = new window.S1Player.Player({
           canvas: $('picture'), readAsset: (data, file) => backend.readAsset(data, file),
@@ -114,14 +150,18 @@
         if (typeof player.setVerifyMarkers === 'function') player.setVerifyMarkers($('verify').checked);
         const browserBegin = now();
         await player.load(info);
-        if (ownEpoch !== epoch || controller.signal.aborted) { await player.dispose(); return; }
+        if (ownEpoch !== epoch || ownedController.signal.aborted) { await player.dispose(); return; }
         player.setDecodeDelay(Number($('delay').value));
         loadMetrics = { callToReadyMs: now() - t0, entryAndQueueMs: backendBegin - t0, backendCallMs: backendEnd - backendBegin, backendMs: info.metrics.totalMs, browserReadyMs: now() - browserBegin, reused: !!info.metrics.reused, firstPreparationTargetMs: info.duration < 5 ? 5000 : info.duration * 1000, physicalDisplayMs: null };
         $('timeline').max = info.duration;
         $('details').textContent = `${info.source.label}\n${info.source.codec} · ${info.source.width}×${info.source.height} → ${info.width}×${info.height} · ${info.frames.length}帧 · ${info.duration.toFixed(4)}秒\n${JSON.stringify({ loadMetrics, audio: info.audio, backend: info.metrics }, null, 2)}`;
         emit({ type: 'load-ready', at: now(), ...loadMetrics });
       } catch (error) {
-        if (ownEpoch === epoch) { emit({ type: 'error', stage: 'load', message: error.message }); fail(error); }
+        if (ownEpoch === epoch) {
+          loadRequest.error = { name: error.name || 'Error', message: error.message };
+          emit({ type: 'error', stage: 'load', message: error.message }); fail(error);
+          await save('window-load-failed').catch(fail);
+        }
       } finally {
         if (ownEpoch === epoch) { busy = false; controller = null; update(state()); }
       }
@@ -181,19 +221,23 @@
       backend = require(path.join(root, 'prepare.cjs'));
       if (fs.realpathSync(backend.ROOT) !== root) throw new Error('S1 后端目录与插件目录不一致。');
       const sources = await backend.listSources();
-      for (const source of sources) { const option = document.createElement('option'); option.value = source.key; option.textContent = source.label; $('sample').append(option); }
+      const labels = { 'selected': 'Eagle 当前选中的 MP4', 'h264-cfr': '固定帧率／同步提示音（H.264／CFR）',
+        'hevc-vfr': '可变帧率／音轨晚开始／有声（H.265／VFR）', 'vp9-silent': '固定帧率／无音轨（VP9／CFR）' };
+      if (!sources.some(source => source.key === 'selected')) sources.push({ key: 'selected', label: labels.selected });
+      for (const source of sources) { const option = document.createElement('option'); option.value = source.key; option.textContent = labels[source.key] || source.label; $('sample').append(option); }
       $('sample').value = sources.some(s => s.key === 'h264-cfr') ? 'h264-cfr' : sources[0].key;
       timer = setInterval(() => {
         if (!startedAt || measureStopped) return;
         const m = process.memoryUsage(); peakRss = Math.max(peakRss, m.rss);
         if (memory.length < 610) memory.push({ at: now(), rss: m.rss, heapUsed: m.heapUsed, external: m.external, arrayBuffers: m.arrayBuffers, cache: state().cacheBytes || 0 });
       }, 1000);
-      await requestLoad($('sample').value, entryAt);
+      await requestLoad($('sample').value, entryAt, 'initialize-default');
     } catch (error) { busy = false; fail(error); controls(); }
   }
 
-  $('sample').addEventListener('change', () => requestLoad($('sample').value).catch(fail));
-  $('reload').addEventListener('click', () => requestLoad($('sample').value).catch(fail));
+  $('sample').addEventListener('change', () => requestLoad($('sample').value, now(), 'sample-change').catch(fail));
+  $('reload').addEventListener('click', () => requestLoad($('sample').value, now(), 'reload').catch(fail));
+  $('selected').addEventListener('click', () => { $('sample').value = 'selected'; return requestLoad('selected', now(), 'selected-button').catch(fail); });
   $('cancel').addEventListener('click', () => { if (controller) controller.abort(); });
   $('play').addEventListener('click', () => player.play().catch(fail));
   $('pause').addEventListener('click', () => player.pause());
@@ -216,7 +260,9 @@
   window.addEventListener('pagehide', () => { closing = true; ++epoch; if (controller) controller.abort(); if (player) player.dispose(); clearInterval(timer); });
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);
-    if (typeof eagle.onPluginRun === 'function') eagle.onPluginRun(() => { if (initialized && backend && !busy && !testing) requestLoad($('sample').value).catch(fail); });
+    if (typeof eagle.onPluginRun === 'function') eagle.onPluginRun(() => {
+      if (initialized && backend && !testing && !closing) return requestLoad($('sample').value, now(), 'plugin-run').catch(fail);
+    });
     if (typeof eagle.onPluginBeforeExit === 'function') eagle.onPluginBeforeExit(() => { closing = true; if (controller) controller.abort(); if (player) player.dispose(); });
   } else fail(new Error('请在 Eagle 中手动加载本目录 manifest.json；普通浏览器没有 Eagle/Node 运行环境。'));
 })();

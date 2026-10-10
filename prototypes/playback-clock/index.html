@@ -22,13 +22,15 @@
 </head>
 <body>
   <h1>S1：缓存画面与音频时钟</h1>
-  <p class="note">隔离实验，不写 Eagle 标注。选择样本后自动准备；正常播放有声，拖动和逐帧暂停。白色闪光与提示音用于人工检查。</p>
+  <p class="note">隔离实验，不修改原视频或 Eagle 标注。可读取 Eagle 中选中的单个 MP4（不超过30秒）；选择样本后自动准备，拖动和逐帧时暂停。</p>
   <div class="row">
     <label>样本 <select id="sample" disabled></select></label>
+    <button id="selected" disabled>读取 Eagle 选中视频</button>
     <button id="reload" disabled>重新载入样本</button>
     <button id="cancel" disabled>取消准备</button>
     <span id="status">等待 Eagle 初始化</span>
   </div>
+  <p class="note">默认使用合成样本。选中项只在点击读取、重新载入或再次调用插件时读取，不会跟随 Eagle 选中变化自动换片。两个提示音样本的白闪用于人工检查声画同步；无声音轨或数字静音的视频不会产生声音。</p>
   <p id="error" role="alert"></p>
   <canvas id="picture" width="1280" height="720"></canvas>
   <input id="timeline" type="range" min="0" max="1" step="any" value="0" disabled aria-label="视频时间轴">

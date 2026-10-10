@@ -25,7 +25,9 @@ function realDirectory(dir) {
 }
 function safeFile(dir, name) {
   realDirectory(dir);
-  if (typeof name !== 'string' || !/^[a-zA-Z0-9_.-]+$/.test(name) || name === '.' || name === '..') throw new Error('无效的实验文件名。');
+  const selectedTestName = name === '中文 空格 测试.mp4' && path.dirname(path.resolve(dir)) === RUNTIME
+    && /^selected-test-[a-f0-9]{16}$/.test(path.basename(dir));
+  if (typeof name !== 'string' || !/^[a-zA-Z0-9_.-]+$/.test(name) && !selectedTestName || name === '.' || name === '..') throw new Error('无效的实验文件名。');
   const target = path.join(dir, name);
   if (fs.existsSync(target) && (!fs.lstatSync(target).isFile() || fs.lstatSync(target).isSymbolicLink())) throw new Error('拒绝链接或非普通文件。');
   return target;
@@ -46,13 +48,14 @@ function scan(dir, kind) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const target = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (kind !== 'runtime' || !/^(fixtures|partial-[a-f0-9]{16}|cache-(baseline|h264-cfr|hevc-vfr|vp9-silent)-[a-f0-9]{16})$/.test(entry.name)) throw new Error('含未知子目录，停止操作。');
-      files.push(...scan(target, entry.name === 'fixtures' ? 'fixtures' : 'cache').files);
+      if (kind !== 'runtime' || !/^(fixtures|selected-test-[a-f0-9]{16}|partial-[a-f0-9]{16}|cache-(selected|baseline|h264-cfr|hevc-vfr|vp9-silent)-[a-f0-9]{16})$/.test(entry.name)) throw new Error('含未知子目录，停止操作。');
+      files.push(...scan(target, entry.name === 'fixtures' ? 'fixtures' : entry.name.startsWith('selected-test-') ? 'selected-test' : 'cache').files);
       continue;
     }
     if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('含链接或未知文件类型，停止操作。');
     const allowed = entry.name === 'owner.json' || kind === 'fixtures' && /^(h264-cfr|hevc-vfr|vp9-silent)\.(mp4|json)$/.test(entry.name)
       || kind === 'cache' && /^(\d{6}\.jpg|audio\.wav|manifest\.json)$/.test(entry.name)
+      || kind === 'selected-test' && entry.name === '中文 空格 测试.mp4'
       || kind === 'evidence' && /^[a-z][a-z0-9-]*-\d{4}-\d{2}-\d{2}T[a-zA-Z0-9.-]+-[a-f0-9]{8}\.json$/.test(entry.name);
     if (!allowed) throw new Error('含未知文件，停止操作：' + entry.name);
     safeFile(dir, entry.name); files.push({ path: target, bytes: fs.statSync(target).size });
@@ -86,8 +89,76 @@ function tools() {
   return data;
 }
 async function listSources() {
-  return [{ key: 'baseline', label: '原 B 专用 VP9 / 4K 样本（SHA256 核对）', kind: 'dedicated-original' },
+  return [{ key: 'selected', label: 'Eagle 当前选中的 MP4', kind: 'selected-readonly' },
+    { key: 'baseline', label: '原 B 专用 VP9 / 4K 样本（SHA256 核对）', kind: 'dedicated-original' },
     ...Object.entries(fixtures.SPECS).map(([key, spec]) => ({ key, label: spec.label, kind: 'synthetic', seconds: spec.seconds }))];
+}
+function selectedSnapshot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.id !== 'string' || !value.id.trim()
+    || typeof value.filePath !== 'string' || !path.isAbsolute(value.filePath)) throw new Error('需要此次 Eagle 单选素材的 ID 与绝对 filePath 快照。');
+  const filePath = path.resolve(value.filePath), ext = value.ext == null ? 'mp4' : String(value.ext).replace(/^\./, '').toLowerCase();
+  if (ext !== 'mp4' || path.extname(filePath).toLowerCase() !== '.mp4') throw new Error('S1 当前选择只支持 MP4。');
+  return Object.freeze({ id: value.id, itemId: value.id,
+    name: typeof value.name === 'string' && value.name ? value.name : path.basename(filePath), filePath, ext: 'mp4' });
+}
+async function selectedInput(value, job) {
+  const snapshot = selectedSnapshot(value); check(job);
+  const st = await fsp.stat(snapshot.filePath); check(job);
+  if (!st.isFile()) throw new Error('当前选中路径不是普通视频文件。');
+  const sha256 = await hash(snapshot.filePath, job); check(job);
+  return { file: snapshot.filePath, sha256, expected: null, selected: snapshot };
+}
+function validateProbe(probe) {
+  if (!probe || !Array.isArray(probe.streams)) throw new Error('视频探测数据无效。');
+  const video = probe.streams.find(stream => stream.codec_type === 'video');
+  if (!video) throw new Error('选中 MP4 没有可读取的视频流。');
+  const formats = String(probe.format && probe.format.format_name || '').split(',');
+  if (formats.length && formats[0] && !formats.includes('mp4') && !formats.includes('mov')) throw new Error('文件内容不是 MP4 容器。');
+  const streamDuration = stream => {
+    const value = Number(stream.duration);
+    if (Number.isFinite(value) && value > 0) return value;
+    if (stream.duration_ts != null && stream.time_base) {
+      const base = String(stream.time_base).split('/').map(Number), ticks = Number(stream.duration_ts) * base[0] / base[1];
+      if (Number.isFinite(ticks) && ticks > 0) return ticks;
+    }
+    return null;
+  };
+  const streamStart = stream => {
+    const start = Number(stream.start_time || 0);
+    if (!Number.isFinite(start)) throw new Error('无法确认媒体流的起始时间。');
+    return start;
+  };
+  const videoStart = streamStart(video), formatDuration = Number(probe.format && probe.format.duration);
+  let duration = streamDuration(video), method = 'selected video stream duration or duration_ts × time_base';
+  if (duration === null) {
+    // A format duration can be a span or an absolute end. Subtracting start is not generally safe.
+    if (videoStart !== 0 || !(formatDuration > 0) || !Number.isFinite(formatDuration)) throw new Error('流时长缺失且时间原点不明确，S1 无法安全确认 30 秒上限。');
+    duration = formatDuration; method = 'zero-origin format duration conservative upper bound';
+  }
+  if (!Number.isFinite(duration) || !(duration > 0)) throw new Error('无法确认视频的有效时长。');
+  if (duration > 30) throw new Error('S1 当前只支持时长不超过 30 秒的 MP4。');
+  const audio = probe.streams.find(stream => stream.codec_type === 'audio');
+  let first = videoStart, last = videoStart + duration, audioMethod = null;
+  if (audio) {
+    const audioStart = streamStart(audio); let audioDuration = streamDuration(audio);
+    audioMethod = 'first audio stream duration or duration_ts × time_base';
+    if (audioDuration === null) {
+      if (audioStart !== 0 || videoStart !== 0 || !Number.isFinite(formatDuration) || !(formatDuration > 0)) throw new Error('首音频流时长缺失，S1 无法安全确认 30 秒上限。');
+      audioDuration = formatDuration; audioMethod = 'zero-origin format duration conservative upper bound';
+    }
+    first = Math.min(first, audioStart); last = Math.max(last, audioStart + audioDuration);
+  }
+  const mediaSpan = last - first;
+  if (!Number.isFinite(mediaSpan) || mediaSpan > 30) throw new Error('首视频与首音频的实际跨度超过 30 秒，S1 暂不处理。');
+  return { video, duration, durationMethod: method, hasAudioStream: !!audio, mediaSpan,
+    mediaRelativeEnd: last - videoStart, audioDurationMethod: audioMethod };
+}
+function validateDecodedDuration(info) {
+  const audioStart = info.audio ? info.audio.start : 0;
+  const end = Math.max(info.duration, info.frames[info.frames.length - 1].end,
+    info.audio ? audioStart + info.audio.duration : 0), span = end - Math.min(0, audioStart);
+  if (!Number.isFinite(span) || !(span > 0) || span > 30) throw new Error('实际解码音画跨度超过 30 秒或无法确认；S1 不提交该缓存（包括编码尾部填充）。');
+  return span;
 }
 async function baseline(tool, job) {
   const dir = path.dirname(tool.sourcePath || '');
@@ -354,7 +425,9 @@ async function removeOwned(dir, kind) {
   return { files: listing.files.length, bytes: listing.bytes };
 }
 async function prepare(key, options = {}) {
-  if (!['baseline', ...Object.keys(fixtures.SPECS)].includes(key)) throw new Error('仅允许 S1 样本列表。');
+  if (!['selected', 'baseline', ...Object.keys(fixtures.SPECS)].includes(key)) throw new Error('仅允许 S1 样本或当前显式选择的 MP4。');
+  // Copy immediately, before any await: subsequent Eagle selection/name mutations cannot change this job.
+  const selection = key === 'selected' ? selectedSnapshot(options.selected) : null;
   if (activeJob) throw new Error('已有 S1 生成任务；请取消并等待结束。');
   const start = process.hrtime.bigint(), job = { id: crypto.randomBytes(8).toString('hex'), signal: options.signal,
     cancelled: false, children: new Set(), disk: null, failure: null };
@@ -363,23 +436,32 @@ async function prepare(key, options = {}) {
   if (job.signal) job.signal.addEventListener('abort', cancel, { once: true });
   try {
     check(job); job.disk = budget(job); const tool = tools();
-    const input = key === 'baseline' ? await baseline(tool, job) : await fixtures.generate(key,
+    const input = key === 'selected' ? await selectedInput(selection, job) : key === 'baseline' ? await baseline(tool, job) : await fixtures.generate(key,
       { runFixture: (fixtureKey, args, exp) => runFixture(job, tool, fixtureKey, args, exp) }); check(job);
+    // Validate the actual input on every load, including cache reuse; stale cache metadata cannot waive the 30s rule.
+    const probe = JSON.parse(await collect(job, tool.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input.file])); check(job);
+    const meta = validateProbe(probe), video = meta.video;
+    const source = { key, label: selection ? selection.name : (await listSources()).find(s => s.key === key).label,
+      sha256: input.sha256, codec: video.codec_name, width: video.width, height: video.height,
+      hasAudioStream: meta.hasAudioStream, videoDuration: meta.duration, videoDurationMethod: meta.durationMethod,
+      mediaSpanSeconds: meta.mediaSpan, audioDurationMethod: meta.audioDurationMethod,
+      ...(selection || {}) };
     const sourceHash = input.sha256; const cache = path.join(RUNTIME, `cache-${key}-${sourceHash.slice(0, 16)}`);
     if (fs.existsSync(cache)) {
       const info = await validateCache(cache, job); check(job);
       if (info.source.sha256 !== sourceHash || info.source.key !== key) throw new Error('缓存源身份不符。');
+      validateDecodedDuration(info);
+      info.source = source;
       info.metrics = { ...info.metrics, reused: true, totalMs: Number(process.hrtime.bigint() - start) / 1e6,
-        diskBytesTotal: scan(RUNTIME, 'runtime').bytes, evidenceBytes: scan(EVIDENCE, 'evidence').bytes };
+        diskBytesTotal: scan(RUNTIME, 'runtime').bytes, evidenceBytes: scan(EVIDENCE, 'evidence').bytes,
+        generationProvenance: 'generationMs/args/FFmpeg samples describe the original cache build; no new decode ran for this item identity.',
+        currentInputProbe: { videoDuration: meta.duration, hasAudioStream: meta.hasAudioStream } };
+      registered.set(cache, info);
       return info;
     }
-    const probe = JSON.parse(await collect(job, tool.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input.file])); check(job);
-    const video = probe.streams.find(s => s.codec_type === 'video');
-    if (!video || !(Number(probe.format.duration) > 0 && Number(probe.format.duration) <= 31)) throw new Error('S1 样本元数据异常。');
-    const source = { key, label: (await listSources()).find(s => s.key === key).label, sha256: sourceHash,
-      codec: video.codec_name, width: video.width, height: video.height };
     partial = path.join(RUNTIME, 'partial-' + job.id); await createOwned(job, partial, 'cache'); check(job);
     const info = await build(job, tool, input, source, probe, partial, options.onProgress); check(job);
+    info.metrics.decodedMediaSpanSeconds = validateDecodedDuration(info);
     if (await hash(input.file, job) !== sourceHash) throw new Error('源文件生成期间发生改变，不提交缓存。');
     info.cacheDir = cache; info.metrics.totalMs = Number(process.hrtime.bigint() - start) / 1e6;
     info.metrics.totalMsNote = 'Node preparation only; caller must add browser audio/image initialization through ready.';
@@ -443,4 +525,8 @@ function frameAt(frames, time) {
 }
 module.exports = { ROOT, LIMITS, listSources, prepare, readAsset, saveEvidence, cleanup, frameAt,
   // S1 local checks only; not an additional product API.
-  _test: { JpegParser, parseWavHeader, tools, hash, scan, RUNTIME, EVIDENCE } };
+  _test: { JpegParser, parseWavHeader, tools, hash, scan, RUNTIME, EVIDENCE, selectedSnapshot, validateProbe, validateDecodedDuration, OWNER,
+    removeSelectedTestDir: async dir => {
+      if (path.dirname(path.resolve(dir)) !== RUNTIME || !/^selected-test-[a-f0-9]{16}$/.test(path.basename(dir))) throw new Error('测试清理目录越界。');
+      return removeOwned(dir, 'selected-test');
+    } } };

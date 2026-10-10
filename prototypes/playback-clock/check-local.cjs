@@ -11,7 +11,7 @@ function run(args) {
 }
 (async () => {
   try {
-    for (const file of ['app.js', 'player.js', 'prepare.cjs', 'fixtures.cjs', 'check-app.cjs', 'check-player.cjs', 'check-prepare.cjs', 'check-local.cjs']) run(['--check', path.join(__dirname, file)]);
+    for (const file of ['app.js', 'player.js', 'prepare.cjs', 'fixtures.cjs', 'check-app.cjs', 'check-player.cjs', 'check-prepare.cjs', 'check-selected.cjs', 'check-local.cjs']) run(['--check', path.join(__dirname, file)]);
     run(['check-player.cjs']); run(['check-app.cjs']); report.passed = true;
   } catch (error) { report.failure = error.message; process.exitCode = 1; }
   report.finishedAt = new Date().toISOString();
