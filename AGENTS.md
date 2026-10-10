@@ -11,3 +11,4 @@
 - 本地检查、模拟测试、真实 Window API 调用、用户观察的界面结果分别记录，不能互相替代。
 - 重要操作与错误写入 RECORD.md；实际运行证据放 evidence/，保留时间和来源。不得记录完整偏好或凭据。
 - 实验 A 已按当前单一测试案例验收通过，见 REPORT-A.md 和 evidence/final-assessment.json；实验 B 当前已批准，结束后提交证据和报告再停止。
+- 实验 B 已完成实际窗口运行与复算，见 REPORT-B.md 和 evidence/b-final-assessment.json；当前素材的核心性能验证通过，像素逐帧准确性和长期内存稳定性仍未充分验证。阶段工作停止，继续开发需用户给出下一步范围。
