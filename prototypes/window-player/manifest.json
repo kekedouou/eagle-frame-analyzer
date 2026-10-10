@@ -1,9 +1,9 @@
 {
   "id": "POCA20261009A",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "platform": "win",
   "arch": "all",
-  "name": "视频分析 PoC A（默认只读）",
+  "name": "视频分析 PoC（默认只读）",
   "logo": "/logo.png",
   "keywords": ["PoC", "视频", "标注"],
   "devTools": false,

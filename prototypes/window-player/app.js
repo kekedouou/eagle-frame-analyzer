@@ -1,7 +1,7 @@
 /* 实验 A：不用第三方依赖。文件上半部可在 Node 中检查；下半部须在 Eagle 内运行。 */
 (() => {
   'use strict';
-  const ROOT = 'D:\\documents\\Codex\\2026-10-09\\files-pasted-by-the-user-0\\outputs\\eagle-window-poc-a';
+  const ROOT = 'D:\\documents\\Codex\\2026-10-09\\files-pasted-by-the-user-0\\outputs\\eagle-video-analysis\\prototypes\\window-player';
   function oneMP4(items) {
     if (!Array.isArray(items) || items.length !== 1) throw new Error('请只选中一个专用测试 MP4。');
     const item = items[0];

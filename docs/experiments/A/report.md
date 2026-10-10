@@ -1,5 +1,7 @@
 # 实验 A 报告：Eagle Window 素材与标注集成
 
+历史上下文：本报告结论对应 A 结束时；文中的“B 未启动”不是当前项目状态。代码和 evidence/ 已迁到 `prototypes/window-player/`，原始证据与测量时路径未改写，当前进度见 [项目进度](../../progress.md)。
+
 结论：**本次测试案例通过实验 A。** Window 插件已实际读取并播放 Eagle 视频，读取/定位已有标注，完成一条获准标注的添加、独立读回与删除回退。
 
 适用范围：Eagle 4.0 Build 23、Windows、一个测试 MP4、一次添加/删除。原生界面显示结果来自用户人工观察。实验 B 未启动。
@@ -36,7 +38,7 @@ Eagle 的 `onPluginCreate(plugin)` 是启动事件，类似蓝图的入口事件
 
 添加时把自定义视频当前时间传给 `addComment()`；随后重新 `getById()` 验证 Eagle 数据，避免把本地变量当作保存成功。删除只使用本次返回的 ID，再次读取并与写入前快照比较。
 
-核心文件：`manifest.json` 定义窗口入口，`index.html` 放控件，`app.js` 实现以上逻辑，`check.cjs` 进行本地/模拟检查，`RECORD.md` 保留执行历史和权限记录。
+核心文件：`manifest.json` 定义窗口入口，`index.html` 放控件，`app.js` 实现以上逻辑，`check.cjs` 进行本地/模拟检查；原 RECORD.md 已迁为 [历史执行记录](../../progress/legacy-experiments.md)。
 
 ## 遇到的问题
 
@@ -48,7 +50,7 @@ Eagle 的 `onPluginCreate(plugin)` 是启动事件，类似蓝图的入口事件
 
 ## 可追溯证据
 
-下列文件均保存在本项目 `evidence/`，包含素材路径或标注，只保留在本机，不进入 Git：
+下列文件均保存在原型的 `prototypes/window-player/evidence/`，包含素材路径或标注，只保留在本机，不进入 Git：
 
 - `session-2026-10-09T15-31-08-827Z.json`：真实 Window 会话，216 条事件，含添加/删除后的独立读取和人工观察。
 - `before-ef52df7db0b6daea.json`：添加前四条标注快照。

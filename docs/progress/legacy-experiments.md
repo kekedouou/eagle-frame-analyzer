@@ -1,4 +1,6 @@
-# 实验 A 执行记录
+# 历史实验过程：原 RECORD.md
+
+迁移说明：以下保留原 A/B 执行记录。标题、状态与文件名按当时上下文理解，不作为当前权限或阶段入口。REPORT-A.md、REPORT-B.md、EXPERIMENT-B.md 现分别对应 docs/experiments/A/report.md、B/report.md、B/plan.md；原型和证据位于 prototypes/window-player/。当前事实见 [项目进度](../progress.md)。
 
 ## 2026-10-09：建立最小工程
 

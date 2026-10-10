@@ -98,7 +98,12 @@ async function main() {
       maxMiB: Math.max(...rss) / 2 ** 20, firstMiB: rss[0] / 2 ** 20, lastMiB: rss.at(-1) / 2 ** 20,
       firstMinute: block(first, first + 60000), lastMinute: block(last - 60000, last + 1) },
     evidenceSHA256: hashes, limits: s.measurementLimits };
-  fs.writeFileSync(path.join(root, 'evidence', 'b-final-assessment.json'), JSON.stringify(result, null, 2));
+  // 复查不覆盖原始验收；当前实现的哈希不能替代测量当时保存的实现哈希。
+  result.implementationHashScope = 'current-files-at-recheck-time; consult original b-final-assessment.json and poc-b-performance-verified for measured implementation';
+  if (!process.argv.includes('--verify-only')) {
+    const name = `b-assessment-recheck-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    fs.writeFileSync(path.join(root, 'evidence', name), JSON.stringify(result, null, 2), {flag: 'wx'});
+  }
   console.log(JSON.stringify({ verdict: result.verdict, comparison, manual, validation: result.validation, cache: result.cache, memory: result.memory }, null, 2));
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

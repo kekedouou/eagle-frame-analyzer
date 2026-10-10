@@ -59,7 +59,8 @@ async function main() {
     passed: ['VFR timestamp mapping', 'chunked JPEG parsing', 'latest pending request', 'cancel invalidates in-flight draw',
       'real FFmpeg extraction of synthetic fixture', 'source SHA256 unchanged', 'foreign-file cleanup refused', 'disk budget enforced before frame write'],
     cacheTestDirectoryCleaned: !fs.existsSync(b.dir('cache-b-test'))};
-  fs.writeFileSync(path.join(__dirname, 'evidence', 'b-local-checks.json'), JSON.stringify(evidence, null, 2));
+  const reportName = `b-local-checks-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  fs.writeFileSync(path.join(__dirname, 'evidence', reportName), JSON.stringify(evidence, null, 2), {flag: 'wx'});
   console.log(JSON.stringify(evidence, null, 2));
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

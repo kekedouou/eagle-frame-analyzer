@@ -1,7 +1,7 @@
-write-approval.json
-evidence/
+/prototypes/window-player/write-approval.json
+/prototypes/window-player/evidence/
 *.tmp
-tools-b.json
-cache-b/
-cache-b-test/
-b-test-fixtures/
+/prototypes/window-player/tools-b.json
+/prototypes/window-player/cache-b/
+/prototypes/window-player/cache-b-test/
+/prototypes/window-player/b-test-fixtures/
