@@ -2,9 +2,10 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。当前实现：A/B 共用的最小原型。
+- 项目：Eagle Window 视频分析插件。当前实现：A/B 最小原型，另有已授权的 S1 隔离验证；正式架构未批准。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
+- S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 
@@ -16,9 +17,9 @@
 | 产品需求与决定 | docs/product.md | 区分已决定和待确认 |
 | 技术与模块说明 | docs/architecture.md | 当前 PoC 结构，不当作正式架构承诺 |
 | 当前进度 | docs/progress.md | 当前事实、限制、下一步授权边界 |
-| 各实验说明与报告 | docs/experiments/A、B | 分别保存范围和验收 |
+| 各实验说明与报告 | docs/experiments/A、B、S1 | 分别保存范围和验收 |
 | 日期记录与旧过程 | docs/progress/ | 历史记录保留上下文 |
-| 实验实现 | prototypes/window-player/ | 共用原型，遵守局部 AGENTS.md |
+| 实验实现 | prototypes/window-player/、playback-clock/ | A/B 与 S1 分开，遵守局部 AGENTS.md |
 | 原始证据、本机配置、合成输入 | 原型内 evidence/、tools-b.json、b-test-fixtures/ | 本机忽略，迁移保留，原始证据不覆写 |
 
 ## 运行与检查
@@ -34,6 +35,8 @@ node assess-b.cjs --verify-only
 本机 Node：`D:\软件\工具类\nodejs\node.exe`。在 PowerShell 通过 `& '完整路径' check.cjs` 调用。check-b 会使用现有 FFmpeg 提取隔离合成视频，再清理自己产生的测试缓存；检查结果生成新日期文件。assess-b 只读复核已有 B 会话，不重测性能。
 
 目录变动检查额外运行 `git diff --check`，核对 ignored 文件未误入提交、历史证据哈希和 Git 历史未改变。真实 Eagle 重新加载/播放由用户操作，本地模拟通过不能代替它。
+
+S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保存语法、播放器/接线模拟证据；`node check-prepare.cjs --reset --baseline` 会安全清理 S1 runtime 后运行限定 FFmpeg 检查，不重跑 A/B。真实窗口操作、具体证据与测量限制见 [S1 记录](experiments/S1/report.md)。
 
 ## 版本与证据
 

@@ -1,0 +1,21 @@
+{
+  "id": "EVAS1CLOCK20261010",
+  "version": "0.1.0",
+  "platform": "win",
+  "arch": "all",
+  "name": "视频分析 S1：播放时钟验证",
+  "logo": "/logo.png",
+  "keywords": ["视频", "S1", "实验"],
+  "devTools": false,
+  "main": {
+    "url": "index.html",
+    "width": 1000,
+    "height": 860,
+    "minWidth": 720,
+    "minHeight": 650,
+    "frame": true,
+    "resizable": true,
+    "multiple": false,
+    "runAfterInstall": false
+  }
+}

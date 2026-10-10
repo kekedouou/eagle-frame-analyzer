@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S1 播放时钟验证</title>
+  <style>
+    body { margin: 18px; color: #222; background: #f4f4f4; font: 14px/1.5 system-ui, sans-serif; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    p { margin: 8px 0; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
+    button, select { padding: 5px 9px; font: inherit; }
+    button:disabled, input:disabled { opacity: .5; }
+    canvas { display: block; width: 100%; max-height: 440px; aspect-ratio: 16/9; object-fit: contain; background: #111; }
+    #timeline { width: 100%; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: white; padding: 10px; max-height: 170px; overflow: auto; }
+    #status { font-weight: 600; }
+    #error { color: #a01919; white-space: pre-wrap; }
+    .note { color: #555; font-size: 13px; }
+    label { display: inline-flex; align-items: center; gap: 5px; }
+  </style>
+</head>
+<body>
+  <h1>S1：缓存画面与音频时钟</h1>
+  <p class="note">隔离实验，不写 Eagle 标注。选择样本后自动准备；正常播放有声，拖动和逐帧暂停。白色闪光与提示音用于人工检查。</p>
+  <div class="row">
+    <label>样本 <select id="sample" disabled></select></label>
+    <button id="reload" disabled>重新载入样本</button>
+    <button id="cancel" disabled>取消准备</button>
+    <span id="status">等待 Eagle 初始化</span>
+  </div>
+  <p id="error" role="alert"></p>
+  <canvas id="picture" width="1280" height="720"></canvas>
+  <input id="timeline" type="range" min="0" max="1" step="any" value="0" disabled aria-label="视频时间轴">
+  <div class="row">
+    <button id="previous" disabled>上一帧</button>
+    <button id="play" disabled>播放</button>
+    <button id="pause" disabled>暂停</button>
+    <button id="next" disabled>下一帧</button>
+    <output id="position">尚未就绪</output>
+  </div>
+  <div class="row">
+    <label>实验解码延迟 <select id="delay" disabled><option value="0">0 ms</option><option value="25">25 ms</option><option value="60">60 ms</option></select></label>
+    <label><input id="verify" type="checkbox" checked>核对帧标记</label>
+    <button id="script" disabled>运行拖动测试（约10秒）</button>
+  </div>
+  <p class="note">延迟仅作用于需要解码的图像，RAM 命中不等待。标记核对会读回少量画布像素，其开关保存在证据中。脚本自动比较 0／25／60ms，不播放声音。</p>
+  <pre id="details">准备信息将在这里显示。</pre>
+  <p><strong>人工观察（由你填写，程序不会自动判定通过）</strong></p>
+  <div class="row">
+    <label>声画 <select id="manualSync"><option>未检查</option><option>相符</option><option>可见不同步</option><option>无声样本不适用</option></select></label>
+    <label>拖动 <select id="manualDrag"><option>未检查</option><option>跟手</option><option>明显延迟</option></select></label>
+    <label>暂停后声音 <select id="manualSilence"><option>未检查</option><option>已停止</option><option>存在残音</option><option>无声样本不适用</option></select></label>
+    <label>最终画面 <select id="manualFinal"><option>未检查</option><option>符合目标</option><option>不符合目标</option></select></label>
+  </div>
+  <div class="row">
+    <button id="save" disabled>保存本次证据</button>
+    <button id="cleanup" disabled>清理 S1 生成素材与缓存</button>
+  </div>
+  <p class="note">清理保留实验记录与证据，不删除原视频。S1 的结果不自动批准正式架构；物理屏幕和扬声器延迟未自动测量。</p>
+  <script src="player.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
