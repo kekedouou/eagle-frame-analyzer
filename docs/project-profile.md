@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。当前实现：A/B 最小原型，另有已授权的 S1 隔离验证；正式架构未批准。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及目录约束补充、正式架构 v1 已批准，3B 已结束；当前代码仍为 A/B、S1 原型，3C 与正式开发未启动。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | 全项目长期规范 | AGENTS.md | 权限、阶段与证据原则，不堆当前状态 |
 | 产品需求与决定 | docs/product.md | 区分已决定和待确认 |
-| 技术与模块说明 | docs/architecture.md | 当前 PoC 结构，不当作正式架构承诺 |
+| 技术与模块说明 | docs/architecture.md | 已批准架构与验证边界；另保留历史 PoC 结构，不把批准记成已实现 |
 | 当前进度 | docs/progress.md | 当前事实、限制、下一步授权边界 |
 | 各实验说明与报告 | docs/experiments/A、B、S1 | 分别保存范围和验收 |
 | 日期记录与旧过程 | docs/progress/ | 历史记录保留上下文 |
@@ -45,3 +45,5 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 - 标签用于固定代码快照；原始窗口会话、回执与评估 JSON 单独保存在 evidence，不由标签替代。
 - 迁移前版本使用旧路径，标签可以查看代码但不能保证在新目录直接运行。若需复跑应另获范围并适配路径，不能通过切换标签覆盖当前文件或证据。
 - 不自动创建远程、推送、发布或生成正式安装包。
+
+正式缓存设计为经实际路径校验的 `plugin.path/cache/`，与插件同盘且不得位于 C 盘；临时缓存同样受限，失败不回退 C/TEMP。此处仅记录已批准设计，未创建目录或改变现有实验产物。3B 文档批准不授权新实验、目录迁移或素材库写入。
