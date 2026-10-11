@@ -1,6 +1,6 @@
 # Eagle 视频分析
 
-一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B 已结束；产品规格 v1 及目录约束补充、技术架构 v1 已获用户批准。3C 与正式开发尚未启动。
+一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B 已结束；产品规格 v1 及目录约束补充、技术架构 v1 已获用户批准。3C 工程与验证文档已整理，性能协议和样本选择原则两项已获批准，等待用户最终验收；阶段 4 未授权。
 
 当前基线：[已批准技术架构](docs/architecture.md)采用统一 720p JPEG 缓存画面、实际 PTS 索引与音频时钟。正式缓存设计为实际插件目录下的 `cache/`，完整和临时缓存均不得位于 C 盘；未完成任务取消后清理并于下次重建，完整有效缓存保留复用。以上尚未作为正式产品实现，本次仅完成文档收尾。
 
@@ -17,6 +17,8 @@ S1 原型入口为 `prototypes/playback-clock/manifest.json`，可显式读取 E
 - [产品需求与决定](docs/product.md)：要解决的问题及已批准范围。
 - [技术架构](docs/architecture.md)：已批准方案、模块/数据流、风险，以及保留的原型说明。
 - [当前进度](docs/progress.md)：当前状态、验收限制及下一步边界。
+- [测试与验收协议](docs/verification.md)：R/P 追踪、样本、性能测量和异常安全验证。
+- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；仅计划，未开始执行。
 - 实验 A：[说明](docs/experiments/A/plan.md) / [报告](docs/experiments/A/report.md)。
 - 实验 B：[说明](docs/experiments/B/plan.md) / [报告](docs/experiments/B/report.md)。
 - [目录迁移与简要复盘](docs/progress/2026-10-10-repository-reorganization.md)：旧位置映射、验证结果、正确流程与修正原因。
