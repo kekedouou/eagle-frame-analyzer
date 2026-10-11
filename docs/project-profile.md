@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格 v1 及目录约束补充、正式架构 v1 已批准，3B 已结束；3C 工程文档已整理、待用户最终验收，两项性能/样本决定已批准。当前代码仍为 A/B、S1 原型，阶段 4 未授权。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及目录/基础交互补充、正式架构 v1 已批准，3B 已结束；3C 工程文档交付及完成条件自查已完成、待用户最终验收，性能/样本决定与新增基础交互已批准。当前代码仍为 A/B、S1 原型，阶段 4 未授权。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -64,7 +64,7 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 | --- | --- |
 | plugin/manifest.json、index.html | Eagle Window 与页面入口 |
 | plugin/app.js | 宿主生命周期、依赖装配和事件接线，不承载媒体、缓存、标注业务 |
-| plugin/ui.js、styles.css | 展示状态、发出操作；不直接访问文件或 Eagle 素材/标注 API；正式页面无测试控制 |
+| plugin/ui.js、styles.css | 极简主画面与侧栏、状态及实际帧时间提示、带输入焦点保护的空格操作；只向会话发出操作，不直接访问文件或 Eagle 素材/标注 API；正式页面无测试控制 |
 | plugin/session.cjs | 素材/库快照、状态与任务所有权，协调适配、准备、缓存和播放 |
 | plugin/eagle.cjs | 唯一素材/标注 API 边界；独立读回，不直接写 metadata.json |
 | plugin/media.cjs | 只读源媒体、分析和 FFmpeg；通过缓存句柄受限写入，不自行淘汰目录 |
