@@ -102,8 +102,13 @@ function harness(options = {}) {
     load: info => settle(player.load(info)), maxDecodes: () => maxDecodes };
 }
 async function run() {
-  const passed = [];
-  const check = async (name, test) => { try { await test(); passed.push(name); } catch (error) { error.message = name + ': ' + error.message; throw error; } };
+  const passed = [], simulations = [];
+  const check = async (name, test) => {
+    let watchdog;
+    try { await Promise.race([test(), new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('Simulated test did not settle.')), 5000); })]); passed.push(name); }
+    catch (error) { error.message = name + ': ' + error.message; throw error; }
+    finally { clearTimeout(watchdog); }
+  };
   await check('UMD exports to window and CommonJS together', async () => {
     const context = vm.createContext({ module: { exports: {} }, document: {} }); vm.runInContext('window = globalThis;', context);
     vm.runInContext(fs.readFileSync(require.resolve('../plugin/player.js'), 'utf8'), context);
@@ -172,8 +177,92 @@ async function run() {
       await h.frame(1); assert.equal((await request).status, 'drawn'); await h.elapse(1);
     }
     assert.equal(h.player.snapshot().drawCount, before + 5);
-    const services = h.events.filter(event => event.type === 'ready' && event.kind === 'drag' && event.phase === 'read-and-image-decode-complete');
+    const services = h.events.filter(event => event.type === 'ready' && ['drag', 'drag-ahead'].includes(event.kind) &&
+      event.frameId >= 7 && event.frameId < 12 && event.phase === 'read-and-image-decode-complete');
     assert.equal(services.length, 5); assert(services.every(event => event.decodeMs === 6 && event.readMs === 0)); await h.close();
+  });
+  // A pointer event immediately before every rAF is deliberately different from
+  // the old 120Hz timer test. Expected frames come from the input times, never
+  // from the prediction; drawing an earlier prepared image cannot pass this.
+  async function phaseLockedDrag(info, times) {
+    let latest = null; const wrongDraws = [];
+    const h = harness({ decodeMs: 5.6, onEvent(event) {
+      // Player deliberately catches telemetry callback errors; collect the
+      // observation and assert outside the callback so a failure cannot hide.
+      if (event.type === 'draw' && latest !== null && event.frameOrdinal !== latest) wrongDraws.push({ actual: event.frameOrdinal, latest });
+    } });
+    info.width = 1280; info.height = 720;
+    await h.load(info); h.player.setVerifyMarkers(false);
+    for (let index = 0; index < 5; index++) await h.frame(7);
+    const begin = h.now(), requests = [];
+    for (const time of times) {
+      latest = 0;
+      for (let index = 1; index < info.frames.length && info.frames[index].time <= time; index++) latest = index;
+      requests.push(h.player.seek(time, { kind: 'drag', inputAt: h.now() })); await flush();
+      await h.frame(0.2); await h.elapse(5.6); await h.elapse(1.14);
+    }
+    const end = h.now(), draws = h.events.filter(event => event.type === 'draw' && event.at >= begin);
+    const marks = [begin, ...draws.map(event => event.at), end];
+    const maxGapMs = Math.max(...marks.slice(1).map((at, index) => at - marks[index]));
+    assert(draws.length >= times.length * 0.75, 'Continuous cached drag must not starve when input and rAF have the same cadence.');
+    assert(maxGapMs < 35, 'Phase-locked motion must not wait for release to display.');
+    assert(new Set(draws.map(event => event.rafOpportunity)).size === draws.length);
+    const final = await h.settle(h.player.seek(times[times.length - 1], { kind: 'release', final: true }));
+    assert(['drawn', 'reused'].includes(final.status)); assert.equal(h.player.snapshot().frameOrdinal, latest);
+    assert.deepEqual(wrongDraws, [], 'Only the latest pointer target may draw.');
+    assert((await Promise.all(requests)).every(result => ['drawn', 'reused', 'superseded'].includes(result.status)));
+    assert(h.maxDecodes() <= 2); assert(h.player.snapshot().cachePeakBytes <= 512 * 1024 ** 2);
+    assert(h.events.some(event => event.type === 'cache' && event.phase === 'evict'), 'Trajectory must exceed the decoded working set.');
+    const result = { source: info.source.key, inputs: times.length, simulatedWindowMs: end - begin,
+      simulatedDraws: draws.length, simulatedMaxGapMs: maxGapMs, maxImageTasks: h.maxDecodes(),
+      managedPeakBytes: h.player.snapshot().cachePeakBytes, realEaglePerformance: false };
+    await h.close(); return result;
+  }
+  await check('phase-locked 144Hz forward and reverse drag stays current with a bounded RAM working set', async () => {
+    const times = Array.from({ length: 480 }, (_, index) => (200 + Math.min(index, 479 - index) * 2.62) / 60);
+    simulations.push(await phaseLockedDrag(sample('phase-locked-cfr', null, 1490, 60), times));
+  });
+  await check('motion lookahead uses timestamp mapping for variable-rate frames', async () => {
+    const info = sample('phase-locked-vfr', null, 1490, 60); let ticks = 0;
+    const rows = info.frames.map((frame, index) => { const row = { id: index, ptsTicks: String(ticks), file: frame.file, bytes: frame.bytes }; ticks += index % 3 === 0 ? 2 : 1; return row; });
+    const built = frameIndex.buildIndex(rows, { timeBase: [1, 120], lastFrameEndTicks: String(ticks) });
+    info.frames = built.frames; info.duration = built.videoDuration;
+    const times = Array.from({ length: 480 }, (_, index) => 3 + Math.min(index, 479 - index) * 0.043);
+    simulations.push(await phaseLockedDrag(info, times));
+  });
+  await check('wrong motion predictions and slow work cannot displace release or exceed two slots', async () => {
+    let latest = null; const wrongDraws = [];
+    const h = harness({ decodeMs: 5.6, onEvent(event) {
+      if (event.type === 'draw' && latest !== null && event.frameOrdinal !== latest) wrongDraws.push({ actual: event.frameOrdinal, latest });
+    } });
+    const info = sample('unpredictable', null, 1490, 60); info.width = 1280; info.height = 720;
+    await h.load(info); h.player.setVerifyMarkers(false); h.player.setDecodeDelay(60);
+    const positions = [200, 203, 206, 700, 100, 97, 94, 900, 400, 405, 410, 408, 401], requests = [];
+    for (let index = 0; index < positions.length * 3; index++) {
+      latest = positions[index % positions.length]; requests.push(h.player.seek(latest / 60, { kind: 'drag' }));
+      await flush(); await h.frame(0.2); await h.elapse(6.74);
+    }
+    latest = 800; const releaseAt = h.now();
+    const final = await h.settle(h.player.seek(latest / 60, { kind: 'release', final: true }));
+    assert.equal(final.frameId, latest); assert(h.now() - releaseAt < 250);
+    assert((await Promise.all(requests)).every(result => ['drawn', 'reused', 'superseded'].includes(result.status)));
+    assert(h.maxDecodes() <= 2); assert(h.player.snapshot().cachePeakBytes <= 512 * 1024 ** 2);
+    assert(!h.events.some(event => event.type === 'error'));
+    // Final release may already have started the normal bounded neighbours.
+    // Advance both fake decode stages before disposal; a Promise alone is not a clock.
+    for (let index = 0; index < 40 && h.player.snapshot().activeImageTasks; index++) await h.frame();
+    assert.equal(h.player.snapshot().activeImageTasks, 0); assert.deepEqual(wrongDraws, []); await h.close();
+  });
+  await check('isolated gestures and pauses do not continue old motion predictions', async () => {
+    const h = harness(); const info = sample('gestures', null, 1490, 60); await h.load(info); h.player.setVerifyMarkers(false);
+    for (const ordinal of [200, 203, 206]) {
+      await h.settle(h.player.seek(ordinal / 60, { kind: 'drag' })); await h.elapse(8);
+    }
+    await h.elapse(150); const before = h.events.length;
+    assert.equal((await h.settle(h.player.seek(600 / 60, { kind: 'drag' }))).frameId, 600);
+    for (let index = 0; index < 5; index++) await h.frame();
+    assert(!h.events.slice(before).some(event => event.type === 'cache' && event.phase === 'image-work-start' && event.role === 'drag-ahead'));
+    await h.close();
   });
   await check('continuous drag avoids neighbour work; final release restores bounded prefetch', async () => {
     const h = harness(); await h.load(sample()); await h.settle(h.player.seek(0.7, { kind: 'drag' }));
@@ -336,7 +425,7 @@ async function run() {
     const playing = h.player.play(); await flush(); await h.player.pause(); gate.resolve();
     assert.equal((await playing).status, 'superseded'); assert.equal(h.player.snapshot().state, 'paused'); assert.equal(h.contexts[0].sources.length, 0); await h.close();
   });
-  return { source: 'new-player-fake-unit-and-scheduler-tests', passed, count: passed.length,
+  return { source: 'new-player-fake-unit-and-scheduler-tests', passed, count: passed.length, simulations,
     limits: ['No real JPEG/audio decoding, Eagle, FFmpeg, filesystem cache or physical display measured.',
       'These checks do not establish P-01/P-02/P-03 acceptance or physical AV synchronization.'] };
 }

@@ -174,6 +174,17 @@
       let target;
       const promise = new Promise(resolve => { target = { index: ordinal, frameId: frame.id, epoch, targetTime,
         requestId: ++this.requestId, inputAt: options.inputAt, kind: options.kind, final: !!options.final, resolve, effectiveEmitted: false, readyEmitted: false }; });
+      // One speculative frame can make the next pointer target a RAM hit. Without
+      // it, input immediately before every rAF can supersede each completed image.
+      const moving = !target.final && ['drag', 'rapid'].includes(target.kind);
+      if (moving && previous && !previous.final && previous.epoch === epoch && ['drag', 'rapid'].includes(previous.kind) &&
+        target.inputAt > previous.inputAt && target.inputAt - previous.inputAt <= 100) {
+        target.dragDelta = targetTime - previous.targetTime;
+        if (target.dragDelta && Math.sign(target.dragDelta) === Math.sign(previous.dragDelta || 0)) {
+          const predicted = this.index.frameAt(this.info.frames, Math.max(0, Math.min(this.info.duration, targetTime + target.dragDelta)));
+          if (predicted !== ordinal) target.predictedIndex = predicted;
+        }
+      }
       this.target = target;
       this._emit('request', { epoch, phase: 'input', requestId: target.requestId, kind: target.kind, frameId: frame.id,
         frameOrdinal: ordinal, targetTime, inputAt: target.inputAt, final: target.final,
@@ -181,7 +192,7 @@
       this._settle(previous, 'superseded', { reason: 'new-request' });
       if (this._valid(epoch) && this.target === target && !options.preserveLoading && options.kind !== 'play') this._change('seeking');
       // Resource work need not wait for the next display opportunity. Drawing still does.
-      if (this._valid(epoch) && this.target === target) this._startTargetWork();
+      if (this._valid(epoch) && this.target === target) { this._startTargetWork(); this._startDragAheadWork(); }
       return promise;
     }
     _canSeek() { return !this.disposed && this.info && this.state !== 'loading' && (this.state !== 'error' || this.lastErrorCode === 'UNDERRUN'); }
@@ -305,6 +316,15 @@
       if (this.cache.has(target.index) || this.tasks.has(target.epoch + ':' + target.index) || this.tasks.size >= 2) return;
       try { this._decode(target.index, 'target', target); } catch (error) { this._fail(error); }
     }
+    _startDragAheadWork() {
+      const target = this.target, ordinal = target && target.predictedIndex;
+      if (!this.info || !target || !this._valid(target.epoch) || this.state === 'error' || !Number.isInteger(ordinal) ||
+        this.tasks.size >= 2 || this.cache.has(ordinal) || this.tasks.has(target.epoch + ':' + ordinal) || this.prefetchFailed.has(ordinal)) return;
+      // Latest real target owns the first slot. A prediction is cache work only;
+      // it never becomes a seek target or gets permission to draw.
+      if (!this.cache.has(target.index) && !this.tasks.has(target.epoch + ':' + target.index)) return;
+      try { this._decode(ordinal, 'drag-ahead', null); } catch (error) { this._fail(error); }
+    }
     _decode(ordinal, role, request) {
       const epoch = this.epoch, info = this.info, key = epoch + ':' + ordinal;
       const existing = this.tasks.get(key); if (existing) return existing.promise;
@@ -316,6 +336,7 @@
         try {
           if (!this._valid(epoch)) return null;
           if (role === 'target' && (!this.target || this.target.index !== ordinal)) return null;
+          if (role === 'drag-ahead' && (!this.target || this.target.index !== ordinal && this.target.predictedIndex !== ordinal)) return null;
           const rgba = info.width * info.height * 4;
           reservation = this.budget.reserve(rgba + frame.bytes * 2, 'frame-inflight', () => this._evict());
           const readStartedAt = this.env.now();
@@ -325,6 +346,7 @@
           if (!this._valid(epoch)) return null;
           // Obsolete foreground reads need not turn into another expensive decode.
           if (role === 'target' && (!this.target || this.target.index !== ordinal)) return null;
+          if (role === 'drag-ahead' && (!this.target || this.target.index !== ordinal && this.target.predictedIndex !== ordinal)) return null;
           const delay = this.decodeDelayMs, decodeStartedAt = this.env.now();
           bitmap = await this.env.decodeImage(bytes);
           const decodeEndedAt = this.env.now();
@@ -352,12 +374,12 @@
       });
       holder.promise = task;
       this._emit('cache', { epoch, phase: 'image-work-start', frameId: frame.id, role, activeImageTasks: this.tasks.size });
-      task.then(() => this._startTargetWork(), error => {
+      task.then(() => { this._startTargetWork(); this._startDragAheadWork(); }, error => {
         if (this._valid(epoch)) {
           if (this.target && this.target.resolve && this.target.index === ordinal) this._fail(error);
           else { this.prefetchFailed.add(ordinal); this._emit('error', { epoch, phase: 'background-image', frameId: frame.id, error: error.message }); }
         }
-        this._startTargetWork();
+        this._startTargetWork(); this._startDragAheadWork();
       });
       return task;
     }
@@ -413,7 +435,8 @@
         else this._startTargetWork();
       }
       if (!this.info || this.state === 'loading' || this.state === 'error' || this.disposed) return;
-      // While dragging, leave a free slot for the next target rather than reserving it for a neighbour.
+      // During drag only the latest target and its one motion prediction use
+      // slots; unrelated sequential neighbours wait until final release.
       if (this.target && this.target.resolve) return;
       if (this.state !== 'playing' && this.target && !this.target.final && ['drag', 'rapid'].includes(this.target.kind)) return;
       const base = this.currentIndex, playing = this.state === 'playing';
