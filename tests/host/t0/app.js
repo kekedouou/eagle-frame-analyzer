@@ -7,14 +7,18 @@
   let loadMetrics = null, allReports = [], lastSaved = null, runSignal = null, runController = null, lastInfo = null;
   const associations = new Map(), inputKeys = new Map();
   let resourceStopped = false, disposal = null;
-  let eventCounts = {}, selectedSnapshot = null, selectionEpoch = 0;
+  let eventCounts = {}, selectionEpoch = 0;
+  let dependenciesReady = false, pendingSelection = null, selecting = null, selectionWork = Promise.resolve(), loadWork = Promise.resolve();
   let dragging = false, dragPointer = null, dragTarget = null, releaseSent = false, seekPending = false, manualSeekNumber = 0;
   function snapshot() { return player ? player.snapshot() : { state: 'empty' }; }
   function controls() {
-    const ready = !!player && !busy && !testing && ['paused', 'playing', 'seeking', 'ended'].includes(snapshot().state);
+    const unavailable = busy || testing || !!selecting;
+    const ready = !!player && !unavailable && ['paused', 'playing', 'seeking', 'ended'].includes(snapshot().state);
     for (const id of ['play', 'pause', 'previous', 'next', 'timeline']) $(id).disabled = !ready;
-    for (const id of ['sample', 'selected', 'reload', 'accuracy', 'preparation', 'performance', 'retest', 'save']) $(id).disabled = busy || testing || !backend;
-    $('cancel').disabled = !(busy || testing);
+    for (const id of ['sample', 'selected', 'reload', 'accuracy']) $(id).disabled = unavailable || !dependenciesReady;
+    $('save').disabled = !ready;
+    for (const id of ['preparation', 'performance', 'retest']) $(id).disabled = unavailable || !info;
+    $('cancel').disabled = !(busy || testing || selecting);
   }
   function emit(event) {
     if (event.type === 'request' && event.phase !== 'effective-frame') {
@@ -79,24 +83,45 @@
     if (disposal) await timeout(disposal.promise, protocol.PROTOCOL.disposeTimeoutMs, '播放器退出');
     else if (info) { await backend.release(info); info = null; }
   }
-  async function load(key, options = {}) {
+  function load(key, options = {}) {
+    const owned = { ...options, startedAt: options.startedAt === undefined ? now() : options.startedAt, selectionEpoch };
+    // All entry points share the same real completion boundary, including
+    // reload/synthetic choices interrupted by a new Eagle invocation.
+    loadWork = loadWork.catch(() => {}).then(() => performLoad(key, owned));
+    return loadWork;
+  }
+  async function performLoad(key, options) {
     const started = options.startedAt === undefined ? now() : options.startedAt;
     if (resourceStopped) throw new Error('资源停止线已触发，请关闭测试窗口并检查记录');
     busy = true; controls(); $('error').textContent = '';
     dragging = false; dragPointer = null; dragTarget = null; seekPending = false; manualSeekNumber++;
     const loadController = new AbortController(); controller = loadController;
+    let preparedOwned = false;
     const ownedRunSignal = runSignal, stop = () => loadController.abort();
-    const guardLoad = () => { abortCheck(); if (loadController.signal.aborted) { const error = new Error('载入已取消'); error.name = 'AbortError'; throw error; } };
+    const guardLoad = () => { abortCheck(); if (loadController.signal.aborted || options.selectionEpoch !== selectionEpoch) { const error = new Error('载入已取消'); error.name = 'AbortError'; throw error; } };
     if (ownedRunSignal && ownedRunSignal.aborted) loadController.abort();
     if (ownedRunSignal) ownedRunSignal.addEventListener('abort', stop, { once: true });
     try {
+      if (options.onStage) options.onStage('previous-player-release');
+      const previousInfo = info;
+      guardLoad();
+      loadMetrics = null;
+      for (const id of ['manualDrag', 'manualSync', 'manualFrames']) $(id).value = '未检查';
       guardLoad(); await dispose(); guardLoad(); resetLog();
-      if (options.fresh) { await backend.cleanup(key); guardLoad(); }
+      if (options.fresh) {
+        if (key === 'selected' && (!previousInfo || previousInfo.source.key !== 'selected' ||
+          previousInfo.source.itemId !== options.selected.id || previousInfo.source.filePath !== options.selected.filePath))
+          throw new Error('首次准备测试需要当前已载入的选中视频；不会清理其他视频。');
+        await backend.cleanup(key === 'selected' ? previousInfo : key); guardLoad();
+      }
       const backendBegin = now();
-      info = await backend.prepare(key, { selected: options.selected || selectedSnapshot, signal: loadController.signal,
+      if (options.onStage) options.onStage('media-prepare');
+      info = await backend.prepare(key, { selected: options.selected, signal: loadController.signal,
         onProgress: p => { $('status').textContent = typeof p === 'string' ? p : JSON.stringify(p); } }); lastInfo = info;
+      preparedOwned = true;
       const backendEnd = now(); guardLoad();
       const ownedInfo = info;
+      if (options.onStage) options.onStage('player-initialize');
       player = new window.EVAPlayer.Player({ canvas: $('picture'), frameIndex, readAsset: (_snapshot, file) => backend.readAsset(ownedInfo, file), emit });
       player.setVerifyMarkers(!!info.expected);
       await player.load(info); guardLoad();
@@ -112,24 +137,72 @@
       $('status').textContent = '已就绪，首帧暂停';
       $('source').textContent = `${info.source.label || info.source.name || key} · ${info.audio ? '有音轨（是否有声请实际试听）' : '无音轨'}`;
       $('details').textContent = JSON.stringify({ loadMetrics, source: info.source, audio: info.audio, frames: info.frames.length }, null, 2);
+    } catch (error) {
+      if (preparedOwned) {
+        try { await dispose(); } catch (failure) { error.disposeError = failure.message; }
+      }
+      throw error;
     } finally { if (ownedRunSignal) ownedRunSignal.removeEventListener('abort', stop); if (controller === loadController) controller = null; busy = false; controls(); }
   }
-  async function useSelected() {
-    if (busy || testing || !selection) return;
-    const epoch = ++selectionEpoch, startedAt = now(), previousKey = info && info.source.key || $('sample').value;
-    busy = true; controls(); $('error').textContent = '';
-    try {
-      // Capture once at this explicit operation; later Eagle selection changes
-      // cannot silently redirect preparation or the current playback session.
-      const captured = await timeout(selection.captureSelected(eagle), 5000, '读取选中视频');
-      if (epoch !== selectionEpoch || closing || resourceStopped) { const error = new Error('选中素材载入已取消'); error.name = 'AbortError'; throw error; }
-      selectedSnapshot = captured; $('sample').value = 'selected';
-      await load('selected', { selected: captured, startedAt });
-    } catch (error) { $('sample').value = info && info.source.key || previousKey; errorText(error); }
-    finally { busy = false; controls(); }
+  function useSelected(trigger = 'selected-button', startedAt = now()) {
+    if (closing || resourceStopped) return Promise.resolve();
+    if (testing) { errorText(new Error('自动测试中不能切换视频，请先停止测试。')); return Promise.resolve(); }
+    const request = { epoch: ++selectionEpoch, trigger, startedAt, diagnostics: [], attempted: null, stage: 'selection-api', captured: null };
+    // Capture at the explicit run/click, before waiting for old media to exit.
+    // Attach rejection handling immediately, including during initialization.
+    if (selection) request.captured = Promise.resolve(selection.captureSelected(eagle, {
+      onDiagnostic: value => { if (request.diagnostics.length < 8) request.diagnostics.push(value); }
+    })).then(value => ({ value }), error => ({ error }));
+    selecting = request;
+    if (controller) controller.abort();
+    controls();
+    if (!dependenciesReady) { pendingSelection = request; return Promise.resolve(); }
+    return queueSelection(request);
+  }
+  function queueSelection(request) {
+    const current = () => request.epoch === selectionEpoch && !closing && !resourceStopped;
+    selectionWork = selectionWork.catch(() => {}).then(async () => {
+      if (!current()) return;
+      busy = true; controls(); $('error').textContent = ''; $('status').textContent = '读取 Eagle 当前选择…';
+      try {
+        // A rejected capture still waits for interrupted media cleanup before
+        // saving diagnostics; evidence and media share the bounded writer lock.
+        await loadWork.catch(() => {});
+        if (!current()) return;
+        if (!request.captured) request.captured = Promise.resolve(selection.captureSelected(eagle, {
+          onDiagnostic: value => { if (request.diagnostics.length < 8) request.diagnostics.push(value); }
+        })).then(value => ({ value }), error => ({ error }));
+        const result = await timeout(request.captured, 5000, '读取选中视频');
+        if (!current()) return;
+        if (result.error) throw result.error;
+        request.attempted = result.value; request.stage = 'media-and-player-load';
+        await load('selected', { selected: result.value, startedAt: request.startedAt, onStage: stage => { request.stage = stage; } });
+        if (current()) await save(request.trigger === 'initialize' ? 'host-initial-ready' : 'host-selected-ready', {
+          selectionAttempt: { trigger: request.trigger, stage: 'ready', attempted: request.attempted, diagnostics: request.diagnostics }
+        }).catch(failure => { $('error').textContent = '视频已载入，但证据保存失败：' + failure.message; });
+      } catch (error) {
+        if (!current()) return;
+        const attempt = { trigger: request.trigger, stage: request.stage, attempted: request.attempted,
+          retainedSource: info && player ? info.source : null, diagnostics: request.diagnostics,
+          error: { name: error.name, code: error.code || null, message: error.message, disposeError: error.disposeError || null } };
+        $('sample').value = info && player ? info.source.key : 'selected';
+        errorText(new Error(`${request.stage === 'selection-api' ? '读取当前选择失败' : '所选视频准备失败'}：${error.message}`));
+        $('status').textContent = info && player ? '仍显示上次成功载入的视频' : '尚未载入视频';
+        if (!player) $('source').textContent = '当前视频：没有可操作的视频';
+        // No raw Eagle object, tags or comments. Old traces cannot be evidence
+        // for a failed attempt to load a different source.
+        await save('host-selection-failed', { source: request.attempted, preparation: null, loadMetrics: null,
+          events: [], memorySamples: [], truncated: false, trace: null, selectionAttempt: attempt })
+          .catch(failure => { $('error').textContent += '\n诊断保存失败：' + failure.message; });
+      } finally {
+        if (selecting === request) selecting = null;
+        busy = false; controls();
+      }
+    });
+    return selectionWork;
   }
   function manualSeek(time, final) {
-    if (!player || busy || testing) return;
+    if (!player || busy || testing || selecting) return;
     const token = ++manualSeekNumber; seekPending = true;
     return target(time, final ? 'release' : 'drag', final).catch(errorText)
       .finally(() => { if (manualSeekNumber === token) seekPending = false; });
@@ -158,7 +231,7 @@
     }, error => { emit({ type: 'input-end', at: now(), inputId, status: 'failed', error: error.message }); throw error; });
   }
   async function task(name, work) {
-    if (busy || testing) return;
+    if (busy || testing || selecting) return;
     testing = true; const cancel = new AbortController(); runController = cancel; runSignal = cancel.signal; controls();
     try { await work(); }
     catch (error) {
@@ -168,9 +241,18 @@
     }
     finally { runSignal = null; runController = null; controller = null; testing = false; controls(); }
   }
-  async function runRound(delayMs, round) {
-    const key = $('sample').value;
-    await load(key); player.setVerifyMarkers(false); player.setDecodeDelay(delayMs); resetLog();
+  function testSource() {
+    if (!info || !player) throw new Error('请先成功载入要测试的视频。');
+    return { key: info.source.key, selected: info.source.key === 'selected' ? selection.validateSnapshot(info.source) : null,
+      fingerprint: info.source.sha256, identity: info.source.itemId || null };
+  }
+  async function loadTestSource(source, fresh = false) {
+    await load(source.key, { selected: source.selected, fresh });
+    if (info.source.sha256 !== source.fingerprint || (info.source.itemId || null) !== source.identity)
+      throw new Error('测试视频内容或身份发生变化，本轮结果无效。');
+  }
+  async function runRound(delayMs, round, source) {
+    await loadTestSource(source); player.setVerifyMarkers(false); player.setDecodeDelay(delayMs); resetLog();
     const initialSnapshot = snapshot(), begin = now(), end = begin + protocol.PROTOCOL.roundMs;
     const sequence = protocol.targets(info.frames.length, Math.ceil(protocol.PROTOCOL.roundMs * protocol.PROTOCOL.inputHz / 1000));
     let n = 0;
@@ -196,14 +278,14 @@
     allReports.push(summary); await save('host-rapid', { summary }); abortCheck();
   }
   async function performanceTest(normalOnly = false) {
-    if ($('sample').value !== 'baseline') throw new Error('完整性能协议请使用已登记的4K/60fps基线样本');
+    const source = testSource();
     const required = (normalOnly ? 40 : 100) * 1024 ** 2, capacity = backend.evidenceInfo();
     if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < required)
       throw new Error(`剩余证据配额不足：本次至少预留${normalOnly ? 40 : 100}MiB。保留旧证据；可先运行“复测正常拖动”，不要删除记录或重复完整协议。`);
     allReports = [];
-    for (const delay of normalOnly ? [0] : [0, 25, 60]) for (let round = 1; round <= 3; round++) await runRound(delay, round);
+    for (const delay of normalOnly ? [0] : [0, 25, 60]) for (let round = 1; round <= 3; round++) await runRound(delay, round, source);
     for (let round = 1; round <= 3; round++) {
-      await load('baseline'); player.setVerifyMarkers(false); resetLog();
+      await loadTestSource(source); player.setVerifyMarkers(false); resetLog();
       const begin = now();
       for (const index of protocol.independentTargets(info.frames.length, 200, protocol.PROTOCOL.seed + round)) {
         abortCheck(); await timeout(target(info.frames[index].time, 'random-seek', true, index), protocol.PROTOCOL.releaseTimeoutMs, '随机定位');
@@ -211,7 +293,8 @@
       const summary = protocol.summarize(events, begin, now() + .001, { kind: 'independent', truncated });
       summary.round = round; allReports.push(summary); await save('host-random', { summary });
     }
-    resetLog(); await save('host-protocol-summary', { scope: normalOnly ? 'normal-3-rounds-and-random-3-rounds' : 'complete-normal-and-pressure-and-random', reports: allReports });
+    resetLog(); await save('host-protocol-summary', { scope: normalOnly ? 'normal-3-rounds-and-random-3-rounds' : 'complete-normal-and-pressure-and-random',
+      sampleBinding: source, comparison: 'Only compare identical source fingerprints and conditions; another source does not complete old baseline or 4K/60fps coverage.', reports: allReports });
   }
   async function accuracyTest() {
     for (const key of ['h264-cfr', 'hevc-vfr', 'vp9-silent']) {
@@ -226,15 +309,16 @@
     }
   }
   async function preparationTest() {
-    const result = [];
+    const result = [], source = testSource();
     for (let round = 1; round <= 3; round++) {
-      await load('baseline', { fresh: true }); result.push({ ...loadMetrics, round }); await save('host-first-ready', { result: loadMetrics });
-      await load('baseline'); result.push({ ...loadMetrics, round }); await save('host-reuse-ready', { result: loadMetrics });
+      await loadTestSource(source, true); result.push({ ...loadMetrics, round }); await save('host-first-ready', { result: loadMetrics });
+      await loadTestSource(source); result.push({ ...loadMetrics, round }); await save('host-reuse-ready', { result: loadMetrics });
     }
     await save('host-ready-summary', { result });
   }
   async function initialize(plugin) {
-    const entryAt = now(); if (initialized) return; initialized = true;
+    const entryAt = now(), entryEpoch = selectionEpoch; if (initialized) return; initialized = true;
+    controls();
     try {
       const fs = require('fs'), path = require('path');
       if (!plugin || !path.isAbsolute(plugin.path)) throw new Error('需要 Eagle plugin.path，请加载本目录manifest');
@@ -244,16 +328,26 @@
       protocol = require(path.join(root, '../../support/t0-protocol.cjs'));
       selection = require(path.join(root, '../../support/t0-selection.cjs'));
       frameIndex = require(path.join(root, '../../../plugin/frame-index.cjs'));
-      for (const item of await backend.listSources()) { const option = document.createElement('option'); option.value = item.key; option.textContent = item.label; $('sample').append(option); }
-      $('sample').value = 'baseline';
-      await load('baseline', { startedAt: entryAt }); await save('host-initial-ready');
-    } catch (error) { busy = false; errorText(error); controls(); }
+      for (const item of await backend.listSources()) {
+        if (item.key === 'baseline') continue; // Historical input stays available to read-only CLI comparisons only.
+        const option = document.createElement('option'); option.value = item.key; option.textContent = item.label; $('sample').append(option);
+      }
+      dependenciesReady = true; busy = false; $('sample').value = 'selected';
+      if (closing || resourceStopped) return;
+      if (pendingSelection && pendingSelection.epoch === selectionEpoch) {
+        const request = pendingSelection; pendingSelection = null; await queueSelection(request);
+      } else if (entryEpoch === selectionEpoch) await useSelected('initialize', entryAt);
+      else controls(); // A stop during dependency initialization cancels startup too.
+    } catch (error) { selecting = null; busy = false; errorText(error); controls(); }
   }
-  $('sample').addEventListener('change', () => $('sample').value === 'selected' ? useSelected() : load($('sample').value).catch(errorText));
-  $('selected').addEventListener('click', useSelected);
-  $('reload').addEventListener('click', () => load($('sample').value, { selected: selectedSnapshot }).catch(errorText));
+  $('sample').addEventListener('change', () => $('sample').value === 'selected' ? useSelected('sample-choice') : load($('sample').value).catch(errorText));
+  $('selected').addEventListener('click', () => useSelected('selected-button'));
+  $('reload').addEventListener('click', () => info && player ? load(info.source.key, {
+    selected: info.source.key === 'selected' ? selection.validateSnapshot(info.source) : null
+  }).catch(errorText) : useSelected('reload-empty'));
   $('cancel').addEventListener('click', () => {
     selectionEpoch++;
+    selecting = null; pendingSelection = null;
     if (runController) runController.abort(); if (controller) controller.abort();
     if (player) dispose().catch(errorText);
   });
@@ -279,8 +373,11 @@
   $('retest').addEventListener('click', () => task('normal-retest', () => performanceTest(true)));
   $('accuracy').addEventListener('click', () => task('accuracy', accuracyTest));
   $('preparation').addEventListener('click', () => task('preparation', preparationTest));
-  $('save').addEventListener('click', () => save('host-manual', { manual: { executor: 'user-entered-observation', drag: $('manualDrag').value,
-    audioVisual: $('manualSync').value, finalAndSteps: $('manualFrames').value } }).catch(errorText));
+  $('save').addEventListener('click', () => {
+    if (!player || busy || testing || selecting) return;
+    return save('host-manual', { manual: { executor: 'user-entered-observation', drag: $('manualDrag').value,
+      audioVisual: $('manualSync').value, finalAndSteps: $('manualFrames').value } }).catch(errorText);
+  });
   setInterval(() => {
     if (!player) return;
     const s = snapshot(), m = process.memoryUsage();
@@ -295,13 +392,12 @@
         .finally(() => dispose().catch(errorText));
     }
   }, 100);
-  const close = () => { closing = true; selectionEpoch++; if (runController) runController.abort(); if (controller) controller.abort(); dispose().catch(errorText); };
+  const close = () => { closing = true; selectionEpoch++; selecting = null; pendingSelection = null; if (runController) runController.abort(); if (controller) controller.abort(); dispose().catch(errorText); };
   window.addEventListener('pagehide', close);
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);
     if (typeof eagle.onPluginRun === 'function') eagle.onPluginRun(() => {
-      if (busy || testing) { $('error').textContent = '正在准备或运行测试；结束后点击“载入 Eagle 当前选中视频”以切换。'; return; }
-      return useSelected();
+      return useSelected('plugin-run');
     });
     if (typeof eagle.onPluginBeforeExit === 'function') eagle.onPluginBeforeExit(close);
   } else errorText(new Error('请从 Eagle 手动加载 tests/host/t0/manifest.json，普通浏览器不能运行此测试'));

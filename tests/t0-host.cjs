@@ -2,148 +2,285 @@
 const assert = require('assert'), vm = require('vm'), fs = require('fs'), path = require('path');
 const host = path.resolve(__dirname, 'host/t0');
 const code = fs.readFileSync(path.join(host, 'app.js'), 'utf8');
-async function test() {
-  const elements = new Map(), saved = [], inputKinds = [], inputTimes = [], prepared = [], windowHandlers = {};
+const selection = require('./support/t0-selection.cjs');
+const item = (id = 'audio-test') => ({ id, name: '中文 有声 ' + id, filePath: path.resolve('中文 空格 ' + id + '.mp4'), ext: 'mp4' });
+const flush = async () => { for (let n = 0; n < 6; n++) await new Promise(resolve => setImmediate(resolve)); };
+async function until(predicate, message) {
+  for (let n = 0; n < 100 && !predicate(); n++) await new Promise(resolve => setImmediate(resolve));
+  assert(predicate(), message);
+}
+
+// All media/Player/host doubles are in memory. The real selection adapter is
+// used; this never starts Eagle, reads a video or writes cache/evidence files.
+function harness(options = {}) {
+  const elements = new Map(), saved = [], prepared = [], cleaned = [], released = [], inputKinds = [], inputTimes = [], windowHandlers = {};
+  const infos = new Set(), liveInfos = new Set(), sources = [{ key: 'baseline', label: 'old fixed source' },
+    { key: 'selected', label: 'selected' }, { key: 'h264-cfr', label: 'numbered test' }];
+  const state = { response: options.response === undefined ? [item()] : options.response, apiError: null, apiCalls: 0,
+    holdSources: !!options.holdSources, finishSources: null, holdSelection: false, finishSelection: null,
+    holdDispose: false, finishDispose: null, forceDisposeTimeout: false, prepareError: null, playerLoadError: null,
+    holdPrepare: false, finishPrepare: null, prepareActive: 0, peakPrepareActive: 0,
+    failCleanup: false, memoryRss: 10, constructed: 0, disposed: 0, peakLiveInfos: 0, remainingBytes: 60 * 1024 ** 2 };
   const element = id => {
-    if (!elements.has(id)) elements.set(id, { value: id === 'refresh' ? '60' : '未检查', handlers: {}, disabled: true,
-      addEventListener(name, callback) { this.handlers[name] = callback; }, append() {}, textContent: '' });
+    if (!elements.has(id)) elements.set(id, { value: id === 'refresh' ? '60' : '未检查', handlers: {}, children: [], disabled: true,
+      addEventListener(name, callback) { this.handlers[name] = callback; }, append(child) { this.children.push(child); }, textContent: '' });
     return elements.get(id);
   };
-  let initializer, reinvoke, constructed = 0, disposed = 0, released = 0, holdDispose = false, finishDispose, failCleanup = false, sampleTimer, memoryRss = 10;
-  let selected = { id: 'audio-test', name: '中文 有声', filePath: 'G:\\测试 库\\中文 有声.mp4', ext: 'mp4' }, selectedError = null;
-  let holdSelection = false, finishSelection;
-  const info = { source: { key: 'baseline' }, metrics: { reused: true }, duration: 1, audio: null,
-    frames: [{ id: 10, time: 0 }, { id: 20, time: .5 }], expected: null };
-  const backend = { HOST_ROOT: host, CACHE_ROOT: path.join(host, 'cache'), listSources: async () => [{ key: 'baseline', label: 'baseline' }, { key: 'selected', label: 'selected' }],
-    prepare: async (key, options) => { prepared.push({ key, selected: options.selected }); return key === 'selected' ? { ...info, source: { key, ...options.selected } } : info; },
-    evidenceInfo: () => ({ remainingBytes: 60 * 1024 ** 2 }), release: async () => { released++; }, cleanup: async () => { if (failCleanup) throw new Error('Unknown file blocks cleanup'); },
-    saveEvidence: async (kind, value) => { saved.push({ kind, value }); return 'mock-evidence-only'; } };
-  let tick = 1;
+  let initializer, reinvoke, exit, sampleTimer, tick = 1;
+  const backend = { HOST_ROOT: host, CACHE_ROOT: path.join(host, 'cache'),
+    async listSources() { if (state.holdSources) await new Promise(resolve => { state.finishSources = resolve; }); return sources; },
+    async prepare(key, value) {
+      prepared.push({ key, selected: value.selected, signal: value.signal });
+      const prepareError = state.prepareError;
+      state.prepareActive++; state.peakPrepareActive = Math.max(state.peakPrepareActive, state.prepareActive);
+      try {
+        if (state.holdPrepare) await new Promise(resolve => { state.finishPrepare = resolve; });
+        if (prepareError) throw prepareError;
+        if (value.signal.aborted) { const error = new Error('mock preparation aborted'); error.name = 'AbortError'; throw error; }
+        const source = key === 'selected' ? { key, ...value.selected, label: value.selected.name, sha256: 'mock-' + value.selected.id } : { key, label: key, sha256: 'mock-' + key };
+        const info = { source, metrics: { reused: true }, duration: 1, audio: null, width: 1280, height: 720,
+          frames: [{ id: 10, time: 0, end: .5 }, { id: 20, time: .5, end: 1 }], expected: null };
+        infos.add(info); liveInfos.add(info); state.peakLiveInfos = Math.max(state.peakLiveInfos, liveInfos.size); return info;
+      } finally { state.prepareActive--; }
+    },
+    evidenceInfo: () => ({ remainingBytes: state.remainingBytes }),
+    async release(info) { assert(infos.has(info), 'release must receive original cache handle'); liveInfos.delete(info); released.push(info); },
+    async cleanup(info) {
+      cleaned.push(info);
+      if (state.failCleanup) throw new Error('Unknown file blocks cleanup');
+      assert(infos.has(info), 'selected fresh preparation must clean by original info handle, not key/copy');
+      assert(!liveInfos.has(info), 'active cache lease must not be cleaned');
+    },
+    async saveEvidence(kind, value) { saved.push({ kind, value }); return 'mock-evidence-only'; }
+  };
   class Player {
-    constructor(options) { this.options = options; this.state = 'empty'; this.time = 0; this.frameId = 10; this.request = 0; constructed++; }
+    constructor(value) { this.options = value; this.state = 'empty'; this.time = 0; this.frameId = 10; this.request = 0; state.constructed++; }
     setVerifyMarkers() {}
-    async load() { this.state = 'paused'; }
+    setDecodeDelay(value) { this.decodeDelayMs = value; }
+    async load() { if (state.playerLoadError) { this.state = 'error'; throw state.playerLoadError; } this.state = 'paused'; }
     snapshot() { return { state: this.state, time: this.time, frameId: this.frameId, activeImageTasks: 0, cacheBytes: 0 }; }
-    async seek(time, options) {
-      this.request++; inputKinds.push(options.kind); inputTimes.push(time);
-      this.options.emit({ type: 'request', epoch: 1, requestId: this.request, phase: 'input', frameId: 20, inputAt: options.inputAt, at: tick++ });
-      this.time = time; this.frameId = 20;
-      this.options.emit({ type: 'draw', epoch: 1, requestId: this.request, frameId: 20, inputAt: options.inputAt, at: tick++ });
+    async seek(time, value) {
+      this.request++; inputKinds.push(value.kind); inputTimes.push(time);
+      this.time = time; this.frameId = time < .5 ? 10 : 20;
+      this.options.emit({ type: 'request', epoch: 1, requestId: this.request, phase: 'input', frameId: this.frameId, inputAt: value.inputAt, at: tick++ });
+      this.options.emit({ type: 'draw', epoch: 1, requestId: this.request, frameId: this.frameId, inputAt: value.inputAt, at: tick++ });
       return { status: 'drawn', requestId: this.request };
     }
-    async dispose() { disposed++; if (holdDispose) await new Promise(resolve => { finishDispose = resolve; }); }
+    async dispose() { state.disposed++; if (state.holdDispose) await new Promise(resolve => { state.finishDispose = resolve; }); }
     pause() { this.state = 'paused'; }
     async play() { this.state = 'playing'; }
     async step() {}
   }
   const fakeFs = { realpathSync: fs.realpathSync, readFileSync: () => Buffer.from('mock-code-fingerprint') };
+  const eagle = { item: { getSelected() {
+    state.apiCalls++; if (state.apiError) throw state.apiError;
+    const response = state.response;
+    if (state.holdSelection) return new Promise(resolve => { state.finishSelection = () => resolve(response); });
+    return response;
+  } }, onPluginCreate(callback) { initializer = callback; }, onPluginRun(callback) { reinvoke = callback; }, onPluginBeforeExit(callback) { exit = callback; } };
   const context = { document: { getElementById: element, createElement: () => ({}), activeElement: null },
     window: { EVAPlayer: { Player }, addEventListener(name, callback) { windowHandlers[name] = callback; } }, performance: { now: () => tick++ },
-    setTimeout: (callback, ms) => setTimeout(callback, holdDispose && ms === 10000 ? 1 : ms), clearTimeout,
+    setTimeout: (callback, ms) => setTimeout(callback, state.forceDisposeTimeout && ms === 10000 ? 1 : ms), clearTimeout,
     setInterval: callback => { sampleTimer = callback; return 1; }, AbortController, innerWidth: 1000, innerHeight: 800, devicePixelRatio: 1,
-    process: { versions: { node: '16.17.1', chrome: '108' }, platform: 'win32', pid: 123, memoryUsage: () => ({ rss: memoryRss }) },
-    eagle: { onPluginCreate(callback) { initializer = callback; }, onPluginRun(callback) { reinvoke = callback; }, onPluginBeforeExit() {} },
-    require(name) {
+    process: { versions: { node: '16.17.1', chrome: '108' }, platform: 'win32', pid: 123, memoryUsage: () => ({ rss: state.memoryRss }) },
+    eagle, require(name) {
       if (name.endsWith('t0-media.cjs')) return backend;
-      if (name.endsWith('t0-selection.cjs')) return { captureSelected: async () => { if (holdSelection) await new Promise(resolve => { finishSelection = resolve; }); if (selectedError) throw selectedError; return Object.freeze({ ...selected }); } };
-      if (name.endsWith('t0-protocol.cjs')) return require('./support/t0-protocol.cjs');
+      if (name.endsWith('t0-selection.cjs')) return selection;
+      if (name.endsWith('t0-protocol.cjs')) {
+        const protocol = require('./support/t0-protocol.cjs');
+        // Only shorten the mocked host's wait; these statistics never represent
+        // real performance or change the production measurement protocol.
+        return options.shortProtocol ? { ...protocol, PROTOCOL: { ...protocol.PROTOCOL, roundMs: 24 } } : protocol;
+      }
       if (name.endsWith('frame-index.cjs')) return require('../plugin/frame-index.cjs');
       if (name === 'fs') return fakeFs;
       return require(name);
     }
   };
   vm.runInNewContext(code, context, { filename: 't0-app.js' });
-  await initializer({ path: host });
-  assert.strictEqual(constructed, 1);
-  assert.strictEqual(element('timeline').disabled, false);
-  assert.strictEqual(saved[0].kind, 'host-initial-ready');
-  element('timeline').value = '.5';
-  await element('timeline').handlers.input();
-  await element('save').handlers.click();
-  const evidence = saved[saved.length - 1].value;
-  const input = evidence.events.find(e => e.type === 'input'), terminal = evidence.events.find(e => e.type === 'input-end'), draw = evidence.events.find(e => e.type === 'draw');
-  assert.strictEqual(input.inputId, terminal.inputId);
-  assert.strictEqual(input.inputId, draw.inputId);
-  assert.strictEqual(draw.stale, false);
-  assert.strictEqual(inputKinds[0], 'drag');
-  assert.strictEqual(evidence.manual.executor, 'user-entered-observation');
-  assert.strictEqual(evidence.manual.drag, '未检查');
-  // Eagle need not focus a range while pointer dragging. Polling must not push
-  // its displayed frame back into the user's still-moving target.
-  if (element('timeline').handlers.pointerdown) element('timeline').handlers.pointerdown({ pointerId: 4 });
-  element('timeline').value = '.9'; sampleTimer();
-  assert.strictEqual(element('timeline').value, '.9', 'polling overwrote an active pointer drag');
-  const beforeRelease = inputKinds.filter(kind => kind === 'release').length;
-  await windowHandlers.pointerup({ pointerId: 4 });
-  await element('timeline').handlers.change();
-  assert.strictEqual(inputTimes[inputTimes.length - 1], .9, 'release must use last target, not polled frame');
-  assert.strictEqual(inputKinds.filter(kind => kind === 'release').length, beforeRelease + 1, 'pointerup and change must not duplicate final seek');
-  element('timeline').handlers.pointerdown({ pointerId: 5 });
-  element('timeline').value = '.7'; await element('timeline').handlers.input();
-  await windowHandlers.pointerup({ pointerId: 99 }); // A different pointer cannot end this drag.
-  element('timeline').value = '.8'; sampleTimer();
-  assert.strictEqual(element('timeline').value, '.8');
-  await element('timeline').handlers.pointercancel({ pointerId: 5 });
-  assert.strictEqual(inputTimes[inputTimes.length - 1], .7, 'cancel settles last real input, not an unrelated range mutation');
-  element('timeline').value = '.4'; await element('timeline').handlers.input(); await element('timeline').handlers.change();
-  assert.strictEqual(inputTimes[inputTimes.length - 1], .4, 'keyboard range input also receives final seek');
-  await element('reload').handlers.click();
-  assert.strictEqual(disposed, 1); assert.strictEqual(released, 1);
-  holdDispose = true;
-  await element('reload').handlers.click(); // Forced simulated timeout, not a real 10s wait.
-  assert.strictEqual(released, 1); assert.strictEqual(constructed, 2);
-  assert.strictEqual(element('reload').disabled, false);
-  await element('reload').handlers.click();
-  assert.strictEqual(released, 1); assert.strictEqual(disposed, 2); // same actual disposal promise retained
-  holdDispose = false; finishDispose(); await new Promise(resolve => setImmediate(resolve));
-  assert.strictEqual(released, 2);
-  await element('reload').handlers.click(); assert.strictEqual(constructed, 3);
-  failCleanup = true;
-  await element('preparation').handlers.click();
-  assert.strictEqual(element('reload').disabled, false); // fresh cleanup failure cannot trap busy=true
-  assert(saved.some(record => record.kind === 'host-failed'));
-  failCleanup = false; await element('reload').handlers.click();
-  element('manualSync').value = '相符'; await element('selected').handlers.click();
-  assert.strictEqual(prepared[prepared.length - 1].key, 'selected');
-  assert.strictEqual(prepared[prepared.length - 1].selected.id, 'audio-test');
-  assert(Object.isFrozen(prepared[prepared.length - 1].selected));
-  assert.strictEqual(element('manualSync').value, '未检查', 'human observation cannot carry across videos');
-  selected = { ...selected, id: 'second-video', filePath: 'G:\\测试 库\\第二条.mp4' };
-  await element('reload').handlers.click();
-  assert.strictEqual(prepared[prepared.length - 1].selected.id, 'audio-test', 'reload must not reread a changed Eagle selection');
-  await reinvoke();
-  assert.strictEqual(prepared[prepared.length - 1].selected.id, 'second-video', 'explicit re-invoke captures current selected MP4');
-  const prepareCount = prepared.length, previousDisposed = disposed;
-  selectedError = new Error('只选中一个 MP4'); await element('selected').handlers.click();
-  assert.strictEqual(prepared.length, prepareCount); assert.strictEqual(disposed, previousDisposed);
-  assert.strictEqual(element('timeline').disabled, false, 'failed selection capture preserves usable current player');
-  assert(element('error').textContent.includes('只选中一个'));
-  element('sample').value = 'baseline'; await element('sample').handlers.change();
-  element('sample').value = 'selected'; await element('sample').handlers.change();
-  assert.strictEqual(element('sample').value, 'baseline', 'failed selected capture must restore actual source in dropdown');
-  selectedError = null; holdSelection = true;
-  const countBeforeCancel = prepared.length, pendingSelection = element('selected').handlers.click();
-  element('cancel').handlers.click(); finishSelection(); await pendingSelection;
-  assert.strictEqual(prepared.length, countBeforeCancel, 'cancelled selection must not start media preparation after API response');
-  holdSelection = false; await element('reload').handlers.click();
-  holdDispose = true; finishDispose = null;
-  const countBeforeDisposeCancel = prepared.length, loadingDuringDispose = element('reload').handlers.click();
-  for (let n = 0; n < 5; n++) await Promise.resolve();
-  assert.strictEqual(typeof finishDispose, 'function');
-  element('cancel').handlers.click();
-  holdDispose = false; finishDispose(); await loadingDuringDispose;
-  assert.strictEqual(prepared.length, countBeforeDisposeCancel, 'cancel during real disposal must stop the subsequent preparation');
-  await element('reload').handlers.click();
-  selectedError = null;
-  element('sample').value = 'baseline';
-  const beforePreflight = prepared.length;
-  await element('performance').handlers.click(); // The full protocol cannot fit remaining evidence; fail before media work.
-  assert.strictEqual(prepared.length, beforePreflight);
-  assert(saved.some(record => record.kind === 'host-failed' && record.value.failedTask === 'performance'));
-  await element('reload').handlers.click();
-  memoryRss = 1.5 * 1024 ** 3; sampleTimer(); sampleTimer();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.strictEqual(saved.filter(record => record.kind === 'host-resource-stop').length, 1);
-  console.log('t0-host: mock wiring, pointer ownership/release, explicit selection snapshots/reinvoke, raw trace, evidence preflight, lease retention, cleanup recovery, RSS and no human autofill passed (not real Eagle)');
+  return { state, element, saved, prepared, cleaned, released, liveInfos, inputKinds, inputTimes, windowHandlers,
+    initialize: () => initializer({ path: host }), run: value => reinvoke(value), close: () => exit ? exit() : windowHandlers.pagehide(),
+    sample: () => sampleTimer(), click: id => element(id).handlers.click(), change: () => element('sample').handlers.change() };
 }
+
+async function playbackAndLeaseRegression() {
+  const h = harness(); await h.initialize();
+  assert.strictEqual(h.prepared.length, 1); assert.strictEqual(h.prepared[0].key, 'selected');
+  assert.strictEqual(h.prepared[0].selected.id, 'audio-test'); assert(Object.isFrozen(h.prepared[0].selected));
+  assert(!h.element('sample').children.some(option => option.value === 'baseline'), 'historical baseline must not appear in host UI');
+  assert.strictEqual(h.element('timeline').disabled, false); assert.strictEqual(h.saved[0].kind, 'host-initial-ready');
+  h.element('timeline').value = '.5'; await h.element('timeline').handlers.input(); await h.click('save');
+  const evidence = h.saved[h.saved.length - 1].value, input = evidence.events.find(e => e.type === 'input');
+  const terminal = evidence.events.find(e => e.type === 'input-end'), draw = evidence.events.find(e => e.type === 'draw');
+  assert.strictEqual(input.inputId, terminal.inputId); assert.strictEqual(input.inputId, draw.inputId); assert.strictEqual(draw.stale, false);
+  assert.strictEqual(evidence.manual.executor, 'user-entered-observation'); assert.strictEqual(evidence.manual.drag, '未检查');
+  h.element('timeline').handlers.pointerdown({ pointerId: 4 }); h.element('timeline').value = '.9'; h.sample();
+  assert.strictEqual(h.element('timeline').value, '.9', 'polling overwrote active pointer drag');
+  const beforeRelease = h.inputKinds.filter(kind => kind === 'release').length;
+  await h.windowHandlers.pointerup({ pointerId: 4 }); await h.element('timeline').handlers.change();
+  assert.strictEqual(h.inputTimes[h.inputTimes.length - 1], .9);
+  assert.strictEqual(h.inputKinds.filter(kind => kind === 'release').length, beforeRelease + 1);
+  h.element('timeline').handlers.pointerdown({ pointerId: 5 }); h.element('timeline').value = '.7'; await h.element('timeline').handlers.input();
+  await h.windowHandlers.pointerup({ pointerId: 99 }); h.element('timeline').value = '.8'; h.sample();
+  assert.strictEqual(h.element('timeline').value, '.8'); await h.element('timeline').handlers.pointercancel({ pointerId: 5 });
+  assert.strictEqual(h.inputTimes[h.inputTimes.length - 1], .7);
+  h.element('timeline').value = '.4'; await h.element('timeline').handlers.input(); await h.element('timeline').handlers.change();
+  assert.strictEqual(h.inputTimes[h.inputTimes.length - 1], .4);
+  await h.click('reload'); const releases = h.released.length, constructed = h.state.constructed;
+  h.state.holdDispose = true; h.state.forceDisposeTimeout = true;
+  await h.click('reload'); await h.click('reload');
+  assert.strictEqual(h.released.length, releases, 'timeout cannot release a real live lease');
+  assert.strictEqual(h.state.constructed, constructed, 'timeout cannot create replacement Player');
+  h.state.holdDispose = false; h.state.forceDisposeTimeout = false; h.state.finishDispose(); await flush();
+  assert.strictEqual(h.released.length, releases + 1); await h.click('reload');
+  h.state.holdDispose = true; h.state.finishDispose = null;
+  const beforeCancel = h.prepared.length, loading = h.click('reload');
+  await until(() => !!h.state.finishDispose, 'reload did not await real disposal'); h.click('cancel');
+  h.state.holdDispose = false; h.state.finishDispose(); await loading;
+  assert.strictEqual(h.prepared.length, beforeCancel, 'cancel during disposal must prevent new preparation');
+  await h.click('reload'); assert.strictEqual(h.state.peakLiveInfos, 1);
+  h.state.memoryRss = 1.5 * 1024 ** 3; h.sample(); h.sample(); await flush();
+  assert.strictEqual(h.saved.filter(record => record.kind === 'host-resource-stop').length, 1);
+}
+
+async function selectionAndFailureRegression() {
+  const h = harness(); await h.initialize();
+  h.state.response = [item('second-video')]; await h.click('reload');
+  assert.strictEqual(h.prepared[h.prepared.length - 1].selected.id, 'audio-test', 'reload must retain current snapshot');
+  h.element('manualSync').value = '相符'; await h.run({ path: 'C:\\untrusted-run-argument' });
+  assert.strictEqual(h.prepared[h.prepared.length - 1].selected.id, 'second-video'); assert.strictEqual(h.element('manualSync').value, '未检查');
+  const beforeFailure = h.prepared.length, priorDisposed = h.state.disposed;
+  h.state.response = []; await h.click('selected');
+  assert.strictEqual(h.prepared.length, beforeFailure); assert.strictEqual(h.state.disposed, priorDisposed);
+  assert.strictEqual(h.element('timeline').disabled, false, 'selection API failure must retain usable current player');
+  const failed = h.saved[h.saved.length - 1]; assert.strictEqual(failed.kind, 'host-selection-failed');
+  assert.strictEqual(failed.value.source, null); assert.strictEqual(failed.value.selectionAttempt.stage, 'selection-api');
+  assert.strictEqual(failed.value.selectionAttempt.attempted, null); assert.strictEqual(failed.value.selectionAttempt.retainedSource.itemId, 'second-video');
+  assert.strictEqual(failed.value.events.length, 0, 'old playback trace cannot diagnose a failed different selection');
+  assert(failed.value.selectionAttempt.diagnostics.length > 0, 'real adapter must emit selection diagnostics');
+  assert.strictEqual(failed.value.selectionAttempt.error.code, 'SELECTION_EMPTY');
+  h.state.response = [item('media-failure')]; h.state.prepareError = new Error('mock ffprobe failure');
+  await h.click('selected'); const mediaFailure = h.saved[h.saved.length - 1].value;
+  assert.strictEqual(mediaFailure.selectionAttempt.stage, 'media-prepare');
+  assert.strictEqual(mediaFailure.source.id, 'media-failure'); assert.strictEqual(mediaFailure.selectionAttempt.attempted.id, 'media-failure');
+  assert.strictEqual(mediaFailure.selectionAttempt.retainedSource, null); assert.strictEqual(h.element('timeline').disabled, true);
+  h.state.prepareError = null; await h.click('reload'); assert.strictEqual(h.prepared[h.prepared.length - 1].selected.id, 'media-failure');
+  h.state.response = [item('player-failure')]; h.state.playerLoadError = new Error('mock AudioContext failure');
+  await h.click('selected'); assert.strictEqual(h.saved[h.saved.length - 1].value.selectionAttempt.stage, 'player-initialize');
+  assert.strictEqual(h.liveInfos.size, 0, 'failed Player initialization must release its own prepared lease');
+  h.state.playerLoadError = null; h.state.response = [item('after-player-failure')]; await h.click('reload');
+  assert.strictEqual(h.prepared[h.prepared.length - 1].selected.id, 'after-player-failure', 'empty reload must recapture instead of using previously successful video');
+  assert.strictEqual(h.element('timeline').disabled, false);
+  await h.close(); await flush(); assert.strictEqual(h.liveInfos.size, 0);
+}
+
+async function emptyAndMalformedRegression() {
+  for (const response of [[], { id: 'not-an-array' }]) {
+    const h = harness({ response }); await h.initialize();
+    assert.strictEqual(h.prepared.length, 0, 'invalid startup selection cannot silently prepare fixed baseline');
+    assert.strictEqual(h.element('timeline').disabled, true); assert.strictEqual(h.element('reload').disabled, false);
+    const failed = h.saved.find(record => record.kind === 'host-selection-failed');
+    assert(failed); assert.strictEqual(failed.value.source, null); assert.strictEqual(failed.value.selectionAttempt.retainedSource, null);
+    h.state.response = [item('recovered')]; await h.click('reload');
+    assert.strictEqual(h.prepared[0].selected.id, 'recovered'); await h.close(); await flush();
+  }
+  const h = harness(); h.state.apiError = new Error('mock getSelected API rejection'); await h.initialize();
+  assert.strictEqual(h.prepared.length, 0); assert(h.saved[0].value.selectionAttempt.error.message.includes('API rejection'));
+  h.state.apiError = null; await h.click('selected'); assert.strictEqual(h.prepared[0].key, 'selected'); await h.close();
+}
+
+async function initializationAndCancellationRegression() {
+  const h = harness({ holdSources: true }), initializing = h.initialize();
+  await until(() => !!h.state.finishSources, 'initialization did not reach source listing');
+  h.state.response = [item('during-init-b')]; const first = h.run();
+  const firstReadCount = h.state.apiCalls; assert.strictEqual(firstReadCount, 1, 'run must capture before dependencies finish');
+  h.state.response = [item('during-init-c')]; const second = h.run({ ignored: true });
+  assert.strictEqual(h.state.apiCalls, firstReadCount + 1); assert.strictEqual(h.prepared.length, 0);
+  h.state.holdSources = false; h.state.finishSources(); await initializing; await first; await second; await flush();
+  assert.strictEqual(h.prepared.length, 1); assert.strictEqual(h.prepared[0].selected.id, 'during-init-c');
+  assert.strictEqual(h.state.peakLiveInfos, 1); await h.close();
+  const stopped = harness({ holdSources: true }), pending = stopped.initialize();
+  await until(() => !!stopped.state.finishSources, 'cancel scenario did not reach initialization');
+  assert.strictEqual(stopped.element('cancel').disabled, false, 'dependency initialization must expose stop control');
+  stopped.click('cancel'); stopped.state.finishSources(); await pending; await flush();
+  assert.strictEqual(stopped.prepared.length, 0, 'initialization completion cannot undo explicit stop');
+  const late = harness(); await late.initialize(); late.state.response = [item('late')]; late.state.holdSelection = true;
+  const lateSelection = late.click('selected'); assert.strictEqual(typeof late.state.finishSelection, 'function');
+  const beforeCancel = late.prepared.length; late.click('cancel'); late.state.holdSelection = false; late.state.finishSelection(); await lateSelection;
+  assert.strictEqual(late.prepared.length, beforeCancel, 'cancelled API result cannot load later');
+  await late.click('reload'); late.state.holdSelection = true; const beforeClose = late.prepared.length, closedSelection = late.run();
+  await late.close(); late.state.holdSelection = false; late.state.finishSelection(); await closedSelection; await flush();
+  assert.strictEqual(late.prepared.length, beforeClose, 'closed window cannot prepare late API result'); assert.strictEqual(late.liveInfos.size, 0);
+}
+
+async function interruptedPreparationRegression() {
+  const h = harness(); await h.initialize();
+  h.state.holdPrepare = true; h.state.prepareError = new Error('late old media failure');
+  const oldReload = h.click('reload'); await until(() => !!h.state.finishPrepare, 'old reload did not enter media prepare');
+  const oldCallCount = h.prepared.length, oldApiCalls = h.state.apiCalls;
+  h.state.response = [item('new-after-old-failure')]; const switchToNew = h.run();
+  assert.strictEqual(h.state.apiCalls, oldApiCalls + 1, 'new invocation must capture immediately while old media runs');
+  await flush(); assert.strictEqual(h.prepared.length, oldCallCount, 'new preparation cannot overlap old process completion');
+  h.state.holdPrepare = false; h.state.prepareError = null; h.state.finishPrepare();
+  await oldReload; await switchToNew; await flush();
+  assert.strictEqual(h.state.peakPrepareActive, 1); assert.strictEqual(h.state.peakLiveInfos, 1);
+  assert.strictEqual(h.prepared[h.prepared.length - 1].selected.id, 'new-after-old-failure');
+  assert.strictEqual(h.element('timeline').disabled, false, 'late old failure cannot dispose successful new Player');
+  assert.strictEqual(h.element('error').textContent, ''); await h.close(); await flush();
+}
+
+async function currentVideoProtocolRegression() {
+  const h = harness(); await h.initialize(); h.state.response = [item('not-part-of-current-test')];
+  const start = h.prepared.length; await h.click('preparation');
+  assert.strictEqual(h.cleaned.length, 3); assert.strictEqual(h.prepared.length - start, 6);
+  assert(h.prepared.slice(start).every(value => value.key === 'selected' && value.selected.id === 'audio-test'), 'three rounds must keep original selected identity');
+  assert.strictEqual(h.state.apiCalls, 1, 'protocol must not reread changing Eagle selection');
+  h.state.failCleanup = true; await h.click('preparation');
+  assert(h.saved.some(record => record.kind === 'host-failed')); assert.strictEqual(h.element('reload').disabled, false);
+  h.state.failCleanup = false; await h.click('reload');
+  const beforePreflight = h.prepared.length; await h.click('performance');
+  assert.strictEqual(h.prepared.length, beforePreflight, 'evidence preflight must reject before any media work');
+  assert(h.saved.some(record => record.kind === 'host-failed' && record.value.failedTask === 'performance'));
+  assert(!h.prepared.some(value => value.key === 'baseline')); await h.close(); await flush();
+}
+
+async function currentVideoPerformanceWiringRegression() {
+  const h = harness({ shortProtocol: true }); await h.initialize();
+  h.state.response = [item('changed-in-Eagle-during-test')]; const start = h.prepared.length;
+  await h.click('retest');
+  assert.strictEqual(h.prepared.length - start, 6, 'normal protocol must execute three rapid plus three independent rounds');
+  assert(h.prepared.slice(start).every(value => value.key === 'selected' && value.selected.id === 'audio-test'));
+  assert.strictEqual(h.state.apiCalls, 1, 'performance must retain captured test identity');
+  assert.strictEqual(h.saved.filter(record => record.kind === 'host-rapid').length, 3);
+  assert.strictEqual(h.saved.filter(record => record.kind === 'host-random').length, 3);
+  const summary = h.saved[h.saved.length - 1];
+  assert.strictEqual(summary.kind, 'host-protocol-summary'); assert.strictEqual(summary.value.reports.length, 6);
+  assert.strictEqual(summary.value.source.itemId, 'audio-test');
+  assert(!h.prepared.some(value => value.key === 'baseline')); await h.close(); await flush();
+}
+
+async function failedVideoManualObservationRegression() {
+  const h = harness(); await h.initialize();
+  h.element('manualDrag').value = '跟手'; h.element('manualSync').value = '相符'; h.element('manualFrames').value = '与目标相符';
+  h.state.response = [item('failed-video-b')]; h.state.playerLoadError = new Error('B image initialization failed');
+  await h.click('selected');
+  assert.strictEqual(h.element('save').disabled, true, 'failed B cannot accept observations for old A');
+  for (const id of ['manualDrag', 'manualSync', 'manualFrames'])
+    assert.strictEqual(h.element(id).value, '未检查', 'leaving A must clear its human observation');
+  const beforeSave = h.saved.length; await h.click('save');
+  assert.strictEqual(h.saved.length, beforeSave, 'save handler must reject empty/error state even if called directly');
+  const failed = h.saved[h.saved.length - 1]; assert.strictEqual(failed.kind, 'host-selection-failed');
+  assert.strictEqual(failed.value.source.id, 'failed-video-b'); assert.strictEqual(failed.value.manual, undefined);
+  assert.strictEqual(failed.value.loadMetrics, null); assert.strictEqual(h.liveInfos.size, 0); await h.close();
+}
+
+async function test() {
+  for (const scenario of [playbackAndLeaseRegression, selectionAndFailureRegression, emptyAndMalformedRegression,
+    initializationAndCancellationRegression, interruptedPreparationRegression, currentVideoProtocolRegression,
+    currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression]) {
+    await scenario(); console.log('ok ' + scenario.name);
+  }
+  console.log('t0-host: real selection adapter in mocked Eagle, current-video startup/protocol, lifecycle interleavings, failure evidence, pointer/lease/resource regression passed (not real Eagle)');
+}
+
 test().catch(error => { console.error(error); process.exitCode = 1; });
