@@ -9,7 +9,10 @@
     .row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin: 9px 0; }
     button, select, input { font: inherit; } button { padding: 4px 9px; }
     canvas { display: block; width: 100%; max-height: 400px; aspect-ratio: 16/9; object-fit: contain; background: #111; }
-    #timeline { width: 100%; } #error { color: #ae1818; white-space: pre-wrap; }
+    #timeline { width: 100%; padding: 0; border: 0; height: 16px; -webkit-appearance: none; background: transparent; touch-action: none; cursor: ew-resize; }
+    #timeline::-webkit-slider-runnable-track { height: 4px; background: #aaa; border-radius: 2px; }
+    #timeline::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; background: #444; border-radius: 50%; }
+    #timeline:disabled { cursor: default; opacity: .45; } #error { color: #ae1818; white-space: pre-wrap; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 150px; overflow: auto; background: white; padding: 9px; }
     .note { color: #555; font-size: 13px; }
   </style>

@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id), now = () => performance.now();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  let backend, protocol, selection, frameIndex, root, player, info, controller, initialized = false, busy = true, testing = false, closing = false;
+  let backend, protocol, selection, frameIndex, manualTrace, root, player, info, controller, initialized = false, busy = true, testing = false, closing = false;
   let events = [], samples = [], eventBytes = 0, truncated = false, inputNumber = 0, currentInputId = null, lastRequest = null;
   let loadMetrics = null, allReports = [], lastSaved = null, runSignal = null, runController = null, lastInfo = null;
   const associations = new Map(), inputKeys = new Map();
@@ -10,8 +10,17 @@
   let eventCounts = {}, selectionEpoch = 0;
   let dependenciesReady = false, pendingSelection = null, selecting = null, selectionWork = Promise.resolve(), loadWork = Promise.resolve();
   let dragging = false, dragPointer = null, dragTarget = null, releaseSent = false, seekPending = false, manualSeekNumber = 0;
+  let pointerMoves = 0, lastPointerTrace = -Infinity, dragRect = null;
+  let carryIn = null;
   function snapshot() { return player ? player.snapshot() : { state: 'empty' }; }
+  function uiEvent(phase, event, detail = {}) {
+    if (!protocol) return;
+    emit({ type: 'ui', phase, at: now(), pointerId: event && event.pointerId, buttons: event && event.buttons,
+      clientX: event && event.clientX, value: Number($('timeline').value), dragging, dragPointer, seekPending,
+      disabled: $('timeline').disabled, playerState: snapshot().state, pointerMoves, ...detail });
+  }
   function controls() {
+    const wasDisabled = $('timeline').disabled;
     const unavailable = busy || testing || !!selecting;
     const ready = !!player && !unavailable && ['paused', 'playing', 'seeking', 'ended'].includes(snapshot().state);
     for (const id of ['play', 'pause', 'previous', 'next', 'timeline']) $(id).disabled = !ready;
@@ -19,11 +28,12 @@
     $('save').disabled = !ready;
     for (const id of ['preparation', 'performance', 'retest']) $(id).disabled = unavailable || !info;
     $('cancel').disabled = !(busy || testing || selecting);
+    if ($('timeline').disabled !== wasDisabled) uiEvent('enabled-change', null, { busy, testing, selecting: !!selecting });
   }
   function emit(event) {
     if (event.type === 'request' && event.phase !== 'effective-frame') {
       const key = event.epoch + ':' + event.requestId;
-      if (currentInputId !== null && !truncated) { associations.set(key, currentInputId); inputKeys.set(currentInputId, key); }
+      if (currentInputId !== null && (!testing || !truncated)) { associations.set(key, currentInputId); inputKeys.set(currentInputId, key); }
       lastRequest = { key, frameId: event.frameId };
     }
     if (event.inputId === undefined && event.requestId !== undefined) event.inputId = associations.get(event.epoch + ':' + event.requestId);
@@ -36,11 +46,17 @@
     eventCounts[kind] = (eventCounts[kind] || 0) + 1;
     event = protocol.compactEvent(event);
     if (!event) return;
+    if (!testing && manualTrace) { manualTrace.append(event); return; }
     const size = JSON.stringify(event).length * 2;
     if (eventBytes + size > protocol.PROTOCOL.eventBytes) { truncated = true; return; }
     eventBytes += size; events.push(event);
   }
-  function resetLog() { events = []; samples = []; eventCounts = {}; eventBytes = 0; truncated = false; associations.clear(); inputKeys.clear(); lastRequest = null; }
+  function resetLog() {
+    events = []; samples = []; eventCounts = {}; eventBytes = 0; truncated = false; associations.clear(); inputKeys.clear(); lastRequest = null;
+    if (manualTrace) manualTrace.reset(now());
+    const s = snapshot(); carryIn = { at: now(), activeImageTasks: s.activeImageTasks || 0, pendingTargets: s.pendingTargets || 0,
+      note: 'work already active at capture reset can complete in this tail; earlier task/request events may be outside coverage' };
+  }
   function errorText(error) { $('error').textContent = error.message || String(error); }
   function abortCheck() { if (closing || runSignal && runSignal.aborted) { const error = new Error('当前测试已停止'); error.name = 'AbortError'; throw error; } }
   function timeout(promise, ms, name) {
@@ -48,7 +64,8 @@
   }
   function environment() {
     const os = require('os'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-    const files = ['plugin/player.js', 'plugin/frame-index.cjs', 'tests/host/t0/app.js', 'tests/support/t0-protocol.cjs', 'tests/support/t0-media.cjs', 'tests/support/t0-selection.cjs', 'tests/support/t0-reference.cjs'];
+    const files = ['plugin/player.js', 'plugin/frame-index.cjs', 'tests/host/t0/app.js', 'tests/host/t0/index.html', 'tests/support/t0-manual-trace.cjs',
+      'tests/support/t0-protocol.cjs', 'tests/support/t0-media.cjs', 'tests/support/t0-selection.cjs', 'tests/support/t0-reference.cjs'];
     return { node: process.versions.node, chrome: process.versions.chrome || null, electron: process.versions.electron || null,
       platform: process.platform, windows: os.release(), cpu: os.cpus()[0].model, ramBytes: os.totalmem(), processId: process.pid,
       eagle: typeof eagle !== 'undefined' && eagle.app ? { version: eagle.app.version, build: eagle.app.build } : null,
@@ -59,13 +76,28 @@
   }
   async function save(kind, extra = {}) {
     const savedInfo = info || lastInfo;
-    lastSaved = await backend.saveEvidence(kind, { schema: 'eva-t0-host-v1', origin: 'actual-eagle-window', executor: 'user-started-automatic-protocol',
+    const manualCapture = !testing && manualTrace ? manualTrace.snapshot(now()) : null;
+    const capture = manualCapture || { events, memorySamples: samples, truncated,
+      trace: { encoding: 'compact-v2', eventCounts, storedBytesEstimate: eventBytes,
+        omitted: 'duplicate state/effective-target/terminal notifications and eviction; raw inputs, request identity, decode-ready, draw and input-end retained unless truncated',
+        physicalPresentation: 'not measured; drawImage submission only; marker readback if enabled follows actual drawAt' } };
+    if (manualCapture) {
+      capture.trace.lifetimeEventCounts = { ...eventCounts }; capture.trace.carryIn = carryIn;
+      if (carryIn && (carryIn.activeImageTasks || carryIn.pendingTargets)) capture.trace.coverage.partialChainsPossible = true;
+    }
+    const payload = { schema: 'eva-t0-host-v1', origin: 'actual-eagle-window', executor: 'user-started-automatic-protocol',
       savedAt: new Date().toISOString(), environment: environment(), protocol: protocol.PROTOCOL, source: savedInfo && savedInfo.source,
       preparation: savedInfo && { metrics: savedInfo.metrics, audio: savedInfo.audio, frames: savedInfo.frames.length, duration: savedInfo.duration },
-      loadMetrics, snapshot: snapshot(), events, memorySamples: samples, truncated,
-      trace: { encoding: 'compact-v2', eventCounts, storedBytesEstimate: eventBytes,
-        omitted: 'duplicate state/effective-target/terminal notifications and eviction; all raw inputs, request identity, decode-ready, draw and input-end retained',
-        physicalPresentation: 'not measured; drawImage submission only; marker readback if enabled follows actual drawAt' }, ...extra });
+      loadMetrics, snapshot: snapshot(), ...capture, ...extra };
+    if (manualCapture) {
+      // Reserve a small allowance for the writer's ownership envelope. This
+      // never changes the aggregate quota or deletes any persisted evidence.
+      const bytes = Buffer.byteLength(JSON.stringify(payload, null, 2), 'utf8') + 4096, capacity = backend.evidenceInfo();
+      if (bytes > 2 * 1024 ** 2) throw new Error('本次手工诊断超过2MiB安全限额，未写文件；请保留现场并报告。');
+      if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < bytes)
+        throw new Error('剩余证据配额不足以保存本次手工诊断；不会删旧记录或增额。');
+    }
+    lastSaved = await backend.saveEvidence(kind, payload);
     $('details').textContent = `证据已保存：${lastSaved}\n${JSON.stringify(extra.summary || extra.result || loadMetrics, null, 2)}`;
     return lastSaved;
   }
@@ -94,7 +126,7 @@
     const started = options.startedAt === undefined ? now() : options.startedAt;
     if (resourceStopped) throw new Error('资源停止线已触发，请关闭测试窗口并检查记录');
     busy = true; controls(); $('error').textContent = '';
-    dragging = false; dragPointer = null; dragTarget = null; seekPending = false; manualSeekNumber++;
+    clearPointer('load-reset'); dragTarget = null; seekPending = false; manualSeekNumber++;
     const loadController = new AbortController(); controller = loadController;
     let preparedOwned = false;
     const ownedRunSignal = runSignal, stop = () => loadController.abort();
@@ -212,10 +244,40 @@
     releaseSent = true;
     return manualSeek(dragTarget === null ? Number($('timeline').value) : dragTarget, true);
   }
-  function endPointer(event) {
+  function clearPointer(reason) {
+    const pointer = dragPointer; dragging = false; dragPointer = null; dragRect = null;
+    try { if (pointer !== null && $('timeline').hasPointerCapture(pointer)) $('timeline').releasePointerCapture(pointer); }
+    catch (error) { uiEvent('capture-release-failed', null, { error: error.message }); }
+    uiEvent(reason);
+  }
+  function endPointer(event, reason = 'pointer-end') {
     if (!dragging || event && event.pointerId !== undefined && dragPointer !== event.pointerId) return;
-    const result = releaseDrag(); dragging = false; dragPointer = null;
+    // Up may contain a final coordinate without a preceding move. Cancel/blur
+    // retain the last known target instead of treating cancellation as motion.
+    if (event && ['pointerup', 'buttons-released'].includes(reason)) pointerTarget(event, false);
+    const result = releaseDrag(); clearPointer(reason);
     return result;
+  }
+  function pointerTarget(event, seek = true) {
+    if (!Number.isFinite(event.clientX)) return;
+    const range = $('timeline'), rect = dragRect || range.getBoundingClientRect();
+    // The 16px thumb is fixed in the test page CSS. Its centre travels within
+    // the track, including exact first/last positions and out-of-track drags.
+    if (!Number.isFinite(rect.width) || rect.width <= 16) return;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - 8) / (rect.width - 16)));
+    const minimum = Number(range.min || 0), maximum = Number(range.max);
+    if (!Number.isFinite(maximum) || maximum < minimum) return;
+    dragTarget = minimum + ratio * (maximum - minimum); range.value = dragTarget; releaseSent = false;
+    if (seek) return manualSeek(dragTarget, false);
+  }
+  function syncTimeline(reason) {
+    if (!player || dragging || seekPending) return;
+    $('timeline').value = snapshot().time || 0; uiEvent('value-sync', null, { reason });
+  }
+  async function command(name, work) {
+    const input = manualSeekNumber;
+    try { await work(); if (input === manualSeekNumber) syncTimeline(name); }
+    catch (error) { errorText(error); }
   }
   function target(time, kind, final, index) {
     const inputAt = now(), inputId = ++inputNumber;
@@ -230,8 +292,14 @@
       emit({ type: 'input-end', at: now(), inputId, status, requestId: result.requestId, reason: result.reason }); return result;
     }, error => { emit({ type: 'input-end', at: now(), inputId, status: 'failed', error: error.message }); throw error; });
   }
-  async function task(name, work) {
+  async function task(name, work, preflight) {
     if (busy || testing || selecting) return;
+    // Refusing a test must not dispose the current player or erase unsaved
+    // manual diagnostics. Check capacity before changing recording modes.
+    if (preflight) {
+      try { preflight(); }
+      catch (error) { errorText(error); uiEvent('preflight-rejected', null, { task: name, error: error.message }); return; }
+    }
     testing = true; const cancel = new AbortController(); runController = cancel; runSignal = cancel.signal; controls();
     try { await work(); }
     catch (error) {
@@ -239,7 +307,7 @@
       try { await dispose(); } catch (failure) { disposeError = failure.message; }
       await save('host-failed', { failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message } }).catch(errorText);
     }
-    finally { runSignal = null; runController = null; controller = null; testing = false; controls(); }
+    finally { runSignal = null; runController = null; controller = null; testing = false; resetLog(); controls(); }
   }
   function testSource() {
     if (!info || !player) throw new Error('请先成功载入要测试的视频。');
@@ -277,11 +345,14 @@
     summary.roundGateMet = delayMs ? null : summary.normalThresholdsMet && summary.final.correct;
     allReports.push(summary); await save('host-rapid', { summary }); abortCheck();
   }
-  async function performanceTest(normalOnly = false) {
-    const source = testSource();
+  function performancePreflight(normalOnly) {
+    testSource();
     const required = (normalOnly ? 40 : 100) * 1024 ** 2, capacity = backend.evidenceInfo();
     if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < required)
-      throw new Error(`剩余证据配额不足：本次至少预留${normalOnly ? 40 : 100}MiB。保留旧证据；可先运行“复测正常拖动”，不要删除记录或重复完整协议。`);
+      throw new Error(`剩余证据配额不足：本次至少预留${normalOnly ? 40 : 100}MiB。当前播放器和未保存观察保留；不要删除旧记录或重复协议。`);
+  }
+  async function performanceTest(normalOnly = false) {
+    const source = testSource();
     allReports = [];
     for (const delay of normalOnly ? [0] : [0, 25, 60]) for (let round = 1; round <= 3; round++) await runRound(delay, round, source);
     for (let round = 1; round <= 3; round++) {
@@ -326,6 +397,7 @@
       backend = require(path.join(root, '../../support/t0-media.cjs'));
       if (fs.realpathSync(backend.HOST_ROOT).toLowerCase() !== root.toLowerCase()) throw new Error('测试插件实际目录不符');
       protocol = require(path.join(root, '../../support/t0-protocol.cjs'));
+      manualTrace = new (require(path.join(root, '../../support/t0-manual-trace.cjs')).ManualTrace)(); manualTrace.reset(now());
       selection = require(path.join(root, '../../support/t0-selection.cjs'));
       frameIndex = require(path.join(root, '../../../plugin/frame-index.cjs'));
       for (const item of await backend.listSources()) {
@@ -348,29 +420,55 @@
   $('cancel').addEventListener('click', () => {
     selectionEpoch++;
     selecting = null; pendingSelection = null;
+    clearPointer('cancel');
     if (runController) runController.abort(); if (controller) controller.abort();
     if (player) dispose().catch(errorText);
   });
-  $('play').addEventListener('click', () => player.play().catch(errorText));
-  $('pause').addEventListener('click', () => player.pause());
-  $('previous').addEventListener('click', () => player.step(-1).catch(errorText));
-  $('next').addEventListener('click', () => player.step(1).catch(errorText));
+  $('play').addEventListener('click', () => command('play', () => player.play()));
+  $('pause').addEventListener('click', () => command('pause', () => player.pause()));
+  $('previous').addEventListener('click', () => command('previous', () => player.step(-1)));
+  $('next').addEventListener('click', () => command('next', () => player.step(1)));
   $('timeline').addEventListener('pointerdown', event => {
-    if ($('timeline').disabled) return;
+    if ($('timeline').disabled || event.button !== undefined && event.button !== 0) return;
+    if (dragging && event.pointerId !== dragPointer) return;
+    // Own the gesture instead of letting native range dragging and polling
+    // compete. Keyboard input remains native and follows input/change below.
+    if (event.preventDefault) event.preventDefault();
     dragging = true; dragPointer = event.pointerId; dragTarget = null; releaseSent = false;
+    dragRect = $('timeline').getBoundingClientRect();
+    $('timeline').focus({ preventScroll: true });
+    try { $('timeline').setPointerCapture(dragPointer); }
+    catch (error) { uiEvent('capture-failed', event, { error: error.message }); }
+    uiEvent('pointerdown', event, { trackLeft: dragRect.left, trackWidth: dragRect.width }); return pointerTarget(event);
   });
   $('timeline').addEventListener('input', () => {
     dragTarget = Number($('timeline').value); releaseSent = false;
+    uiEvent('native-input');
     return manualSeek(dragTarget, false);
   });
   $('timeline').addEventListener('change', releaseDrag);
-  $('timeline').addEventListener('pointercancel', endPointer);
-  $('timeline').addEventListener('lostpointercapture', endPointer);
-  window.addEventListener('pointerup', endPointer);
-  window.addEventListener('pointercancel', endPointer);
-  window.addEventListener('blur', () => endPointer());
-  $('performance').addEventListener('click', () => task('performance', () => performanceTest(false)));
-  $('retest').addEventListener('click', () => task('normal-retest', () => performanceTest(true)));
+  $('timeline').addEventListener('lostpointercapture', event => {
+    // Capture can be lost before the physical button is released. Retain the
+    // owner and use window moves; only a real up/cancel/blur ends the gesture.
+    uiEvent('lostpointercapture', event);
+  });
+  window.addEventListener('pointermove', event => {
+    if (!dragging || event.pointerId !== dragPointer) return;
+    if (event.buttons !== undefined && (event.buttons & 1) === 0) return endPointer(event, 'buttons-released');
+    pointerMoves++;
+    if (now() - lastPointerTrace >= 250) { lastPointerTrace = now(); uiEvent('pointermove', event); }
+    return pointerTarget(event);
+  });
+  $('timeline').addEventListener('pointercancel', event => endPointer(event, 'pointercancel'));
+  window.addEventListener('pointerup', event => endPointer(event, 'pointerup'));
+  window.addEventListener('pointercancel', event => endPointer(event, 'pointercancel'));
+  window.addEventListener('blur', () => { uiEvent('blur'); return endPointer(null, 'blur-end'); });
+  window.addEventListener('focus', () => uiEvent('focus'));
+  window.addEventListener('resize', () => {
+    if (dragging) { dragRect = $('timeline').getBoundingClientRect(); uiEvent('track-resize', null, { trackLeft: dragRect.left, trackWidth: dragRect.width }); }
+  });
+  $('performance').addEventListener('click', () => task('performance', () => performanceTest(false), () => performancePreflight(false)));
+  $('retest').addEventListener('click', () => task('normal-retest', () => performanceTest(true), () => performancePreflight(true)));
   $('accuracy').addEventListener('click', () => task('accuracy', accuracyTest));
   $('preparation').addEventListener('click', () => task('preparation', preparationTest));
   $('save').addEventListener('click', () => {
@@ -382,8 +480,12 @@
     if (!player) return;
     const s = snapshot(), m = process.memoryUsage();
     $('position').textContent = `${s.state} · ${Number(s.time || 0).toFixed(4)}秒 · 源帧${s.frameId} · 在途${s.activeImageTasks}`;
-    if (!dragging && !seekPending) $('timeline').value = s.time || 0;
-    if (samples.length < 4000) samples.push({ at: now(), rss: m.rss, external: m.external, arrayBuffers: m.arrayBuffers, managed: s.cacheBytes });
+    // A paused frame time is quantized to the source frame boundary. It must
+    // never push a user-requested thumb value backwards every 100ms.
+    if (s.state === 'playing' && !dragging && !seekPending) syncTimeline('playback-clock');
+    const memory = { at: now(), rss: m.rss, external: m.external, arrayBuffers: m.arrayBuffers, managed: s.cacheBytes };
+    if (!testing && manualTrace) manualTrace.sample(memory);
+    else if (samples.length < 4000) samples.push(memory);
     else truncated = true;
     if (m.rss >= 1.5 * 1024 ** 3 && !resourceStopped) {
       resourceStopped = true; if (runController) runController.abort(); if (controller) controller.abort(); player.pause();
@@ -392,7 +494,7 @@
         .finally(() => dispose().catch(errorText));
     }
   }, 100);
-  const close = () => { closing = true; selectionEpoch++; selecting = null; pendingSelection = null; if (runController) runController.abort(); if (controller) controller.abort(); dispose().catch(errorText); };
+  const close = () => { closing = true; clearPointer('close'); selectionEpoch++; selecting = null; pendingSelection = null; if (runController) runController.abort(); if (controller) controller.abort(); dispose().catch(errorText); };
   window.addEventListener('pagehide', close);
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);

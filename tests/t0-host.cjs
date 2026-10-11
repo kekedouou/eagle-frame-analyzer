@@ -20,10 +20,14 @@ function harness(options = {}) {
     holdSources: !!options.holdSources, finishSources: null, holdSelection: false, finishSelection: null,
     holdDispose: false, finishDispose: null, forceDisposeTimeout: false, prepareError: null, playerLoadError: null,
     holdPrepare: false, finishPrepare: null, prepareActive: 0, peakPrepareActive: 0,
-    failCleanup: false, memoryRss: 10, constructed: 0, disposed: 0, peakLiveInfos: 0, remainingBytes: 60 * 1024 ** 2 };
+    failCleanup: false, memoryRss: 10, constructed: 0, disposed: 0, peakLiveInfos: 0, remainingBytes: 60 * 1024 ** 2,
+    quantizeSeek: false, timelineRect: { left: 100, width: 200 }, captured: null, captureFailure: false };
   const element = id => {
     if (!elements.has(id)) elements.set(id, { value: id === 'refresh' ? '60' : '未检查', handlers: {}, children: [], disabled: true,
-      addEventListener(name, callback) { this.handlers[name] = callback; }, append(child) { this.children.push(child); }, textContent: '' });
+      addEventListener(name, callback) { this.handlers[name] = callback; }, append(child) { this.children.push(child); }, textContent: '',
+      getBoundingClientRect() { return state.timelineRect; }, focus() {},
+      setPointerCapture(id) { if (state.captureFailure) throw new Error('mock capture loss'); state.captured = id; },
+      hasPointerCapture(id) { return state.captured === id; }, releasePointerCapture(id) { if (state.captured === id) state.captured = null; } });
     return elements.get(id);
   };
   let initializer, reinvoke, exit, sampleTimer, tick = 1;
@@ -61,7 +65,7 @@ function harness(options = {}) {
     snapshot() { return { state: this.state, time: this.time, frameId: this.frameId, activeImageTasks: 0, cacheBytes: 0 }; }
     async seek(time, value) {
       this.request++; inputKinds.push(value.kind); inputTimes.push(time);
-      this.time = time; this.frameId = time < .5 ? 10 : 20;
+      this.time = state.quantizeSeek ? (time < .5 ? 0 : .5) : time; this.frameId = time < .5 ? 10 : 20;
       this.options.emit({ type: 'request', epoch: 1, requestId: this.request, phase: 'input', frameId: this.frameId, inputAt: value.inputAt, at: tick++ });
       this.options.emit({ type: 'draw', epoch: 1, requestId: this.request, frameId: this.frameId, inputAt: value.inputAt, at: tick++ });
       return { status: 'drawn', requestId: this.request };
@@ -81,11 +85,12 @@ function harness(options = {}) {
   const context = { document: { getElementById: element, createElement: () => ({}), activeElement: null },
     window: { EVAPlayer: { Player }, addEventListener(name, callback) { windowHandlers[name] = callback; } }, performance: { now: () => tick++ },
     setTimeout: (callback, ms) => setTimeout(callback, state.forceDisposeTimeout && ms === 10000 ? 1 : ms), clearTimeout,
-    setInterval: callback => { sampleTimer = callback; return 1; }, AbortController, innerWidth: 1000, innerHeight: 800, devicePixelRatio: 1,
+    setInterval: callback => { sampleTimer = callback; return 1; }, AbortController, Buffer, innerWidth: 1000, innerHeight: 800, devicePixelRatio: 1,
     process: { versions: { node: '16.17.1', chrome: '108' }, platform: 'win32', pid: 123, memoryUsage: () => ({ rss: state.memoryRss }) },
     eagle, require(name) {
       if (name.endsWith('t0-media.cjs')) return backend;
       if (name.endsWith('t0-selection.cjs')) return selection;
+      if (name.endsWith('t0-manual-trace.cjs')) return require('./support/t0-manual-trace.cjs');
       if (name.endsWith('t0-protocol.cjs')) {
         const protocol = require('./support/t0-protocol.cjs');
         // Only shorten the mocked host's wait; these statistics never represent
@@ -174,6 +179,66 @@ async function selectionAndFailureRegression() {
   await h.close(); await flush(); assert.strictEqual(h.liveInfos.size, 0);
 }
 
+async function pointerOwnershipRegression() {
+  const h = harness(); await h.initialize(); h.state.quantizeSeek = true;
+  const range = h.element('timeline');
+  range.handlers.pointerdown({ pointerId: 7 }); range.value = '.7'; await range.handlers.input();
+  await range.handlers.lostpointercapture({ pointerId: 7 });
+  range.value = '.8'; await range.handlers.input(); h.sample();
+  assert.strictEqual(Number(range.value), .8, 'loss of capture must not let frame-quantized polling push the active thumb backwards');
+  await h.windowHandlers.pointerup({ pointerId: 7 }); h.sample();
+  assert.strictEqual(Number(range.value), .8, 'paused polling must preserve the requested thumb value after release');
+  let prevented = 0;
+  await range.handlers.pointerdown({ pointerId: 8, button: 0, clientX: 108, preventDefault() { prevented++; } });
+  assert.strictEqual(h.state.captured, 8); assert.strictEqual(Number(range.value), 0);
+  await h.windowHandlers.pointermove({ pointerId: 99, buttons: 1, clientX: 292 });
+  assert.strictEqual(Number(range.value), 0, 'another pointer cannot own this drag');
+  await h.windowHandlers.pointermove({ pointerId: 8, buttons: 1, clientX: 269 }); h.sample();
+  assert.strictEqual(Number(range.value), .875); assert.strictEqual(h.inputTimes[h.inputTimes.length - 1], .875);
+  await range.handlers.lostpointercapture({ pointerId: 8 }); h.state.captured = null;
+  await h.windowHandlers.pointermove({ pointerId: 8, buttons: 1, clientX: 400 });
+  assert.strictEqual(Number(range.value), 1, 'window fallback must continue outside the track after capture loss');
+  const releases = h.inputKinds.filter(kind => kind === 'release').length;
+  await h.windowHandlers.pointerup({ pointerId: 8, clientX: 108 }); await range.handlers.change();
+  assert.strictEqual(h.inputKinds.filter(kind => kind === 'release').length, releases + 1);
+  assert.strictEqual(h.inputTimes[h.inputTimes.length - 1], 0, 'release must honor a newer final up coordinate');
+  h.state.captureFailure = true;
+  await range.handlers.pointerdown({ pointerId: 9, button: 0, clientX: 108, preventDefault() { prevented++; } });
+  await h.windowHandlers.pointermove({ pointerId: 9, buttons: 1, clientX: 200 });
+  assert.strictEqual(Number(range.value), .5); await h.windowHandlers.blur();
+  h.sample(); assert.strictEqual(Number(range.value), .5); assert.strictEqual(prevented, 2);
+  range.value = '.4'; await range.handlers.input(); await range.handlers.change(); h.sample();
+  assert.strictEqual(Number(range.value), .4, 'keyboard/native input must not be overwritten by source-frame quantization');
+  await range.handlers.pointerdown({ pointerId: 10, button: 0, clientX: 200, preventDefault() {} });
+  await h.windowHandlers.pointermove({ pointerId: 10, buttons: 2, clientX: 292 });
+  const final = h.inputTimes[h.inputTimes.length - 1]; assert.strictEqual(final, 1);
+  await h.windowHandlers.pointermove({ pointerId: 10, buttons: 1, clientX: 108 });
+  assert.strictEqual(h.inputTimes[h.inputTimes.length - 1], final, 'released primary button must end dragging even when another button remains down');
+  await h.click('save'); const diagnostics = h.saved[h.saved.length - 1].value.events.filter(event => event.type === 'ui');
+  assert(diagnostics.some(event => event.phase === 'lostpointercapture'));
+  assert(diagnostics.some(event => event.phase === 'capture-failed'));
+  await h.close(); await flush();
+}
+
+async function manualTailAndQuotaRegression() {
+  const h = harness(); await h.initialize();
+  for (let n = 0; n < 1200; n++) {
+    h.element('timeline').value = String(n % 2 ? .25 : .75); await h.element('timeline').handlers.input();
+  }
+  for (let n = 0; n < 250; n++) h.sample();
+  await h.click('save');
+  const record = h.saved[h.saved.length - 1].value;
+  assert.strictEqual(record.trace.encoding, 'manual-tail-v3'); assert(record.truncated);
+  assert.strictEqual(record.trace.lifetimeEventCounts.input, 1200);
+  assert.strictEqual(record.events[record.events.length - 1].inputId, 1200, 'overflow must retain the latest terminal instead of an old prefix');
+  assert.strictEqual(record.memorySamples.length, 200); assert(record.trace.coverage.partialChainsPossible);
+  assert(Buffer.byteLength(JSON.stringify(record, null, 2), 'utf8') + 4096 < 2 * 1024 ** 2);
+  const before = h.saved.length, original = JSON.stringify(record); h.state.remainingBytes = 0;
+  await h.click('save'); assert.strictEqual(h.saved.length, before, 'quota failure must not write, replace or clear evidence');
+  assert(h.element('error').textContent.includes('配额不足')); assert.strictEqual(JSON.stringify(record), original);
+  await h.close(); await flush();
+}
+
 async function emptyAndMalformedRegression() {
   for (const response of [[], { id: 'not-an-array' }]) {
     const h = harness({ response }); await h.initialize();
@@ -238,9 +303,14 @@ async function currentVideoProtocolRegression() {
   h.state.failCleanup = true; await h.click('preparation');
   assert(h.saved.some(record => record.kind === 'host-failed')); assert.strictEqual(h.element('reload').disabled, false);
   h.state.failCleanup = false; await h.click('reload');
-  const beforePreflight = h.prepared.length; await h.click('performance');
+  h.element('timeline').value = '.75'; await h.element('timeline').handlers.input();
+  const beforePreflight = h.prepared.length, beforeSaved = h.saved.length, beforeDisposed = h.state.disposed; await h.click('performance');
   assert.strictEqual(h.prepared.length, beforePreflight, 'evidence preflight must reject before any media work');
-  assert(h.saved.some(record => record.kind === 'host-failed' && record.value.failedTask === 'performance'));
+  assert.strictEqual(h.state.disposed, beforeDisposed, 'preflight refusal must retain current Player');
+  assert.strictEqual(h.saved.length, beforeSaved, 'preflight refusal must not consume quota for an empty failed run');
+  assert.strictEqual(h.element('timeline').disabled, false); await h.click('save');
+  assert(h.saved[h.saved.length - 1].value.events.some(event => event.type === 'input' && event.targetTime === .75),
+    'preflight refusal must preserve the unsaved manual tail');
   assert(!h.prepared.some(value => value.key === 'baseline')); await h.close(); await flush();
 }
 
@@ -253,6 +323,8 @@ async function currentVideoPerformanceWiringRegression() {
   assert.strictEqual(h.state.apiCalls, 1, 'performance must retain captured test identity');
   assert.strictEqual(h.saved.filter(record => record.kind === 'host-rapid').length, 3);
   assert.strictEqual(h.saved.filter(record => record.kind === 'host-random').length, 3);
+  assert(h.saved.filter(record => ['host-rapid', 'host-random'].includes(record.kind))
+    .every(record => record.value.trace.encoding === 'compact-v2'), 'manual tail must never replace a full automated protocol');
   const summary = h.saved[h.saved.length - 1];
   assert.strictEqual(summary.kind, 'host-protocol-summary'); assert.strictEqual(summary.value.reports.length, 6);
   assert.strictEqual(summary.value.source.itemId, 'audio-test');
@@ -275,7 +347,7 @@ async function failedVideoManualObservationRegression() {
 }
 
 async function test() {
-  for (const scenario of [playbackAndLeaseRegression, selectionAndFailureRegression, emptyAndMalformedRegression,
+  for (const scenario of [playbackAndLeaseRegression, pointerOwnershipRegression, manualTailAndQuotaRegression, selectionAndFailureRegression, emptyAndMalformedRegression,
     initializationAndCancellationRegression, interruptedPreparationRegression, currentVideoProtocolRegression,
     currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression]) {
     await scenario(); console.log('ok ' + scenario.name);
