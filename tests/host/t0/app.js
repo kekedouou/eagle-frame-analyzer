@@ -6,6 +6,7 @@
   let comparisonCapture = null, comparisonReports = [], comparisonBegin = 0, comparisonBinding = null;
   let comparisonPreparing = null;
   let gate, gateActive = false, gateCapture = null, gateWritten = 0, gateRecords = [], gateBinding = null;
+  let runStop = null, gatePhase = null;
   let events = [], samples = [], eventBytes = 0, truncated = false, inputNumber = 0, currentInputId = null, lastRequest = null;
   let loadMetrics = null, allReports = [], lastSaved = null, runSignal = null, runController = null, lastInfo = null;
   const associations = new Map(), inputKeys = new Map();
@@ -62,7 +63,18 @@
     const s = snapshot(); carryIn = { at: now(), activeImageTasks: s.activeImageTasks || 0, pendingTargets: s.pendingTargets || 0,
       note: 'work already active at capture reset can complete in this tail; earlier task/request events may be outside coverage' };
   }
-  function errorText(error) { $('error').textContent = error.message || String(error); }
+  function stopRun(cause, message) {
+    if (!runController || runController.signal.aborted) return;
+    // Keep the first trigger independently of trace capture: preparation has
+    // no frame trace, and later close/cleanup events must not replace it.
+    runStop = { cause, message, at: now(), phase: gatePhase,
+      visibilityState: document.visibilityState || 'unknown', statusAtStop: $('status').textContent };
+    runController.abort();
+  }
+  function errorText(error) {
+    $('error').textContent = error.name === 'AbortError' ?
+      '操作已停止：' + (runStop ? runStop.message : '收到取消指令，来源未记录') : error.message || String(error);
+  }
   function abortCheck() { if (closing || runSignal && runSignal.aborted) { const error = new Error('当前测试已停止'); error.name = 'AbortError'; throw error; } }
   function timeout(promise, ms, name) {
     let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(name + '超时')), ms); })]).finally(() => clearTimeout(timer));
@@ -318,7 +330,8 @@
       try { preflight(); }
       catch (error) { errorText(error); uiEvent('preflight-rejected', null, { task: name, error: error.message }); return; }
     }
-    testing = true; const cancel = new AbortController(); runController = cancel; runSignal = cancel.signal; controls();
+    testing = true; runStop = null; gatePhase = null;
+    const cancel = new AbortController(); runController = cancel; runSignal = cancel.signal; controls();
     try { await work(); }
     catch (error) {
       errorText(error); const failedSnapshot = snapshot(); let disposeError = null;
@@ -329,15 +342,17 @@
       if (name === 'adopted-gate') {
         const interrupted = gateCapture; gateCapture = null;
         const failure = { gateEvidence: true, failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message },
+          cancellation: runStop, interruptedPhase: gatePhase,
           sourceBinding: gateBinding, records: gateRecords, preparationResources: comparisonPreparing,
           resultComplete: false, events: [], memorySamples: [], trace: null };
+        $('status').textContent = `完整复验${error.name === 'AbortError' ? '已停止' : '失败'}，本组未完成；已完成${gateRecords.length}轮`;
         try { await save('host-gate-failed', { ...failure, trace: interrupted ? await interrupted.pack() : null }); }
         catch (packingError) { await save('host-gate-failed', { ...failure, captureSaveError: packingError.message }).catch(errorText); }
-      } else await save('host-failed', { failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message },
+      } else await save('host-failed', { failedTask: name, failedSnapshot, disposeError, cancellation: runStop, error: { name: error.name, message: error.message },
         ...(name === 'short-comparison' ? { events: [], memorySamples: [], trace: null, reports: comparisonReports,
           sampleBinding: comparisonBinding, preparationResources: comparisonPreparing, officialAcceptance: false } : {}) }).catch(errorText);
     }
-    finally { gateCapture = null; gateActive = false; comparisonCapture = null; comparisonPreparing = null; comparisonBinding = null; runSignal = null; runController = null; controller = null; testing = false; resetLog(); controls(); }
+    finally { gateCapture = null; gateActive = false; comparisonCapture = null; comparisonPreparing = null; comparisonBinding = null; runSignal = null; runController = null; controller = null; runStop = null; gatePhase = null; testing = false; resetLog(); controls(); }
   }
   function testSource() {
     if (!info || !player) throw new Error('请先成功载入要测试的视频。');
@@ -488,13 +503,16 @@
     const config = protocol.PROTOCOL;
     const foreground = () => {
       abortCheck();
-      if (document.visibilityState && document.visibilityState !== 'visible') throw new Error('完整复验须保持前台；本组不完整。');
+      if (document.visibilityState && document.visibilityState !== 'visible') {
+        stopRun('document-hidden', '测试页面已隐藏，完整复验须保持前台'); abortCheck();
+      }
     };
     const modes = { experimentMode: 'compressed-ram' }; // A-04 only; no combined experiment.
     // Fresh removes only this original registered cache after actual lease release.
     // A second active window/unknown file safely blocks cleanup in the backend.
     for (let round = 1; round <= 3; round++) {
       for (const fresh of [true, false]) {
+        gatePhase = { kind: fresh ? 'first' : 'reuse', round };
         foreground(); $('status').textContent = `完整复验：${fresh ? '首次准备' : '完整缓存复用'} ${round}/3`;
         const preparation = await gateLoad(source, fresh, modes);
         foreground();
@@ -504,6 +522,7 @@
       }
     }
     for (const delayMs of [0, 25, 60]) for (let round = 1; round <= 3; round++) {
+      gatePhase = { kind: 'rapid', round, delayMs };
       foreground(); const preparation = await gateLoad(source, false, { ...modes, reuseOnly: true }); foreground();
       player.setVerifyMarkers(false); player.setDecodeDelay(delayMs); resetLog();
       const initialSnapshot = snapshot(); gateCapture = new gate.Capture(info.frames.map(f => f.id)); gateCapture.maxTasks = initialSnapshot.activeImageTasks || 0;
@@ -535,6 +554,7 @@
       await gateSave('host-gate-rapid', summary, trace); abortCheck();
     }
     for (let round = 1; round <= 3; round++) {
+      gatePhase = { kind: 'random', round };
       foreground(); const preparation = await gateLoad(source, false, { ...modes, reuseOnly: true }); foreground();
       player.setVerifyMarkers(false); resetLog(); gateCapture = new gate.Capture(info.frames.map(f => f.id)); const begin = now();
       $('status').textContent = `完整复验：独立随机定位 ${round}/3`;
@@ -614,7 +634,7 @@
     selectionEpoch++;
     selecting = null; pendingSelection = null;
     clearPointer('cancel');
-    if (runController) runController.abort(); if (controller) controller.abort();
+    stopRun('stop-button', '点击了“停止当前测试”'); if (controller) controller.abort();
     if (player) dispose().catch(errorText);
   });
   $('play').addEventListener('click', () => command('play', () => player.play()));
@@ -657,7 +677,7 @@
   window.addEventListener('pointercancel', event => endPointer(event, 'pointercancel'));
   window.addEventListener('blur', () => {
     uiEvent('blur');
-    if (gateActive && runController) runController.abort();
+    if (gateActive) stopRun('window-blur', '测试窗口失去焦点（点击其他窗口等）');
     return endPointer(null, 'blur-end');
   });
   window.addEventListener('focus', () => uiEvent('focus'));
@@ -694,13 +714,13 @@
     else if (samples.length < 4000) samples.push(memory);
     else truncated = true;
     if (m.rss >= 1.5 * 1024 ** 3 && !resourceStopped) {
-      resourceStopped = true; if (runController) runController.abort(); if (controller) controller.abort(); player.pause();
+      resourceStopped = true; stopRun('resource-stop', '插件进程内存达到1.5GiB观察停止线'); if (controller) controller.abort(); player.pause();
       errorText(new Error('插件当前进程RSS达到1.5GiB观察停止线，正在退出并保留证据'));
       save('host-resource-stop', { gateEvidence: gateActive, reason: 'renderer RSS observation stop line', rss: m.rss }).catch(errorText)
         .finally(() => dispose().catch(errorText));
     }
   }, 100);
-  const close = () => { closing = true; clearPointer('close'); selectionEpoch++; selecting = null; pendingSelection = null; if (runController) runController.abort(); if (controller) controller.abort(); dispose().catch(errorText); };
+  const close = () => { closing = true; clearPointer('close'); selectionEpoch++; selecting = null; pendingSelection = null; stopRun('window-close', '插件窗口正在关闭'); if (controller) controller.abort(); dispose().catch(errorText); };
   window.addEventListener('pagehide', close);
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);

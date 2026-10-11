@@ -444,12 +444,37 @@ async function adoptedGateCancellationAndCleanupRegression() {
   await h.click('cancel'); h.state.holdPrepare = false; h.state.finishPrepare(); await running;
   assert(!h.saved.some(r => r.kind === 'host-gate-summary'));
   assert.strictEqual(h.saved.at(-1).kind, 'host-gate-failed'); assert.strictEqual(h.liveInfos.size, 0);
+  assert.strictEqual(h.saved.at(-1).value.cancellation.cause, 'stop-button');
+  assert.strictEqual(h.saved.at(-1).value.interruptedPhase.kind, 'first');
+  assert.match(h.element('error').textContent, /停止当前测试/);
+  assert.match(h.element('status').textContent, /已停止.*本组未完成/);
   assert.strictEqual(h.state.peakPrepareActive, 1);
   await h.click('reload'); h.state.failCleanup = true;
   const before = h.prepared.length; await h.click('gate');
   assert.strictEqual(h.prepared.length, before, 'unknown cache ownership must stop before generation');
   assert.match(h.saved.at(-1).value.error.message, /Unknown file/);
+  assert.strictEqual(h.saved.at(-1).value.cancellation, null, 'old cancellation cause must not leak into a new failure');
   assert.strictEqual(h.saved.at(-1).value.resultComplete, false); await h.close();
+}
+
+async function adoptedGateBlurDiagnosticRegression() {
+  const h = harness({ shortProtocol: true }); await h.initialize(); h.state.holdPrepare = true;
+  const running = h.click('gate'); await until(() => !!h.state.finishPrepare, 'gate preparation did not start');
+  h.element('status').textContent = '{"stage":"decode","frames":281}';
+  await h.windowHandlers.blur(); await h.click('cancel');
+  h.state.holdPrepare = false; h.state.finishPrepare(); await running;
+  const failure = h.saved.at(-1).value;
+  assert.strictEqual(h.saved.at(-1).kind, 'host-gate-failed');
+  assert.strictEqual(failure.cancellation.cause, 'window-blur', 'later stop must retain the first trigger');
+  assert.match(failure.cancellation.statusAtStop, /decode/);
+  assert.strictEqual(failure.cancellation.phase.kind, 'first');
+  assert.strictEqual(failure.cancellation.phase.round, 1);
+  assert.strictEqual(failure.resultComplete, false); assert.strictEqual(failure.trace, null);
+  assert.match(h.element('error').textContent, /窗口失去焦点/);
+  assert.match(h.element('status').textContent, /已停止.*本组未完成/);
+  assert(!h.element('status').textContent.includes('decode'), 'cancelled run must not keep stale decode status');
+  assert(!h.saved.some(r => r.kind === 'host-gate-summary')); assert.strictEqual(h.liveInfos.size, 0);
+  await h.click('reload'); assert.strictEqual(h.element('reload').disabled, false); await h.close();
 }
 
 async function test() {
@@ -457,7 +482,7 @@ async function test() {
     initializationAndCancellationRegression, interruptedPreparationRegression, currentVideoProtocolRegression,
     currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression, comparisonModeAndQuotaRegression,
     comparisonIdentityFailureRegression, comparisonCancellationRegression, adoptedGateWiringRegression, adoptedGateFailureRegression,
-    adoptedGateCancellationAndCleanupRegression]) {
+    adoptedGateCancellationAndCleanupRegression, adoptedGateBlurDiagnosticRegression]) {
     await scenario(); console.log('ok ' + scenario.name);
   }
   console.log('t0-host: real selection adapter in mocked Eagle, current-video startup/protocol, lifecycle interleavings, failure evidence, pointer/lease/resource regression passed (not real Eagle)');

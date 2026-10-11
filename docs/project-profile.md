@@ -8,7 +8,7 @@
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
 - T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json 为独立宿主测试入口，正式产品入口在 T1 建立。[T0 计划](experiments/T0/plan.md) 固定输入、预算与验证边界。
 - T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
-- T0短对照与两候选人工操作已完成，用户认可流畅度并授权采纳。A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）；旧基线与就绪提交仅保留测试对比。下一项为“采纳方案完整复验”：正式轮数/时长/阈值不变，完整记录无损压缩后每轮≤512KiB、整组≤4MiB、预留4.5MiB，用户在Eagle启动一次。短测不代替正式关卡，T0未量化通过，T1正式入口尚未创建。[证据与操作](experiments/T0/report.md#两项对照核对与用户人工验收)。
+- T0短对照与两候选人工操作已完成，用户认可流畅度并授权采纳。A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）；旧基线与就绪提交仅保留测试对比。“采纳方案完整复验”正式轮数/时长/阈值不变，完整记录无损压缩后每轮≤512KiB、整组≤4MiB、预留4.5MiB。首次实际运行在第二轮准备时取消，停止诊断已修复；首轮准备超目标，测量边界待核查。短测不代替正式关卡，T0未量化通过，T1正式入口尚未创建。[中断证据](experiments/T0/report.md#完整复验中断与取消诊断修复)。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 
