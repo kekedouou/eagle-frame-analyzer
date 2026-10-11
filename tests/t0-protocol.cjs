@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { targets, independentTargets, distribution, summarize } = require('./support/t0-protocol.cjs');
+const { targets, independentTargets, distribution, compactEvent, summarize } = require('./support/t0-protocol.cjs');
 assert.deepStrictEqual(targets(828, 3600), targets(828, 3600));
 for (const sequence of [targets(30, 3600), independentTargets(30)]) {
   assert(sequence.every((n, i) => n >= 0 && n < 30 && (i === 0 || n !== sequence[i - 1])));
@@ -44,4 +44,31 @@ const artificial = summarize([{ type: 'input', at: 0, inputId: 1 }, { type: 'inp
   ...Array.from({ length: 60 }, (_, i) => ({ type: 'draw', at: i * 16 + 1, inputAt: 0, inputId: 1, frameId: 1, rafOpportunity: i }))], 0, 1000, { kind: 'rapid' });
 assert.strictEqual(artificial.integrity.duplicateDrawInputs, 59);
 assert.strictEqual(artificial.normalThresholdsMet, false);
-console.log('t0-protocol: deterministic trajectories, P95, complete input accounting, no artificial draws, stress separation passed');
+const compact = events.map(compactEvent).filter(Boolean);
+assert.deepStrictEqual(summarize(compact, 0, 1000, { kind: 'rapid' }), result);
+assert.strictEqual(compactEvent({ type: 'superseded', at: 10 }), null);
+assert.strictEqual(compactEvent({ type: 'ready', phase: 'effective-target-available' }), null);
+const actualDraw = { type: 'draw', at: 1.234567, drawAt: 1.234567, inputAt: .234567, readyAt: 1.1, requestId: 2,
+  inputId: 1, frameId: 1, note: 'constant', barcode: null, physicalDisplayTime: null };
+assert.deepStrictEqual(compactEvent(actualDraw), { type: 'draw', at: 1.234567, drawAt: 1.234567, inputAt: .234567, readyAt: 1.1, requestId: 2, inputId: 1, frameId: 1 });
+assert.strictEqual(actualDraw.note, 'constant', 'compaction must not mutate the player event');
+const fixture = [];
+for (let i = 0; i < 3601; i++) {
+  const inputAt = i * 8.333333333;
+  fixture.push({ type: 'input', at: inputAt, inputAt, inputId: i, kind: 'rapid', targetTime: 13.5, frameOrdinal: 810 },
+    { type: 'request', phase: 'input', at: inputAt, epoch: 1, inputId: i, requestId: i, inputAt, frameId: 810, frameOrdinal: 810, targetTime: 13.5, workReused: false, final: false },
+    { type: 'cache', phase: 'image-work-start', at: inputAt, epoch: 1, frameId: 810, role: 'target', activeImageTasks: 2 },
+    { type: 'ready', phase: 'read-and-image-decode-complete', at: inputAt + 5, epoch: 1, inputId: i, requestId: i, kind: 'rapid', frameId: 810,
+      readyAt: inputAt + 5, inputAt, readStartedAt: inputAt, readEndedAt: inputAt + 1, readMs: 1,
+      decodeStartedAt: inputAt + 1, decodeEndedAt: inputAt + 5, decodeMs: 4, injectedDelayMs: 0, decoderServiceMs: 4,
+      delayModel: 'non-cancellable-service-after-decode-entry-v2', stillTarget: true, budgetBytes: 536299000 },
+    { type: 'cache', phase: 'image-work-ended', at: inputAt + 5, epoch: 1, frameId: 810, activeImageTasks: 1, budgetBytes: 536299000 },
+    { ...actualDraw, at: inputAt + 6, inputAt, readyAt: inputAt + 5, drawAt: inputAt + 6, inputId: i, requestId: i,
+      epoch: 1, kind: 'rapid', frameOrdinal: 810, time: 13.5, targetTime: 13.5, mediaTime: 13.5, responseMs: 6,
+      budgetBytes: 536299000, cachePeakBytes: 536299000, rafOpportunity: i, repeatedFrame: false, sincePreviousDrawMs: 8.3333, stale: false },
+    { type: 'input-end', at: inputAt + 6, inputId: i, requestId: i, status: 'drawn' });
+}
+const compactFixture = fixture.map(compactEvent).filter(Boolean);
+assert(compactFixture.reduce((bytes, event) => bytes + JSON.stringify(event).length * 2, 0) < 12 * 1024 ** 2, 'representative high-volume 30s/120Hz trace must fit existing 12MiB log estimate');
+assert(Buffer.byteLength(JSON.stringify({ events: compactFixture }, null, 2)) < 16 * 1024 ** 2, 'saved trace must fit existing single-evidence cap');
+console.log('t0-protocol: deterministic trajectories, P95, complete input accounting, compact complete trace budget, no artificial draws, stress separation passed');

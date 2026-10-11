@@ -34,6 +34,20 @@ function distribution(values) {
   const at = p => n ? sorted[Math.max(0, Math.ceil(p * n) - 1)] : null;
   return { n, meanMs: n ? sorted.reduce((s, v) => s + v, 0) / n : null, p50Ms: at(.5), p95Ms: at(.95), maxMs: n ? sorted[n - 1] : null };
 }
+// Preserve every raw input, request identity, actual decode-ready/draw time and
+// terminal. Only duplicate notifications are aggregated; no timestamps rounded.
+function compactEvent(event) {
+  if (['state', 'superseded', 'reused'].includes(event.type) ||
+    event.type === 'request' && event.phase === 'effective-frame' ||
+    event.type === 'ready' && event.phase === 'effective-target-available' ||
+    event.type === 'cache' && event.phase === 'evict') return null;
+  const copy = { ...event };
+  if (copy.type === 'draw') {
+    for (const key of ['note', 'physicalDisplayTime', 'markerReadbackCostIncludedAfterDraw', 'markerVerificationEnabled']) delete copy[key];
+    if (copy.barcode === null) delete copy.barcode;
+  }
+  return copy;
+}
 function summarize(events, begin, end, options = {}) {
   if (!(Number.isFinite(begin) && end > begin)) throw new Error('Invalid measurement window');
   const inputs = events.filter(e => e.type === 'input' && e.at >= begin && e.at < end);
@@ -85,4 +99,4 @@ function summarize(events, begin, end, options = {}) {
       latency.n > 0 && latency.p95Ms <= PROTOCOL.p95Ms && terminal.failed === 0 && terminal.unfinished === 0 && terminal.cancelled === 0 && terminal.other === 0 && stale === 0 && repeatedRaf === 0 && !draws.some(e => e.barcode && e.barcode.ok !== true) : null,
     limitations: ['drawImage提交不是屏幕物理呈现', 'P95仅包含绘制完成请求，须同时审查取代/失败/未完成和停顿', '未清Windows文件缓存，不称操作系统冷缓存'] };
 }
-module.exports = { PROTOCOL, random, targets, independentTargets, distribution, summarize };
+module.exports = { PROTOCOL, random, targets, independentTargets, distribution, compactEvent, summarize };

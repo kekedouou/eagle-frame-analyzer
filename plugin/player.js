@@ -180,6 +180,8 @@
         workReused: this.cache.has(ordinal) || this.tasks.has(epoch + ':' + ordinal) });
       this._settle(previous, 'superseded', { reason: 'new-request' });
       if (this._valid(epoch) && this.target === target && !options.preserveLoading && options.kind !== 'play') this._change('seeking');
+      // Resource work need not wait for the next display opportunity. Drawing still does.
+      if (this._valid(epoch) && this.target === target) this._startTargetWork();
       return promise;
     }
     _canSeek() { return !this.disposed && this.info && this.state !== 'loading' && (this.state !== 'error' || this.lastErrorCode === 'UNDERRUN'); }
@@ -297,6 +299,12 @@
       this._emit('cache', { phase: 'evict', frameId: victim.id, budgetBytes: this.budget.used }); return true;
     }
     _clearCache() { for (const entry of this.cache.values()) this._closeEntry(entry); this.cache.clear(); }
+    _startTargetWork() {
+      const target = this.target;
+      if (!this.info || !target || !target.resolve || !this._valid(target.epoch) || this.state === 'error') return;
+      if (this.cache.has(target.index) || this.tasks.has(target.epoch + ':' + target.index) || this.tasks.size >= 2) return;
+      try { this._decode(target.index, 'target', target); } catch (error) { this._fail(error); }
+    }
     _decode(ordinal, role, request) {
       const epoch = this.epoch, info = this.info, key = epoch + ':' + ordinal;
       const existing = this.tasks.get(key); if (existing) return existing.promise;
@@ -307,17 +315,22 @@
         let reservation = null, bitmap = null, transferred = false;
         try {
           if (!this._valid(epoch)) return null;
+          if (role === 'target' && (!this.target || this.target.index !== ordinal)) return null;
           const rgba = info.width * info.height * 4;
           reservation = this.budget.reserve(rgba + frame.bytes * 2, 'frame-inflight', () => this._evict());
+          const readStartedAt = this.env.now();
           const bytes = await this.readAsset(info, frame.file);
+          const readEndedAt = this.env.now();
           if (!bytes || bytes.byteLength !== frame.bytes) throw new Error('JPEG资源长度与清单不符。');
           if (!this._valid(epoch)) return null;
           // Obsolete foreground reads need not turn into another expensive decode.
           if (role === 'target' && (!this.target || this.target.index !== ordinal)) return null;
-          const delay = this.decodeDelayMs; if (delay) await this.env.sleep(delay);
-          if (!this._valid(epoch)) return null;
-          if (role === 'target' && (!this.target || this.target.index !== ordinal)) return null;
+          const delay = this.decodeDelayMs, decodeStartedAt = this.env.now();
           bitmap = await this.env.decodeImage(bytes);
+          const decodeEndedAt = this.env.now();
+          // Test delay models service that has already entered the non-cancellable decoder.
+          // An obsolete result can populate this material's bounded LRU, never its canvas.
+          if (delay) await this.env.sleep(delay);
           if (!this._valid(epoch)) return null;
           if (!bitmap || bitmap.width !== info.width || bitmap.height !== info.height) throw new Error('JPEG解码尺寸与索引不符。');
           this.budget.shrink(reservation, rgba, 'decoded-frame');
@@ -325,6 +338,10 @@
           this.cache.set(ordinal, entry); transferred = true;
           this._emit('ready', { epoch, phase: 'read-and-image-decode-complete', requestId: request ? request.requestId : null,
             kind: request ? request.kind : role, frameId: frame.id, readyAt: entry.readyAt, inputAt: request ? request.inputAt : null,
+            readStartedAt, readEndedAt, readMs: readEndedAt - readStartedAt,
+            decodeStartedAt, decodeEndedAt, decodeMs: decodeEndedAt - decodeStartedAt,
+            injectedDelayMs: delay, decoderServiceMs: entry.readyAt - decodeStartedAt,
+            delayModel: 'non-cancellable-service-after-decode-entry-v2',
             stillTarget: !!this.target && this.target.epoch === epoch && this.target.index === ordinal, budgetBytes: this.budget.used });
           return entry;
         } finally {
@@ -335,10 +352,12 @@
       });
       holder.promise = task;
       this._emit('cache', { epoch, phase: 'image-work-start', frameId: frame.id, role, activeImageTasks: this.tasks.size });
-      task.catch(error => {
-        if (!this._valid(epoch)) return;
-        if (this.target && this.target.resolve && this.target.index === ordinal) this._fail(error);
-        else { this.prefetchFailed.add(ordinal); this._emit('error', { epoch, phase: 'background-image', frameId: frame.id, error: error.message }); }
+      task.then(() => this._startTargetWork(), error => {
+        if (this._valid(epoch)) {
+          if (this.target && this.target.resolve && this.target.index === ordinal) this._fail(error);
+          else { this.prefetchFailed.add(ordinal); this._emit('error', { epoch, phase: 'background-image', frameId: frame.id, error: error.message }); }
+        }
+        this._startTargetWork();
       });
       return task;
     }
@@ -391,11 +410,12 @@
         if (this.target !== target || !this._valid(target.epoch)) return;
         const entry = this.cache.get(target.index);
         if (entry) this._draw(target, entry);
-        else if (this.tasks.size < 2 && !this.tasks.has(this.epoch + ':' + target.index)) this._decode(target.index, 'target', target);
+        else this._startTargetWork();
       }
       if (!this.info || this.state === 'loading' || this.state === 'error' || this.disposed) return;
       // While dragging, leave a free slot for the next target rather than reserving it for a neighbour.
       if (this.target && this.target.resolve) return;
+      if (this.state !== 'playing' && this.target && !this.target.final && ['drag', 'rapid'].includes(this.target.kind)) return;
       const base = this.currentIndex, playing = this.state === 'playing';
       const maximumTasks = playing ? 2 : 1, ahead = playing ? 12 : 3;
       for (let offset = 1; base !== null && offset <= ahead && base + offset < this.info.frames.length && this.tasks.size < maximumTasks; offset++) {

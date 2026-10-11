@@ -35,6 +35,7 @@ function harness(options = {}) {
       const ordinal = bytes[0]; activeDecodes++; maxDecodes = Math.max(maxDecodes, activeDecodes);
       try {
         const gate = gates.get(ordinal); if (gate) { gates.delete(ordinal); await gate.promise; }
+        if (options.decodeMs) await env.sleep(options.decodeMs);
         if (options.decodeFailure === ordinal) throw new Error('fake JPEG decode failure');
         return { width: bytes.readUInt16LE(1), height: bytes.readUInt16LE(3), ordinal, close() { closed.push(ordinal); } };
       } finally { activeDecodes--; }
@@ -78,11 +79,13 @@ function harness(options = {}) {
       if (file === 'audio.wav') { const bytes = Buffer.alloc(info.audio.bytes); bytes.writeDoubleLE(info.audio.duration, 0); bytes[8] = info.audio.channels; return bytes; }
       const bytes = Buffer.alloc(10); bytes[0] = Number(file.slice(1, -4)); bytes.writeUInt16LE(info.width, 1); bytes.writeUInt16LE(info.height, 3); return bytes;
     } });
-  const frame = async (milliseconds = 16) => {
+  const advance = async (milliseconds, render) => {
     now += milliseconds;
     for (let index = sleepers.length - 1; index >= 0; index--) if (sleepers[index].at <= now) sleepers.splice(index, 1)[0].resolve();
-    const scheduled = Array.from(callbacks.values()); callbacks.clear(); scheduled.forEach(callback => callback(now)); await flush();
+    if (render) { const scheduled = Array.from(callbacks.values()); callbacks.clear(); scheduled.forEach(callback => callback(now)); }
+    await flush();
   };
+  const frame = (milliseconds = 16) => advance(milliseconds, true);
   const settle = async (promise, maximum = 300) => {
     let done = false, result, failure;
     promise.then(value => { done = true; result = value; }, error => { done = true; failure = error; }); await flush();
@@ -94,7 +97,7 @@ function harness(options = {}) {
     if (options.audioDecodeGate) options.audioDecodeGate.resolve(); if (options.resumeGate) options.resumeGate.resolve();
     await disposing; assert.equal(player.snapshot().cacheBytes, options.budget ? options.budget.snapshot().used : 0);
   };
-  return { player, canvas, events, changes, reads, closed, contexts, frame, settle, close, now: () => now,
+  return { player, canvas, events, changes, reads, closed, contexts, frame, elapse: milliseconds => advance(milliseconds, false), settle, close, now: () => now,
     gate: ordinal => { const gate = deferred(); gates.set(ordinal, gate); return gate; },
     load: info => settle(player.load(info)), maxDecodes: () => maxDecodes };
 }
@@ -147,9 +150,51 @@ async function run() {
     const final = h.player.seek(1.2, { kind: 'release', final: true }); await h.frame();
     assert.equal(h.player.snapshot().activeImageTasks, 2); assert.equal(h.player.snapshot().pendingTargets, 1);
     assert.equal(h.reads.get('sample:f12.jpg'), undefined); assert(h.player.snapshot().budget.kinds['frame-inflight'] > 0);
-    gate7.resolve(); assert.equal((await h.settle(final)).frameId, 12);
+    gate7.resolve(); await flush(); assert.equal(h.reads.get('sample:f12.jpg'), 1);
+    assert.equal((await h.settle(final)).frameId, 12);
     assert.equal((await first).status, 'superseded'); assert.equal((await second).status, 'superseded');
     assert(h.player.snapshot().budget.kinds['frame-inflight'] > 0); gate8.resolve(); await flush(); await h.close();
+  });
+  await check('input starts resource work before rAF; drawing still waits for rAF', async () => {
+    const h = harness(); await h.load(sample()); const before = h.player.snapshot().drawCount;
+    const request = h.player.seek(0.7, { kind: 'drag' }); await flush();
+    assert.equal(h.reads.get('sample:f7.jpg'), 1); assert.equal(h.player.snapshot().drawCount, before);
+    await h.frame(0); assert.equal((await request).status, 'drawn');
+    const ready = h.events.find(event => event.type === 'ready' && event.frameId === 7 && event.phase === 'read-and-image-decode-complete');
+    assert.equal(ready.readMs, 0); assert.equal(ready.decodeMs, 0); assert.equal(ready.decoderServiceMs, 0); await h.close();
+  });
+  await check('fresh fast targets use the upcoming display opportunity instead of starting work there', async () => {
+    const h = harness({ decodeMs: 5 }); await h.load(sample()); h.player.setVerifyMarkers(false);
+    const before = h.player.snapshot().drawCount;
+    for (let index = 7; index < 12; index++) {
+      const request = h.player.seek(index / 10, { kind: 'drag' }); await flush();
+      await h.elapse(6); assert.equal(h.player.snapshot().drawCount, before + index - 7);
+      await h.frame(1); assert.equal((await request).status, 'drawn'); await h.elapse(1);
+    }
+    assert.equal(h.player.snapshot().drawCount, before + 5);
+    const services = h.events.filter(event => event.type === 'ready' && event.kind === 'drag' && event.phase === 'read-and-image-decode-complete');
+    assert.equal(services.length, 5); assert(services.every(event => event.decodeMs === 6 && event.readMs === 0)); await h.close();
+  });
+  await check('continuous drag avoids neighbour work; final release restores bounded prefetch', async () => {
+    const h = harness(); await h.load(sample()); await h.settle(h.player.seek(0.7, { kind: 'drag' }));
+    for (let index = 0; index < 5; index++) await h.frame();
+    assert.equal(h.reads.get('sample:f8.jpg'), undefined);
+    assert.equal((await h.settle(h.player.seek(0.7, { final: true, kind: 'release' }))).status, 'reused');
+    assert.equal(h.reads.get('sample:f8.jpg'), 1); assert(h.player.snapshot().activeImageTasks <= 2); await h.close();
+  });
+  await check('injected slow service finishes obsolete decodes for bounded reuse without drawing them', async () => {
+    const h = harness(); await h.load(sample()); h.player.setDecodeDelay(60);
+    const first = h.player.seek(0.7, { kind: 'rapid' }); await flush();
+    const second = h.player.seek(0.8, { kind: 'rapid' }); await flush();
+    const final = h.player.seek(1.1, { kind: 'release', final: true }); await flush();
+    assert.equal(h.player.snapshot().activeImageTasks, 2); assert.equal(h.reads.get('sample:f11.jpg'), undefined);
+    await h.elapse(60); assert.equal(h.reads.get('sample:f11.jpg'), 1);
+    const obsolete = h.events.filter(event => event.type === 'ready' && event.phase === 'read-and-image-decode-complete' && [7, 8].includes(event.frameId));
+    assert.equal(obsolete.length, 2); assert(obsolete.every(event => !event.stillTarget && event.injectedDelayMs === 60 && event.decoderServiceMs === 60));
+    assert(!h.events.some(event => event.type === 'draw' && [7, 8].includes(event.frameId)));
+    h.player.setDecodeDelay(0); await h.elapse(60); await h.frame(0);
+    assert.equal((await final).status, 'drawn'); assert.equal((await first).status, 'superseded'); assert.equal((await second).status, 'superseded');
+    assert.equal(h.player.snapshot().frameId, 11); assert(h.player.snapshot().cachePeakBytes <= 512 * 1024 ** 2); await h.close();
   });
   await check('current JPEG decode failure settles seek and releases reservation', async () => {
     const h = harness({ decodeFailure: 7 }); await h.load(sample()); const result = await h.settle(h.player.seek(0.7));

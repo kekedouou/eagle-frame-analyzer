@@ -3,7 +3,7 @@
 // Pure memory tests. No config, real source, FFmpeg, shared cache or evidence I/O.
 const assert = require('assert');
 const media = require('./support/t0-media.cjs');
-const { JpegParser, patchWav, safeName, addBudget, videoEnd, validateReadOnlyFilter } = media._test;
+const { JpegParser, patchWav, safeName, addBudget, videoEnd, validateSelectedProbe, validateDecodedSpan, currentSource, validateReadOnlyFilter } = media._test;
 let tests = 0;
 function test(name, body) { body(); tests++; console.log('ok ' + name); }
 const image = Buffer.from([255, 216, 255, 224, 0, 6, 12, 255, 217, 13, 255, 218, 0, 2, 10, 255, 0, 11, 255, 208, 12, 255, 217]);
@@ -50,6 +50,38 @@ test('Readonly filter supports the independent reference chains', () => {
 });
 test('Readonly filter refuses file-writing/external filters and extra graph', () => {
   ['movie=outside.mp4', 'libvmaf=log_path=outside.json', 'scale=160:90,drawtext=textfile=outside.txt', 'select=1;movie=outside.mp4', '[in]scale=160:90[out]', "select='eq(n,0)", 'scale=160:90,'].forEach(value => assert.throws(() => validateReadOnlyFilter(value)));
+});
+function selectedProbe(duration = '3000', audio = null) {
+  return { format: { format_name: 'mov,mp4,m4a,3gp,3g2,mj2', duration: '3' }, streams: [
+    { codec_type: 'video', start_pts: '0', duration_ts: duration, time_base: '1/1000', width: 1280, height: 720 }, ...(audio ? [audio] : [])] };
+}
+test('Selected strict duration accepts <=30s and rejects >30s', () => {
+  assert.strictEqual(validateSelectedProbe(selectedProbe('30000')).mediaSpan, 30);
+  assert.throws(() => validateSelectedProbe(selectedProbe('30001')), /30/);
+  assert.throws(() => validateSelectedProbe(selectedProbe('0')));
+});
+test('Selected time offsets are spans; delayed or negative long audio is rejected', () => {
+  const probe = selectedProbe('4000', { codec_type: 'audio', start_pts: '500', duration_ts: '4000', time_base: '1/1000' });
+  probe.streams[0].start_pts = '300'; assert.strictEqual(validateSelectedProbe(probe).mediaSpan, 4.2);
+  assert.throws(() => validateSelectedProbe(selectedProbe('3000', { codec_type: 'audio', start_pts: '0', duration_ts: '120000', time_base: '1/1000' })), /30/);
+  assert.throws(() => validateSelectedProbe(selectedProbe('30000', { codec_type: 'audio', start_pts: '-1', duration_ts: '1000', time_base: '1/1000' })), /30/);
+});
+test('Selected unknown-offset format fallback cannot underestimate a long track', () => {
+  const audio = { codec_type: 'audio', start_time: '2' }, probe = selectedProbe('3000', audio); probe.format.duration = '31';
+  assert.throws(() => validateSelectedProbe(probe));
+  audio.start_time = '0'; assert.throws(() => validateSelectedProbe(probe), /30/);
+  probe.format.format_name = 'matroska'; assert.throws(() => validateSelectedProbe(probe), /MP4/);
+});
+test('Decoded span includes negative audio start and PCM tail', () => {
+  assert.strictEqual(validateDecodedSpan({ duration: 3, frames: [{ end: 3 }], audio: { start: -.2, duration: 3 } }), 3.2);
+  assert.throws(() => validateDecodedSpan({ duration: 30, frames: [{ end: 30 }], audio: { start: 0, duration: 30.02 } }), /30/);
+});
+test('Same content reused under another item returns only current identity', () => {
+  const file = require('path').resolve('中文 空格.mp4');
+  const cached = { sha256: 'same', id: 'old', itemId: 'old', name: 'old', codec: 'h264' };
+  const input = { key: 'selected', label: 'new', file, selected: { id: 'new', name: 'new' } };
+  const result = currentSource(cached, input); assert.strictEqual(result.id, 'new'); assert.strictEqual(result.itemId, 'new'); assert.strictEqual(result.filePath, file);
+  const fixed = currentSource(result, { key: 'baseline', label: 'baseline', file }); assert(!('id' in fixed)); assert(!('itemId' in fixed));
 });
 async function final() {
   const controller = new AbortController(); controller.abort();

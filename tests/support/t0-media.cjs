@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { buildIndex, validateIndex } = require('../../plugin/frame-index.cjs');
+const { validateSnapshot } = require('./t0-selection.cjs');
 const REPO = path.resolve(__dirname, '../..');
 const HOST_ROOT = path.join(REPO, 'tests/host/t0');
 const CACHE_ROOT = path.join(HOST_ROOT, 'cache');
@@ -71,7 +72,8 @@ function getConfig() {
   }
   return value;
 }
-async function listSources() { return getConfig().sources.map(value => ({ key: value.key, label: value.label, available: fs.existsSync(value.file) })); }
+async function listSources() { return [{ key: 'selected', label: 'Eagle 当前选中的 MP4', kind: 'explicit-selected-readonly' },
+  ...getConfig().sources.map(value => ({ key: value.key, label: value.label, available: fs.existsSync(value.file) }))]; }
 async function hashFile(file, job) {
   check(job); regular(file);
   const hash = crypto.createHash('sha256');
@@ -257,6 +259,68 @@ function videoEnd(probe) {
   if (timeBase.some(value => !Number.isSafeInteger(value) || value <= 0)) fail('Invalid source video time base.');
   return { stream, timeBase, lastFrameEndTicks: String(BigInt(stream.start_pts) + BigInt(stream.duration_ts)) };
 }
+function ratio(ticks, base) { return { n: BigInt(ticks) * BigInt(base[0]), d: BigInt(base[1]) }; }
+function decimalRatio(value, label) {
+  const text = String(value), match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(text);
+  if (!match || !Number.isFinite(Number(text))) fail('无法可靠确认' + label + '。');
+  const fraction = match[3] || '', denominator = 10n ** BigInt(fraction.length);
+  return { n: BigInt((match[1] || '') + match[2] + fraction), d: denominator };
+}
+function ratioAdd(a, b) { return { n: a.n * b.d + b.n * a.d, d: a.d * b.d }; }
+function ratioSubtract(a, b) { return { n: a.n * b.d - b.n * a.d, d: a.d * b.d }; }
+function ratioCompare(a, b) { const value = a.n * b.d - b.n * a.d; return value < 0n ? -1 : value > 0n ? 1 : 0; }
+function ratioSeconds(value) { const result = Number(value.n / value.d) + Number(value.n % value.d) / Number(value.d); if (!Number.isFinite(result)) fail('媒体时间无法表示。'); return result; }
+function streamRatio(stream, field, fallback) {
+  const integer = stream[field], base = String(stream.time_base || '').split('/').map(Number);
+  if (integer != null && /^-?\d+$/.test(String(integer)) && base.length === 2 && base.every(value => Number.isSafeInteger(value) && value > 0)) {
+    if (typeof integer === 'number' && !Number.isSafeInteger(integer)) fail('音频时间戳超过 JSON 整数精度。');
+    return ratio(integer, base);
+  }
+  if (stream[fallback] != null && stream[fallback] !== 'N/A') return decimalRatio(stream[fallback], '音频' + fallback);
+  return null;
+}
+function validateSelectedProbe(probe) {
+  if (!probe || !Array.isArray(probe.streams)) fail('选中视频的探测数据无效。');
+  const formats = String(probe.format && probe.format.format_name || '').split(',');
+  if (!formats.includes('mp4') && !formats.includes('mov')) fail('选中文件内容不是 MP4 容器。');
+  const end = videoEnd(probe), video = end.stream;
+  if (!(video.width > 0 && video.height > 0) || video.disposition && video.disposition.attached_pic) fail('首视频流不是可播放的视频画面。');
+  const start = ratio(video.start_pts, end.timeBase), videoDuration = ratio(video.duration_ts, end.timeBase);
+  if (videoDuration.n <= 0n || videoDuration.n > BigInt(LIMITS.duration) * videoDuration.d) fail('T0 当前只支持不超过 30 秒的视频。');
+  let first = start, last = ratioAdd(start, videoDuration);
+  const audio = probe.streams.find(value => value.codec_type === 'audio');
+  if (audio) {
+    const audioStart = streamRatio(audio, 'start_pts', 'start_time');
+    if (!audioStart) fail('首音频流的时间原点不明确，不能安全确认 30 秒上限。');
+    let audioDuration = streamRatio(audio, 'duration_ts', 'duration');
+    if (!audioDuration) {
+      // format.duration may mean a span or an absolute end. Only a zero-origin
+      // input can use it as a conservative bound; never subtract a guessed start.
+      if (audioStart.n !== 0n || start.n !== 0n || !probe.format || probe.format.duration == null) fail('首音频流时长缺失，不能安全确认 30 秒上限。');
+      audioDuration = decimalRatio(probe.format.duration, '音频保守时长上界');
+    }
+    if (audioDuration.n <= 0n) fail('首音频流没有可确认的正时长。');
+    const audioEnd = ratioAdd(audioStart, audioDuration);
+    if (ratioCompare(audioStart, first) < 0) first = audioStart;
+    if (ratioCompare(audioEnd, last) > 0) last = audioEnd;
+  }
+  const span = ratioSubtract(last, first);
+  if (span.n <= 0n || span.n > BigInt(LIMITS.duration) * span.d) fail('首音视频的实际跨度超过 30 秒，T0 暂不处理。');
+  return { videoDuration: ratioSeconds(videoDuration), mediaSpan: ratioSeconds(span), hasAudioStream: !!audio };
+}
+function validateDecodedSpan(info) {
+  const first = Math.min(0, info.audio ? info.audio.start : 0);
+  const last = Math.max(info.duration, info.frames[info.frames.length - 1].end, info.audio ? info.audio.start + info.audio.duration : 0);
+  const span = last - first;
+  if (!Number.isFinite(span) || !(span > 0 && span <= LIMITS.duration)) fail('实际解码音视频跨度超过 30 秒（含音频尾部填充），不提交该缓存。');
+  return span;
+}
+function currentSource(cached, input) {
+  // A cache is content-owned; Eagle identity belongs only to this load request.
+  const { id, itemId, name, ...base } = cached;
+  return { ...base, key: input.key, label: input.label, file: input.file, filePath: input.file,
+    ...(input.selected ? { id: input.selected.id, itemId: input.selected.id, name: input.selected.name } : {}) };
+}
 async function build(job, input, probe, partial, onProgress, generated) {
   const end = videoEnd(probe), hasAudio = probe.streams.some(value => value.codec_type === 'audio');
   const config = getConfig();
@@ -321,20 +385,21 @@ async function build(job, input, probe, partial, onProgress, generated) {
   if (!(duration > 0 && duration <= LIMITS.duration)) fail('Decoded media exceeds the strict 30 second T0 limit.');
   let expected = null;
   if (input.expectedFile) { const value = readJSON(input.expectedFile, LIMITS.metadataBytes); if (value.sha256 !== input.sha256 || !value.expected) fail('Author expected-input fingerprint mismatch.'); expected = value.expected; }
-  const source = { key: input.key, label: input.label, file: input.file, filePath: input.file, sha256: input.sha256,
-    codec: end.stream.codec_name, width: end.stream.width, height: end.stream.height, hasAudioStream: hasAudio };
+  const source = currentSource({ sha256: input.sha256, codec: end.stream.codec_name, width: end.stream.width,
+    height: end.stream.height, hasAudioStream: hasAudio }, input);
   const info = { schema: 1, owner: OWNER, recipe: RECIPE, source, width: 1280, height: 720, duration, frames: indexed.frames, audio: mediaAudio, expected,
     metrics: { reused: false, generationMs: exit.metrics.totalMs, tool: exit.metrics, sourceVideoOrigin: origin,
       lastFrameEnd: 'source first-video start_pts + duration_ts (rational time-base conversion)', singleVideoDecode: true,
       audioMapping: 'First decoded/resampled audio PTS minus first displayed video PTS. AAC edit/preroll behavior beyond the registered specimens remains a T0 limitation.',
       frameBytes: files.reduce((sum, value) => sum + value.bytes, 0), audioBytes: mediaAudio ? mediaAudio.bytes : 0, stderrBytes, args, limits: LIMITS } };
-  validateIndex(info); return info;
+  validateIndex(info); info.metrics.decodedMediaSpanSeconds = validateDecodedSpan(info); return info;
 }
 function assets(info) { return [...info.frames, ...(info.audio ? [info.audio] : [])]; }
 async function validateCache(dir, job, kind = 'cache') {
   verifyOwner(dir, kind); const info = readJSON(path.join(dir, 'manifest.json'), LIMITS.metadataBytes);
   if (info.owner !== OWNER || info.recipe !== RECIPE || info.schema !== 1 || !(info.duration > 0 && info.duration <= LIMITS.duration)) fail('Invalid T0 complete cache.');
   validateIndex(info);
+  validateDecodedSpan(info);
   const names = new Set(['owner.json', 'manifest.json', ...assets(info).map(value => safeName(value.file))]);
   const actual = fs.readdirSync(dir);
   if (actual.length !== names.size || actual.some(name => !names.has(name))) fail('Unregistered complete-cache files.');
@@ -355,23 +420,34 @@ function addLease(job, info) {
 }
 async function prepare(key, options = {}) {
   const job = newJob(options.signal), started = process.hrtime.bigint(); check(job);
+  // Copy before the first await. Later Eagle selection changes cannot redirect
+  // this job or its evidence to a different material.
+  const selection = key === 'selected' ? validateSnapshot(options.selected) : null;
   let partial = null, generated = new Set();
   try {
     claim(job); check(job);
-    const input = getConfig().sources.find(value => value.key === key); if (!input) fail('Unknown registered T0 source.');
+    const config = getConfig();
+    const input = selection ? { key: 'selected', label: selection.name, file: selection.filePath,
+      sha256: await hashFile(selection.filePath, job), selected: selection } : config.sources.find(value => value.key === key);
+    if (!input) fail('Unknown registered T0 source.');
     if (path.extname(input.file).toLowerCase() !== '.mp4') fail('T0 input must be MP4.');
-    if (await hashFile(input.file, job) !== input.sha256) fail('Registered input SHA256 changed; no media prepared.');
+    if (!selection && await hashFile(input.file, job) !== input.sha256) fail('Registered input SHA256 changed; no media prepared.');
+    let probe = null, selectedMetadata = null;
+    if (selection) {
+      const captured = await capture(job, config.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input.file], LIMITS.metadataBytes, false); check(job);
+      probe = JSON.parse(captured.stdout.toString('utf8')); selectedMetadata = validateSelectedProbe(probe);
+    }
     const target = path.join(CACHE_ROOT, 'media-' + input.sha256 + '-' + sha(Buffer.from(RECIPE)).slice(0, 12));
     let info;
     if (fs.existsSync(target)) {
       info = await validateCache(target, job); check(job);
       if (info.source.sha256 !== input.sha256) fail('Complete-cache source fingerprint mismatch.');
       if (await hashFile(input.file, job) !== input.sha256) fail('Input changed while validating the reusable cache.');
-      info.source = { ...info.source, key: input.key, label: input.label, file: input.file, filePath: input.file };
+      info.source = currentSource(info.source, input);
       info.metrics = { ...info.metrics, reused: true, generationProvenance: { generationMs: info.metrics.generationMs, args: info.metrics.args }, totalMs: Number(process.hrtime.bigint() - started) / 1e6 };
     } else {
-      const config = getConfig(), captured = await capture(job, config.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input.file], LIMITS.metadataBytes, false); check(job);
-      const probe = JSON.parse(captured.stdout.toString('utf8')); videoEnd(probe);
+      if (!probe) { const captured = await capture(job, config.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input.file], LIMITS.metadataBytes, false); check(job); probe = JSON.parse(captured.stdout.toString('utf8')); }
+      videoEnd(probe);
       partial = ownedPartial(job); info = await build(job, input, probe, partial, options.onProgress, generated); check(job);
       if (await hashFile(input.file, job) !== input.sha256) fail('Input changed during preparation.');
       info.metrics.totalMs = Number(process.hrtime.bigint() - started) / 1e6;
@@ -384,6 +460,7 @@ async function prepare(key, options = {}) {
       fs.writeFileSync(path.join(partial, 'owner.json'), ownerBytes);
       fs.renameSync(partial, target); partial = null;
     }
+    if (selectedMetadata) info.metrics = { ...info.metrics, selectedMetadata };
     info.cacheDir = target; check(job); return addLease(job, info);
   } catch (error) {
     for (const child of job.children) child.kill(); await Promise.allSettled([...job.finishes]);
@@ -440,7 +517,10 @@ async function cleanup(infoOrKey) {
   } finally { await unclaim(job); }
 }
 
-function evidenceInfo() { return { runId, runDir, limits: LIMITS }; }
+function evidenceInfo() {
+  const usageBytes = evidenceUsage();
+  return { runId, runDir, limits: LIMITS, usageBytes, remainingBytes: LIMITS.evidenceBytes - usageBytes };
+}
 function evidenceUsage() {
   if (!fs.existsSync(RUNS_ROOT)) return 0; directory(RUNS_ROOT); let bytes = 0;
   for (const name of fs.readdirSync(RUNS_ROOT).filter(value => value.startsWith('t0-'))) {
@@ -531,4 +611,4 @@ async function runReadOnlyTool(kind, args, options = {}) {
 
 module.exports = { HOST_ROOT, CACHE_ROOT, LIMITS, listSources, prepare, readAsset, cleanup, release,
   saveEvidence, evidenceInfo, getConfig, runReadOnlyTool,
-  _test: { JpegParser, patchWav, safeName, addBudget, videoEnd, validateReadOnlyFilter, OWNER, RECIPE } };
+  _test: { JpegParser, patchWav, safeName, addBudget, videoEnd, validateSelectedProbe, validateDecodedSpan, currentSource, validateReadOnlyFilter, OWNER, RECIPE } };

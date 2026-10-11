@@ -16,14 +16,16 @@
 </head>
 <body>
   <h1>T0：播放核心、逐帧与性能验证</h1>
-  <p class="note">这是独立测试页面，正式播放器不会有这些测试按钮。仅使用已登记的四段素材；不写 Eagle 标注，不修改原视频。</p>
-  <div class="row"><select id="sample" aria-label="测试素材" disabled></select><button id="reload" disabled>重新载入</button><button id="cancel" disabled>停止当前测试</button><strong id="status">等待 Eagle 初始化</strong></div>
+  <p class="note">这是独立测试页面，正式播放器不会有这些测试按钮。可载入 Eagle 当前单选 MP4（≤30秒）；原视频和素材库只读。自动对比仍使用固定基线。</p>
+  <div class="row"><select id="sample" aria-label="测试素材" disabled></select><button id="selected" disabled>载入 Eagle 当前选中视频</button><button id="reload" disabled>重新载入此视频</button><button id="cancel" disabled>停止当前测试</button><strong id="status">等待 Eagle 初始化</strong></div>
+  <p id="source">当前视频：尚未就绪</p>
   <p id="error" role="alert"></p>
   <canvas id="picture" width="1280" height="720"></canvas>
   <input id="timeline" type="range" min="0" max="1" step="any" value="0" aria-label="视频时间轴" disabled>
   <div class="row"><button id="previous" disabled>上一帧</button><button id="play" disabled>播放</button><button id="pause" disabled>暂停</button><button id="next" disabled>下一帧</button><output id="position">尚未就绪</output></div>
-  <div class="row"><button id="accuracy" disabled>核对三段编号帧</button><button id="preparation" disabled>首次准备／复用各3轮</button><button id="performance" disabled>运行性能协议（约5分钟）</button></div>
+  <div class="row"><button id="accuracy" disabled>核对三段编号帧</button><button id="preparation" disabled>首次准备／复用各3轮</button><button id="performance" disabled>运行性能协议（约5分钟）</button><button id="retest" disabled>复测正常拖动（约2分钟）</button></div>
   <p class="note">性能协议含0／25／60ms人为慢解码和独立随机定位。请保持窗口前台，勿操作时间轴或切换应用。正常轮与压力轮分别统计；不自动填人工通过。</p>
+  <p class="note">本轮修复先用“复测正常拖动”：同一基线3×30秒及3×200次定位，保留旧失败证据，不重复已完成的首次准备与编号帧核对。选其它有声视频后再人工试听、慢拖及快拖并保存观察。</p>
   <div class="row"><label>显示器Hz <input id="refresh" type="number" min="1" max="500" value="60" style="width:60px"></label>
     <label>人工拖动 <select id="manualDrag"><option>未检查</option><option>跟手</option><option>明显延迟</option></select></label>
     <label>声画 <select id="manualSync"><option>未检查</option><option>相符</option><option>可见不同步</option><option>无声不适用</option></select></label>
