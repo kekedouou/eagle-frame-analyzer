@@ -2,13 +2,13 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11 用户整体授权阶段 4。当前实施 T0，自动检查/修复连续推进，必要人工测试或变更授权处暂停；实际通过状态见 progress。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11 用户整体授权阶段 4。T0本轮技术关卡已通过，当前进入T1正式入口，自动检查/修复连续推进，必要人工测试或变更授权处暂停；实际通过状态见 progress。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
 - T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json 为独立宿主测试入口，正式产品入口在 T1 建立。[T0 计划](experiments/T0/plan.md) 固定输入、预算与验证边界。
 - T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
-- T0短对照与两候选人工操作已完成，用户认可流畅度并授权采纳。A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）；旧基线与就绪提交仅保留测试对比。“采纳方案完整复验”正式轮数/时长/阈值不变，完整记录无损压缩后每轮≤512KiB、整组≤4MiB、预留4.5MiB。首次实际运行在第二轮准备时取消；停止诊断及P-03边界已修正，六次首备/复用包含选中读取并排除单独记录的实验重置，不包含插件创建。旧超时原值保留，待修正版实测。短测不代替正式关卡，T0未量化通过，T1正式入口尚未创建。[操作与边界](experiments/T0/report.md#p-03计时修正完成与完整自动测量交接)。
+- A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）。T0修正版完整复验18轮已核对，正常79～81次提交/秒、最长约49ms、P95约9ms；首次3轮约22秒，102点独立源JPEG指纹匹配、1490帧PTS一致。六次首备/复用含选中读取，实验重置单记，不包含插件创建；旧超时/取消记录保留。压力仍有约1秒停顿，不推广到全编码、正式UI或长期稳定。T1按开发计划建立正式分层入口，尚未Eagle人工验收。[收尾证据与边界](experiments/T0/report.md#完整复验核对与独立源帧收尾)。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 

@@ -1,6 +1,7 @@
 'use strict';
 
-// Pure memory tests. No config, real source, FFmpeg, shared cache or evidence I/O.
+// Memory fixtures; only this module's own source is read to isolate its private
+// registrations in a VM. No config, real media, FFmpeg, cache or evidence I/O.
 const assert = require('assert');
 const media = require('./support/t0-media.cjs');
 const { JpegParser, patchWav, safeName, addBudget, videoEnd, validateSelectedProbe, validateDecodedSpan, currentSource, validateReadOnlyFilter } = media._test;
@@ -83,10 +84,68 @@ test('Same content reused under another item returns only current identity', () 
   const result = currentSource(cached, input); assert.strictEqual(result.id, 'new'); assert.strictEqual(result.itemId, 'new'); assert.strictEqual(result.filePath, file);
   const fixed = currentSource(result, { key: 'baseline', label: 'baseline', file }); assert(!('id' in fixed)); assert(!('itemId' in fixed));
 });
+function referenceLeaseHarness(configured = false) {
+  const fs = require('fs'), path = require('path'), vm = require('vm');
+  const file = path.join(__dirname, 'support/t0-media.cjs'), registered = new WeakMap();
+  const ownRequire = require('module').createRequire(file), module = { exports: {} };
+  const noFileSystem = new Proxy({ promises: {} }, { get(target, key) {
+    if (key === 'promises') return target.promises;
+    throw new Error('VM reference guard unexpectedly accessed filesystem: ' + String(key));
+  } });
+  const source = Object.freeze({ key: 'selected', sha256: 'a'.repeat(64), file: path.resolve('专用 测试.mp4') });
+  const configFile = path.join(__dirname, 'host/t0/config.local.json');
+  const config = { ffmpeg: path.resolve('virtual-ffmpeg.exe'), ffprobe: path.resolve('virtual-ffprobe.exe'),
+    sources: ['baseline', 'h264-cfr', 'hevc-vfr', 'vp9-silent'].map(key => ({ key, file: path.resolve(key + '.mp4'), sha256: source.sha256 })) };
+  const configBytes = Buffer.from(JSON.stringify(config));
+  const files = new Set([configFile, config.ffmpeg, config.ffprobe, source.file, ...config.sources.map(value => value.file)]);
+  const virtualFileSystem = { promises: {},
+    lstatSync(input) { assert(files.has(input)); return { isSymbolicLink: () => false, isFile: () => true, size: configBytes.length }; },
+    realpathSync(input) { assert(files.has(input)); return path.resolve(input); },
+    readFileSync(input) { assert.strictEqual(input, configFile); return configBytes; },
+    existsSync(input) { assert.strictEqual(input, path.join(__dirname, 'host/t0/cache')); return false; }
+  };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { module, exports: module.exports,
+    require: name => name === 'fs' ? configured ? virtualFileSystem : noFileSystem : ownRequire(name), __dirname: path.dirname(file), __filename: file,
+    Buffer, process, console, WeakMap: function () { return registered; } }, { filename: file });
+  const info = { cacheDir: path.resolve('memory-only-cache'), source: { ...source } };
+  const lease = { active: true, cacheDir: info.cacheDir, source };
+  registered.set(info, lease); return { api: module.exports, source, info, lease };
+}
+test('Source reference uses immutable live registration, not caller source fields', () => {
+  const { api, source, info } = referenceLeaseHarness();
+  info.source.file = require('path').resolve('unapproved.mp4'); info.source.sha256 = 'b'.repeat(64);
+  const captured = api.referenceSource(info);
+  assert.deepStrictEqual({ ...captured }, source); assert.notStrictEqual(captured, source); assert(Object.isFrozen(captured));
+  assert.throws(() => { captured.file = info.source.file; }, TypeError);
+  assert.deepStrictEqual({ ...api.referenceSource(info) }, source);
+});
+test('Source reference rejects absent and cloned handles before filesystem access', () => {
+  const { api, info } = referenceLeaseHarness();
+  for (const value of [null, undefined, {}, { ...info }]) assert.throws(() => api.referenceSource(value), /live canonical/);
+});
+test('Source reference rejects released or cache-rebound handles before filesystem access', () => {
+  const { api, info, lease } = referenceLeaseHarness();
+  lease.active = false; assert.throws(() => api.referenceSource(info), /live canonical/);
+  lease.active = true; info.cacheDir = require('path').resolve('another-cache');
+  assert.throws(() => api.referenceSource(info), /live canonical/);
+});
 async function final() {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(media.prepare('baseline', { signal: controller.signal }), error => error.name === 'AbortError'); tests++;
   console.log('ok aborted prepare rejects before config/filesystem work');
+  const { api, info, lease } = referenceLeaseHarness();
+  for (const value of [null, {}, { ...info }]) await assert.rejects(api.runReadOnlyTool('ffprobe', ['unapproved.mp4'], {
+    sourceInfo: value, inputFiles: ['unapproved.mp4'] }), /live canonical/);
+  lease.active = false;
+  await assert.rejects(api.runReadOnlyTool('ffprobe', [info.source.file], { sourceInfo: info, inputFiles: [info.source.file] }), /live canonical/);
+  tests++; console.log('ok readonly tool rejects invalid source grants before config/filesystem work');
+  const allowed = referenceLeaseHarness(true), args = ['-i', allowed.source.file, '-q:v', '3', '-f', 'image2pipe', 'pipe:1'];
+  const options = { sourceInfo: allowed.info, inputFiles: [allowed.source.file], signal: controller.signal };
+  await assert.rejects(allowed.api.runReadOnlyTool('ffmpeg', args, options), error => error.name === 'AbortError');
+  await assert.rejects(allowed.api.runReadOnlyTool('ffmpeg', ['-i', allowed.source.file, '-q:v', 'pipe:1'], options), /Unsupported readonly/);
+  const unapproved = require('path').resolve('unapproved.mp4'); allowed.info.source.file = unapproved;
+  await assert.rejects(allowed.api.runReadOnlyTool('ffmpeg', ['-i', unapproved, 'pipe:1'], { ...options, inputFiles: [unapproved] }), /explicitly registered/);
+  tests++; console.log('ok readonly JPEG quality takes one value and live grant never authorizes rebound input');
   console.log('T0 media pure tests passed: ' + tests + '. No media or filesystem side effects.');
 }
 final().catch(error => { console.error(error.stack); process.exitCode = 1; });

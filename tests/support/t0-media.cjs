@@ -487,6 +487,13 @@ async function readAsset(info, file) {
     return data;
   } finally { await handle.close(); }
 }
+function referenceSource(info) {
+  const lease = liveInfos.get(info);
+  if (!lease || !lease.active || lease.cacheDir !== info.cacheDir) fail('A live canonical T0 cache lease is required for source reference.');
+  // Only the source captured when this exact handle was registered grants
+  // input access. Caller-owned info.source never extends the tool allowlist.
+  return Object.freeze({ ...lease.source });
+}
 function release(info) {
   const lease = liveInfos.get(info); if (!lease || !lease.active) return false;
   const value = readJSON(lease.file, LIMITS.metadataBytes);
@@ -581,7 +588,9 @@ function validateReadOnlyFilter(value) {
 }
 async function runReadOnlyTool(kind, args, options = {}) {
   if (!['ffmpeg', 'ffprobe'].includes(kind) || !Array.isArray(args) || args.some(value => typeof value !== 'string')) fail('Invalid readonly tool call.');
+  const source = options.sourceInfo === undefined ? null : referenceSource(options.sourceInfo);
   const config = getConfig(), allowed = inputAllowlist(config), inputs = options.inputFiles;
+  if (source) allowed.add(path.resolve(source.file));
   if (!Array.isArray(inputs) || !inputs.length || inputs.some(file => !allowed.has(path.resolve(file)))) fail('Readonly tools require explicitly registered inputFiles.');
   if (args.some(value => ['-report', '-o', '-y', '-n', '-progress', '-filter_script', '-filter_complex_script', '-attach', '-dump_attachment'].includes(value))) fail('Readonly tool cannot write output/report files.');
   if (kind === 'ffmpeg') {
@@ -593,7 +602,7 @@ async function runReadOnlyTool(kind, args, options = {}) {
     // Explicit option arity prevents another positional filename becoming a
     // second FFmpeg output. Filters are authored by the trusted T0 reference test.
     const flags = new Set(['-hide_banner', '-nostdin', '-copyts']);
-    const valued = new Set(['-loglevel', '-v', '-threads', '-filter_threads', '-filter_complex_threads', '-i', '-map', '-vf', '-filter:v', '-filter_complex', '-an', '-sn', '-dn', '-vsync', '-fps_mode', '-pix_fmt', '-f', '-frames:v', '-vframes', '-start_number', '-pattern_type', '-framerate', '-c:v', '-codec:v']);
+    const valued = new Set(['-loglevel', '-v', '-threads', '-filter_threads', '-filter_complex_threads', '-i', '-map', '-vf', '-filter:v', '-filter_complex', '-an', '-sn', '-dn', '-vsync', '-fps_mode', '-pix_fmt', '-f', '-frames:v', '-vframes', '-start_number', '-pattern_type', '-framerate', '-c:v', '-codec:v', '-q:v']);
     for (let i = 0; i < args.length - 1; i++) {
       const option = args[i];
       if (flags.has(option) || ['-an', '-sn', '-dn'].includes(option)) continue;
@@ -610,6 +619,6 @@ async function runReadOnlyTool(kind, args, options = {}) {
   finally { await unclaim(job); }
 }
 
-module.exports = { HOST_ROOT, CACHE_ROOT, LIMITS, listSources, prepare, readAsset, cleanup, release,
+module.exports = { HOST_ROOT, CACHE_ROOT, LIMITS, listSources, prepare, readAsset, referenceSource, cleanup, release,
   saveEvidence, evidenceInfo, getConfig, runReadOnlyTool,
   _test: { JpegParser, patchWav, safeName, addBudget, videoEnd, validateSelectedProbe, validateDecodedSpan, currentSource, validateReadOnlyFilter, OWNER, RECIPE } };

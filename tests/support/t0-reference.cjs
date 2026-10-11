@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const { createHash } = require('crypto');
+const { JpegParser } = require('./t0-media.cjs')._test;
 const SCALE = 'scale=1280:720:force_original_aspect_ratio=decrease:flags=bilinear,setsar=1,pad=1280:720:(ow-iw)/2:(oh-ih)/2';
 function meanDelta(a, b) {
   if (a.length !== b.length || !a.length) throw new Error('Invalid reference pixels');
@@ -52,13 +53,15 @@ async function verifyAudio(backend, info) {
   return { ...report, evidenceFile };
 }
 async function verify(backend, info, options = {}) {
-  const config = backend.getConfig(), source = config.sources.find(s => s.key === info.source.key);
+  const selected = info.source.key === 'selected';
+  const source = selected ? backend.referenceSource(info) : backend.getConfig().sources.find(s => s.key === info.source.key);
   if (!source) throw new Error('Unregistered reference source');
   const hashBefore = createHash('sha256').update(fs.readFileSync(source.file)).digest('hex');
   if (hashBefore !== source.sha256) throw new Error('Reference source SHA mismatch');
   let peakBufferBytes = 0;
   const tool = async (kind, args, inputFiles, maxBytes = 32 * 1024 ** 2) => {
-    const result = await backend.runReadOnlyTool(kind, args, { signal: options.signal, inputFiles, maxBytes });
+    const result = await backend.runReadOnlyTool(kind, args, { signal: options.signal, inputFiles, maxBytes,
+      ...(selected ? { sourceInfo: info } : {}) });
     peakBufferBytes = Math.max(peakBufferBytes, result.stdout.length); return result.stdout;
   };
   const probe = JSON.parse((await tool('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_streams', '-show_frames',
@@ -123,4 +126,63 @@ async function verify(backend, info, options = {}) {
   if (options.save !== false) report.evidenceFile = await backend.saveEvidence('local-reference', report);
   return report;
 }
-module.exports = { verify, verifyAudio, analyzePcm, meanDelta, barcode, selectedIndices };
+function compareJpegPair(index, reference, cached, adjacent) {
+  const fingerprint = bytes => {
+    if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error('Invalid JPEG pairing buffer');
+    return { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  };
+  const target = fingerprint(reference), actual = fingerprint(cached);
+  const identical = (a, b) => a.bytes === b.bytes && a.sha256 === b.sha256;
+  const neighbors = adjacent.map(value => {
+    const candidate = fingerprint(value.bytes);
+    return { index: value.index, ...candidate, identicalToReferenceTarget: identical(candidate, target) };
+  });
+  const matched = identical(target, actual), indistinguishable = neighbors.some(value => value.identicalToReferenceTarget);
+  return { index, reference: target, cached: actual, adjacent: neighbors, matched,
+    classification: !matched ? 'mismatch' : indistinguishable ? 'identical-target-reference-adjacent-indistinguishable' : 'identical-target-reference-adjacent-distinct' };
+}
+async function verifyJpegReference(backend, info, options = {}) {
+  const selected = info.source.key === 'selected';
+  const source = selected ? backend.referenceSource(info) : backend.getConfig().sources.find(value => value.key === info.source.key);
+  if (!source) throw new Error('Unregistered JPEG reference source');
+  const sourceHash = () => createHash('sha256').update(fs.readFileSync(source.file)).digest('hex');
+  const before = sourceHash(); if (before !== source.sha256) throw new Error('JPEG reference source SHA mismatch');
+  const indices = selectedIndices(info.frames.length);
+  const expanded = [...new Set(indices.flatMap(index => [Math.max(0, index - 1), index, Math.min(info.frames.length - 1, index + 1)]))].sort((a, b) => a - b);
+  const select = `select='${expanded.map(index => 'eq(n,' + index + ')').join('+')}'`;
+  const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-copyts', '-threads', '2', '-i', source.file,
+    '-map', '0:v:0', '-an', '-sn', '-dn', '-vf', `${select},${SCALE}`, '-filter_threads', '1', '-fps_mode', 'passthrough',
+    '-c:v', 'mjpeg', '-threads', '2', '-q:v', '3', '-f', 'image2pipe', 'pipe:1'];
+  const maximum = 32 * 1024 ** 2;
+  const result = await backend.runReadOnlyTool('ffmpeg', args, { signal: options.signal, inputFiles: [source.file], maxBytes: maximum,
+    ...(selected ? { sourceInfo: info } : {}) });
+  if (result.stdout.length > maximum) throw new Error('JPEG reference output exceeds bounded limit');
+  const parser = new JpegParser(), decoded = parser.push(result.stdout);
+  if (parser.buffer.length || decoded.length !== expanded.length) throw new Error('JPEG reference frame count or stream termination mismatch');
+  const byOrdinal = new Map(expanded.map((index, position) => [index, decoded[position]])), checks = [];
+  let largestCachedBytes = 0;
+  for (const index of indices) {
+    const cached = await backend.readAsset(info, info.frames[index].file);
+    largestCachedBytes = Math.max(largestCachedBytes, cached.length);
+    checks.push(compareJpegPair(index, byOrdinal.get(index), cached,
+      [index - 1, index + 1].filter(value => byOrdinal.has(value)).map(value => ({ index: value, bytes: byOrdinal.get(value) }))));
+  }
+  const after = sourceHash(), mismatches = checks.filter(value => !value.matched);
+  const report = { schema: 'eva-t0-independent-jpeg-pair-reference-v1', origin: 'local-real-media-tools', executor: 'codex',
+    source: { key: source.key, sha256: source.sha256 }, sourceUnchanged: before === after,
+    method: 'fresh-source-ordinal-selection-720p-q3-JPEG-bytes-and-SHA-vs-registered-cache',
+    checked: checks.length, independentSelectedOrdinals: expanded, mismatches,
+    adjacentIndistinguishable: checks.filter(value => value.classification === 'identical-target-reference-adjacent-indistinguishable').length,
+    checks, referenceOutputBytes: result.stdout.length, referenceOutputLimitBytes: maximum, referenceDiskBytes: 0,
+    peakReturnedBuffersBytes: result.stdout.length * 2 + largestCachedBytes,
+    resourceScope: 'returned pipe bytes + JPEG parser copy + largest registered cache read; excludes process/GPU/internal FFmpeg buffers',
+    passed: before === after && !mismatches.length,
+    limitations: ['独立从源按呈现编号重解码与缓存JPEG配对，不从缓存像素生成期望',
+      '与缓存生成共享FFmpeg、JPEG解析器和720p/q3配方，不是独立解码器实现或最终逐像素正确性证明',
+      '相邻参考JPEG完全一致时仍无法用图像区分对应源帧，需结合原PTS/编号证据',
+      '不替代原RGB抽查、全量PTS、真实Canvas、物理显示或人工声画验证',
+      '仅固定抽查目标及相邻编号被重解码比较，不宣称全体源帧或任意帧唯一'] };
+  if (options.save !== false) report.evidenceFile = await backend.saveEvidence('local-jpeg-pair-reference', report);
+  return report;
+}
+module.exports = { verify, verifyJpegReference, verifyAudio, analyzePcm, meanDelta, barcode, selectedIndices, compareJpegPair };
