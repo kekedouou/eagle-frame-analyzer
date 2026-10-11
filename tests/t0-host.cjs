@@ -93,6 +93,7 @@ function harness(options = {}) {
       if (name.endsWith('t0-media.cjs')) return backend;
       if (name.endsWith('t0-selection.cjs')) return selection;
       if (name.endsWith('t0-manual-trace.cjs')) return require('./support/t0-manual-trace.cjs');
+      if (name.endsWith('t0-gate.cjs')) return require('./support/t0-gate.cjs');
       if (name.endsWith('t0-comparison.cjs')) {
         const comparison = require('./support/t0-comparison.cjs');
         return options.shortComparison ? { ...comparison, PROTOCOL: { ...comparison.PROTOCOL, roundMs: 24 } } : comparison;
@@ -401,11 +402,62 @@ async function comparisonCancellationRegression() {
   assert.strictEqual(h.element('variant').disabled, false); await h.close();
 }
 
+async function adoptedGateWiringRegression() {
+  const h = harness({ shortProtocol: true }); await h.initialize();
+  h.state.response = [item('selection-changed-outside-plugin')];
+  const start = h.prepared.length; await h.click('gate');
+  assert.strictEqual(h.cleaned.length, 3);
+  assert.strictEqual(h.prepared.length - start, 18, 'six preparation, nine drag and three random loads');
+  assert(h.state.modes.slice(-18).every(mode => mode === 'compressed-ram'));
+  assert.strictEqual(h.state.apiCalls, 1); assert(h.prepared.slice(start).every(p => p.selected.id === 'audio-test'));
+  assert(h.prepared.slice(start + 6).every(p => p.reuseOnly));
+  const records = h.saved.filter(s => s.kind.startsWith('host-gate'));
+  assert.strictEqual(records.length, 19); assert.strictEqual(records.at(-1).kind, 'host-gate-summary');
+  assert.strictEqual(records.at(-1).value.summary.resultComplete, true);
+  // This mock intentionally lacks real Canvas timestamps: completion never equals passing.
+  assert.strictEqual(records.at(-1).value.summary.measuredGateMet, false);
+  const traces = records.filter(r => r.value.trace); assert.strictEqual(traces.length, 12);
+  const gate = require('./support/t0-gate.cjs');
+  assert(traces.every(r => gate.unpack(r.value.trace).some(e => e.type === 'input')));
+  assert(records.every(r => gate.fileSize(r.value) <= gate.LIMITS.fileBytes));
+  assert(records.reduce((n, r) => n + gate.fileSize(r.value), 0) <= gate.LIMITS.sessionBytes);
+  assert.strictEqual(h.state.peakLiveInfos, 1); assert.strictEqual(h.state.peakPrepareActive, 1);
+  await h.close(); await flush();
+}
+async function adoptedGateFailureRegression() {
+  const h = harness({ shortProtocol: true }); await h.initialize();
+  h.element('timeline').value = '.75'; await h.element('timeline').handlers.input();
+  h.state.remainingBytes = 4.5 * 1024 ** 2 - 1; const disposed = h.state.disposed, saved = h.saved.length;
+  await h.click('gate'); assert.strictEqual(h.state.disposed, disposed); assert.strictEqual(h.saved.length, saved);
+  await h.click('save'); assert(h.saved.at(-1).value.events.some(e => e.type === 'input'));
+  h.state.remainingBytes = 5 * 1024 ** 2; h.state.changeFingerprintAt = h.prepared.length + 2;
+  await h.click('gate');
+  assert(!h.saved.some(r => r.kind === 'host-gate-summary'));
+  const failed = h.saved.at(-1); assert.strictEqual(failed.kind, 'host-gate-failed');
+  assert.strictEqual(failed.value.resultComplete, false); assert.match(failed.value.error.message, /身份发生变化/);
+  assert.strictEqual(h.liveInfos.size, 0); assert.strictEqual(h.element('gate').disabled, true);
+  assert.strictEqual(h.element('reload').disabled, false); await h.close();
+}
+async function adoptedGateCancellationAndCleanupRegression() {
+  const h = harness({ shortProtocol: true }); await h.initialize(); h.state.holdPrepare = true;
+  const running = h.click('gate'); await until(() => !!h.state.finishPrepare, 'gate preparation did not start');
+  await h.click('cancel'); h.state.holdPrepare = false; h.state.finishPrepare(); await running;
+  assert(!h.saved.some(r => r.kind === 'host-gate-summary'));
+  assert.strictEqual(h.saved.at(-1).kind, 'host-gate-failed'); assert.strictEqual(h.liveInfos.size, 0);
+  assert.strictEqual(h.state.peakPrepareActive, 1);
+  await h.click('reload'); h.state.failCleanup = true;
+  const before = h.prepared.length; await h.click('gate');
+  assert.strictEqual(h.prepared.length, before, 'unknown cache ownership must stop before generation');
+  assert.match(h.saved.at(-1).value.error.message, /Unknown file/);
+  assert.strictEqual(h.saved.at(-1).value.resultComplete, false); await h.close();
+}
+
 async function test() {
   for (const scenario of [playbackAndLeaseRegression, pointerOwnershipRegression, manualTailAndQuotaRegression, selectionAndFailureRegression, emptyAndMalformedRegression,
     initializationAndCancellationRegression, interruptedPreparationRegression, currentVideoProtocolRegression,
     currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression, comparisonModeAndQuotaRegression,
-    comparisonIdentityFailureRegression, comparisonCancellationRegression]) {
+    comparisonIdentityFailureRegression, comparisonCancellationRegression, adoptedGateWiringRegression, adoptedGateFailureRegression,
+    adoptedGateCancellationAndCleanupRegression]) {
     await scenario(); console.log('ok ' + scenario.name);
   }
   console.log('t0-host: real selection adapter in mocked Eagle, current-video startup/protocol, lifecycle interleavings, failure evidence, pointer/lease/resource regression passed (not real Eagle)');

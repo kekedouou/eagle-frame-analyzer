@@ -24,6 +24,8 @@
   <p id="source">当前视频：尚未就绪</p>
   <div class="row"><label>定向试验 <select id="variant" disabled><option value="baseline">原基线</option><option value="compressed-ram">压缩图片放RAM（共用512MiB）</option><option value="ready-submit">就绪即显示（受控）</option></select></label><button id="comparison" disabled>三项短对照（含载入约1分钟）</button></div>
   <p class="note">三项对照固定当前视频，每项6秒，合计保存一个≤2MiB文件；不会重建缓存。请保持前台，不操作。两项试验独立比较，不叠加、不增加RAM或降低720p画质；短对照不代替正式性能验收。</p>
+  <div class="row"><button id="gate" disabled>采纳方案完整复验（约8分钟）</button></div>
+  <p class="note">使用已载入的同一视频，固定压缩图片RAM方案：首次/复用各3轮、正常与两档慢解码各3×30秒、随机定位3×200。仅重建该视频的实验缓存，原视频与旧证据不变。自动保存，保持前台勿操作；整组记录最多4MiB。无需重做人工体验观察。</p>
   <p id="error" role="alert"></p>
   <canvas id="picture" width="1280" height="720"></canvas>
   <input id="timeline" type="range" min="0" max="1" step="any" value="0" aria-label="视频时间轴" disabled>

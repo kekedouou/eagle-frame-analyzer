@@ -5,6 +5,7 @@
   let backend, protocol, comparison, selection, frameIndex, manualTrace, root, player, info, controller, initialized = false, busy = true, testing = false, closing = false;
   let comparisonCapture = null, comparisonReports = [], comparisonBegin = 0, comparisonBinding = null;
   let comparisonPreparing = null;
+  let gate, gateActive = false, gateCapture = null, gateWritten = 0, gateRecords = [], gateBinding = null;
   let events = [], samples = [], eventBytes = 0, truncated = false, inputNumber = 0, currentInputId = null, lastRequest = null;
   let loadMetrics = null, allReports = [], lastSaved = null, runSignal = null, runController = null, lastInfo = null;
   const associations = new Map(), inputKeys = new Map();
@@ -28,7 +29,7 @@
     for (const id of ['play', 'pause', 'previous', 'next', 'timeline']) $(id).disabled = !ready;
     for (const id of ['sample', 'variant', 'selected', 'reload', 'accuracy']) $(id).disabled = unavailable || !dependenciesReady;
     $('save').disabled = !ready;
-    for (const id of ['preparation', 'performance', 'retest', 'comparison']) $(id).disabled = unavailable || !info;
+    for (const id of ['preparation', 'performance', 'retest', 'comparison', 'gate']) $(id).disabled = unavailable || !info;
     $('cancel').disabled = !(busy || testing || selecting);
     if ($('timeline').disabled !== wasDisabled) uiEvent('enabled-change', null, { busy, testing, selecting: !!selecting });
   }
@@ -46,6 +47,7 @@
     if (event.type === 'input-end') { associations.delete(inputKeys.get(event.inputId)); inputKeys.delete(event.inputId); }
     const kind = event.type + (event.phase ? ':' + event.phase : '');
     eventCounts[kind] = (eventCounts[kind] || 0) + 1;
+    if (gateActive) { if (gateCapture) gateCapture.append(event); return; }
     if (comparisonCapture) { comparisonCapture.append(event); return; }
     event = protocol.compactEvent(event);
     if (!event) return;
@@ -67,7 +69,7 @@
   }
   function environment() {
     const os = require('os'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-    const files = ['plugin/player.js', 'plugin/frame-index.cjs', 'tests/host/t0/app.js', 'tests/host/t0/index.html', 'tests/support/t0-manual-trace.cjs', 'tests/support/t0-comparison.cjs',
+    const files = ['plugin/player.js', 'plugin/frame-index.cjs', 'tests/host/t0/app.js', 'tests/host/t0/index.html', 'tests/support/t0-manual-trace.cjs', 'tests/support/t0-comparison.cjs', 'tests/support/t0-gate.cjs',
       'tests/support/t0-protocol.cjs', 'tests/support/t0-media.cjs', 'tests/support/t0-selection.cjs', 'tests/support/t0-reference.cjs'];
     return { node: process.versions.node, chrome: process.versions.chrome || null, electron: process.versions.electron || null,
       platform: process.platform, windows: os.release(), cpu: os.cpus()[0].model, ramBytes: os.totalmem(), processId: process.pid,
@@ -100,7 +102,16 @@
       if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < bytes)
         throw new Error('剩余证据配额不足以保存本次诊断；不会删旧记录或增额。');
     }
-    lastSaved = await backend.saveEvidence(kind, payload);
+    let gateBytes = 0;
+    if (extra.gateEvidence) {
+      gateBytes = gate.fileSize(payload);
+      if (gateBytes > gate.LIMITS.fileBytes || gateWritten + gateBytes > gate.LIMITS.sessionBytes)
+        throw new Error('完整复验记录达到单轮或整组上限；停止，不删旧记录或增额。');
+      if (backend.evidenceInfo().remainingBytes < gateBytes) throw new Error('完整复验剩余证据容量不足。');
+    }
+    gateWritten += gateBytes; // Reserve before the async writer; stop-line/failure saves can overlap.
+    try { lastSaved = await backend.saveEvidence(kind, payload); }
+    catch (error) { gateWritten -= gateBytes; throw error; }
     $('details').textContent = `证据已保存：${lastSaved}\n${JSON.stringify(extra.summary || extra.result || loadMetrics, null, 2)}`;
     return lastSaved;
   }
@@ -315,11 +326,18 @@
       const trial = comparisonCapture;
       comparisonCapture = null;
       if (name === 'short-comparison' && trial) comparisonReports.push({ interrupted: true, trace: trial.finish(comparisonBegin, Math.max(now(), comparisonBegin + .001)) });
-      await save('host-failed', { failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message },
+      if (name === 'adopted-gate') {
+        const interrupted = gateCapture; gateCapture = null;
+        const failure = { gateEvidence: true, failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message },
+          sourceBinding: gateBinding, records: gateRecords, preparationResources: comparisonPreparing,
+          resultComplete: false, events: [], memorySamples: [], trace: null };
+        try { await save('host-gate-failed', { ...failure, trace: interrupted ? await interrupted.pack() : null }); }
+        catch (packingError) { await save('host-gate-failed', { ...failure, captureSaveError: packingError.message }).catch(errorText); }
+      } else await save('host-failed', { failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message },
         ...(name === 'short-comparison' ? { events: [], memorySamples: [], trace: null, reports: comparisonReports,
           sampleBinding: comparisonBinding, preparationResources: comparisonPreparing, officialAcceptance: false } : {}) }).catch(errorText);
     }
-    finally { comparisonCapture = null; comparisonPreparing = null; comparisonBinding = null; runSignal = null; runController = null; controller = null; testing = false; resetLog(); controls(); }
+    finally { gateCapture = null; gateActive = false; comparisonCapture = null; comparisonPreparing = null; comparisonBinding = null; runSignal = null; runController = null; controller = null; testing = false; resetLog(); controls(); }
   }
   function testSource() {
     if (!info || !player) throw new Error('请先成功载入要测试的视频。');
@@ -446,6 +464,95 @@
     resetLog(); await save('host-protocol-summary', { scope: normalOnly ? 'normal-3-rounds-and-random-3-rounds' : 'complete-normal-and-pressure-and-random',
       sampleBinding: source, comparison: 'Only compare identical source fingerprints and conditions; another source does not complete old baseline or 4K/60fps coverage.', reports: allReports });
   }
+  function gatePreflight() {
+    testSource();
+    if (info.frames.length < 2) throw new Error('完整复验至少需要两帧。');
+    if (backend.evidenceInfo().remainingBytes < gate.LIMITS.preflightBytes)
+      throw new Error('采纳方案完整复验须预留4.5MiB；保留播放器与未保存观察，不清旧记录。');
+  }
+  async function gateSave(kind, summary, trace) {
+    const file = await save(kind, { gateEvidence: true, events: [], memorySamples: [], trace: trace || null,
+      gateProtocol: { ...protocol.PROTOCOL, mode: 'compressed-ram', limits: gate.LIMITS, version: 'adopted-gate-v1' },
+      sourceBinding: gateBinding, summary });
+    gateRecords.push({ kind, file, summary }); return file;
+  }
+  async function gateLoad(source, fresh, modes) {
+    comparisonPreparing = { samples: 0, rendererRssPeakBytes: 0, managedPeakBytes: 0,
+      scope: '100ms samples including previous release, media preparation and JPEG-pool initialization; not whole Eagle/GPU or unsampled peaks' };
+    await loadTestSource(source, fresh, modes);
+    const measured = { ...loadMetrics, resources: comparisonPreparing }; comparisonPreparing = null;
+    return measured;
+  }
+  async function adoptedGate() {
+    const source = testSource(); gateBinding = source; gateRecords = []; gateWritten = 0; gateActive = true;
+    const config = protocol.PROTOCOL;
+    const foreground = () => {
+      abortCheck();
+      if (document.visibilityState && document.visibilityState !== 'visible') throw new Error('完整复验须保持前台；本组不完整。');
+    };
+    const modes = { experimentMode: 'compressed-ram' }; // A-04 only; no combined experiment.
+    // Fresh removes only this original registered cache after actual lease release.
+    // A second active window/unknown file safely blocks cleanup in the backend.
+    for (let round = 1; round <= 3; round++) {
+      for (const fresh of [true, false]) {
+        foreground(); $('status').textContent = `完整复验：${fresh ? '首次准备' : '完整缓存复用'} ${round}/3`;
+        const preparation = await gateLoad(source, fresh, modes);
+        foreground();
+        await gateSave(fresh ? 'host-gate-first' : 'host-gate-reuse', { ...preparation, round, source: info.source,
+          preparationConditionMet: fresh ? !loadMetrics.reused : loadMetrics.reused,
+          firstFramePaused: snapshot().state === 'paused' && snapshot().frameId === info.frames[0].id });
+      }
+    }
+    for (const delayMs of [0, 25, 60]) for (let round = 1; round <= 3; round++) {
+      foreground(); const preparation = await gateLoad(source, false, { ...modes, reuseOnly: true }); foreground();
+      player.setVerifyMarkers(false); player.setDecodeDelay(delayMs); resetLog();
+      const initialSnapshot = snapshot(); gateCapture = new gate.Capture(info.frames.map(f => f.id)); gateCapture.maxTasks = initialSnapshot.activeImageTasks || 0;
+      const begin = now(), end = begin + config.roundMs, pending = [];
+      const sequence = protocol.targets(info.frames.length, Math.ceil(config.roundMs * config.inputHz / 1000));
+      const trajectorySha256 = require('crypto').createHash('sha256').update(JSON.stringify(sequence)).digest('hex');
+      let lastSlot = -1, lastIndex = sequence[0], count = 0;
+      $('status').textContent = `完整复验：${delayMs ? delayMs + 'ms慢解码' : '正常快拖'} ${round}/3`;
+      while (now() < end) {
+        foreground();
+        const slot = Math.min(sequence.length - 1, Math.floor((now() - begin) * config.inputHz / 1000));
+        if (slot === lastSlot) { await sleep(1); continue; }
+        lastSlot = slot; lastIndex = sequence[slot];
+        const request = target(info.frames[lastIndex].time, 'rapid', false, lastIndex); request.catch(() => {}); pending.push(request); count++;
+        await sleep(Math.max(1, begin + (slot + 1) * 1000 / config.inputHz - now()));
+      }
+      const releaseAt = now();
+      const result = await timeout(target(info.frames[lastIndex].time, 'release', true, lastIndex), config.releaseTimeoutMs, '完整复验释放');
+      await timeout(Promise.all(pending), config.releaseTimeoutMs, '完整复验请求收尾');
+      await timeout((async () => { while (snapshot().activeImageTasks) { abortCheck(); await sleep(10); } })(), config.disposeTimeoutMs, '完整复验图像收尾');
+      const last = snapshot(), summary = gateCapture.summarize(begin, end, { kind: 'rapid', delayMs });
+      summary.round = round; summary.actualInputSlots = count; summary.missedInputSlots = sequence.length - count;
+      summary.trajectorySha256 = trajectorySha256; summary.initialSnapshot = initialSnapshot; summary.preparation = preparation;
+      summary.final = { expectedFrameId: info.frames[lastIndex].id, result, snapshot: last, releaseAt,
+        releaseToDrawMs: Number.isFinite(result.drawAt) ? result.drawAt - releaseAt : null,
+        correct: last.frameId === info.frames[lastIndex].id && last.state === 'paused' && !last.pendingTargets && !last.activeImageTasks };
+      summary.roundGateMet = summary.valid && summary.final.correct && (delayMs ? true : summary.normalThresholdsMet);
+      const captured = gateCapture; gateCapture = null; const trace = await captured.pack();
+      await gateSave('host-gate-rapid', summary, trace); abortCheck();
+    }
+    for (let round = 1; round <= 3; round++) {
+      foreground(); const preparation = await gateLoad(source, false, { ...modes, reuseOnly: true }); foreground();
+      player.setVerifyMarkers(false); resetLog(); gateCapture = new gate.Capture(info.frames.map(f => f.id)); const begin = now();
+      $('status').textContent = `完整复验：独立随机定位 ${round}/3`;
+      for (const index of protocol.independentTargets(info.frames.length, config.randomTargets, config.seed + round)) {
+        foreground(); await timeout(target(info.frames[index].time, 'random-seek', true, index), config.releaseTimeoutMs, '完整复验随机定位');
+      }
+      const summary = gateCapture.summarize(begin, now() + .001, { kind: 'independent' }); summary.round = round; summary.preparation = preparation;
+      summary.roundGateMet = summary.valid && summary.inputs === config.randomTargets && summary.requestToDraw.n > 0 && summary.requestToDraw.p95Ms <= config.p95Ms;
+      const captured = gateCapture; gateCapture = null; const trace = await captured.pack(); await gateSave('host-gate-random', summary, trace);
+    }
+    const complete = gateRecords.length === 18;
+    const measuredGateMet = complete && gateRecords.every(r => r.summary.roundGateMet === undefined ?
+      r.summary.withinTarget && r.summary.firstFramePaused && r.summary.preparationConditionMet : r.summary.roundGateMet);
+    await gateSave('host-gate-summary', { resultComplete: complete, measuredGateMet, records: gateRecords.slice(),
+      scope: 'one frozen source, first/reuse 3 each, normal/25/60ms 3x30s each, random 3x200; no physical screen timing; not T4',
+      manualAcceptance: 'prior user feedback recorded separately; never automatically filled' });
+    $('status').textContent = measuredGateMet ? '完整复验已保存，等待核对；未自动代替总验收' : '完整复验已保存，存在未通过项';
+  }
   async function accuracyTest() {
     for (const key of ['h264-cfr', 'hevc-vfr', 'vp9-silent']) {
       $('sample').value = key; await load(key); player.setVerifyMarkers(true);
@@ -478,6 +585,7 @@
       if (fs.realpathSync(backend.HOST_ROOT).toLowerCase() !== root.toLowerCase()) throw new Error('测试插件实际目录不符');
       protocol = require(path.join(root, '../../support/t0-protocol.cjs'));
       comparison = require(path.join(root, '../../support/t0-comparison.cjs'));
+      gate = require(path.join(root, '../../support/t0-gate.cjs'));
       manualTrace = new (require(path.join(root, '../../support/t0-manual-trace.cjs')).ManualTrace)(); manualTrace.reset(now());
       selection = require(path.join(root, '../../support/t0-selection.cjs'));
       frameIndex = require(path.join(root, '../../../plugin/frame-index.cjs'));
@@ -547,7 +655,11 @@
   $('timeline').addEventListener('pointercancel', event => endPointer(event, 'pointercancel'));
   window.addEventListener('pointerup', event => endPointer(event, 'pointerup'));
   window.addEventListener('pointercancel', event => endPointer(event, 'pointercancel'));
-  window.addEventListener('blur', () => { uiEvent('blur'); return endPointer(null, 'blur-end'); });
+  window.addEventListener('blur', () => {
+    uiEvent('blur');
+    if (gateActive && runController) runController.abort();
+    return endPointer(null, 'blur-end');
+  });
   window.addEventListener('focus', () => uiEvent('focus'));
   window.addEventListener('resize', () => {
     if (dragging) { dragRect = $('timeline').getBoundingClientRect(); uiEvent('track-resize', null, { trackLeft: dragRect.left, trackWidth: dragRect.width }); }
@@ -555,6 +667,7 @@
   $('performance').addEventListener('click', () => task('performance', () => performanceTest(false), () => performancePreflight(false)));
   $('retest').addEventListener('click', () => task('normal-retest', () => performanceTest(true), () => performancePreflight(true)));
   $('comparison').addEventListener('click', () => task('short-comparison', shortComparison, comparisonPreflight));
+  $('gate').addEventListener('click', () => task('adopted-gate', adoptedGate, gatePreflight));
   $('accuracy').addEventListener('click', () => task('accuracy', accuracyTest));
   $('preparation').addEventListener('click', () => task('preparation', preparationTest, requireBaseline));
   $('save').addEventListener('click', () => {
@@ -575,14 +688,15 @@
     // never push a user-requested thumb value backwards every 100ms.
     if (s.state === 'playing' && !dragging && !seekPending) syncTimeline('playback-clock');
     const memory = { at: now(), rss: m.rss, external: m.external, arrayBuffers: m.arrayBuffers, managed: s.cacheBytes };
-    if (comparisonCapture) comparisonCapture.append({ type: 'memory', ...memory });
+    if (gateActive && gateCapture) gateCapture.append({ type: 'memory', ...memory });
+    else if (comparisonCapture) comparisonCapture.append({ type: 'memory', ...memory });
     else if (!testing && manualTrace) manualTrace.sample(memory);
     else if (samples.length < 4000) samples.push(memory);
     else truncated = true;
     if (m.rss >= 1.5 * 1024 ** 3 && !resourceStopped) {
       resourceStopped = true; if (runController) runController.abort(); if (controller) controller.abort(); player.pause();
       errorText(new Error('插件当前进程RSS达到1.5GiB观察停止线，正在退出并保留证据'));
-      save('host-resource-stop', { reason: 'renderer RSS observation stop line', rss: m.rss }).catch(errorText)
+      save('host-resource-stop', { gateEvidence: gateActive, reason: 'renderer RSS observation stop line', rss: m.rss }).catch(errorText)
         .finally(() => dispose().catch(errorText));
     }
   }, 100);

@@ -93,4 +93,4 @@ class Capture {
       truncated: !!this.dropped, droppedRows: this.dropped, storedBytesEstimate: this.bytes, summary };
   }
 }
-module.exports = { PROTOCOL, Capture, gaps, targets };
+module.exports = { PROTOCOL, Capture, gaps, targets, rowFor, COLUMNS };

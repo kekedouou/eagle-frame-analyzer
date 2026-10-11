@@ -13,7 +13,7 @@ function metadata() {
   const config = backend.getConfig();
   const list = ['plugin/frame-index.cjs', 'plugin/player.js', 'tests/support/t0-media.cjs', 'tests/support/t0-protocol.cjs',
     'tests/support/t0-selection.cjs', 'tests/support/t0-reference.cjs', 'tests/support/t0-manual-trace.cjs',
-    'tests/support/t0-comparison.cjs',
+    'tests/support/t0-comparison.cjs', 'tests/support/t0-gate.cjs',
     'tests/host/t0/app.js', 'tests/host/t0/index.html'];
   return { node: process.versions.node, platform: process.platform, gitHead: execute('git', ['rev-parse', 'HEAD']).trim(),
     gitStatus: execute('git', ['status', '--short']), sourceFiles: list.map(file => ({ file, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(repo, file))).digest('hex') })),
