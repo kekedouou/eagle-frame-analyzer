@@ -8,6 +8,7 @@
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
 - T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json 为独立宿主测试入口，正式产品入口在 T1 建立。[T0 计划](experiments/T0/plan.md) 固定输入、预算与验证边界。
 - T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
+- T0两项互斥试验已获用户批准：`baseline`默认、`compressed-ram`共用512MiB、`ready-submit`受控就绪提交。仅测试页可选择；新“三项短对照”复用同一完整缓存、每项6秒并合并≤2MiB记录，不能代替正式三轮或认定新架构已采纳。[最新范围与操作](experiments/T0/report.md#固定512mib的两项定向对照已实现待宿主比较)。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 

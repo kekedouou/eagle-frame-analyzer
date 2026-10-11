@@ -19,7 +19,7 @@ function audio(start = 0, duration = 0.4) { return { file: 'audio.wav', start, d
 function harness(options = {}) {
   let now = 0, nextRaf = 0, drawn = null, activeDecodes = 0, maxDecodes = 0, player;
   const callbacks = new Map(), events = [], changes = [], closed = [], reads = new Map(), gates = new Map(), sleepers = [], contexts = [];
-  const context = { drawImage(bitmap) { drawn = bitmap; }, getImageData(x, y, width) {
+  const context = { drawImage(bitmap) { if (options.drawFailure === bitmap.ordinal) throw new Error('fake canvas failure'); drawn = bitmap; }, getImageData(x, y, width) {
     const data = new Uint8ClampedArray(width * 4);
     for (let bit = 0; bit < 9; bit++) {
       const value = drawn && ((drawn.ordinal >> bit) & 1) ? 240 : 10, at = bit * 32 * 4;
@@ -71,10 +71,13 @@ function harness(options = {}) {
     }
   };
   player = new Player({ canvas, env, frameIndex, ramBytes: options.ramBytes, budget: options.budget,
-    playbackGuardMs: options.playbackGuardMs,
+    playbackGuardMs: options.playbackGuardMs, experimentMode: options.experimentMode,
+    compressedRamBytes: options.compressedRamBytes, observeCanvas: options.observeCanvas,
     emit: event => { events.push(event); if (options.onEvent) options.onEvent(event, player); },
     onChange: state => changes.push(state), readAsset: async (info, file) => {
       const key = info.source.key + ':' + file; reads.set(key, (reads.get(key) || 0) + 1);
+      if (options.readGate && options.readGate.file === file) await options.readGate.promise;
+      if (options.readMs && file !== 'audio.wav') await env.sleep(options.readMs);
       if (options.readFailure === file) throw new Error('fake asset read failure');
       if (file === 'audio.wav') { const bytes = Buffer.alloc(info.audio.bytes); bytes.writeDoubleLE(info.audio.duration, 0); bytes[8] = info.audio.channels; return bytes; }
       const bytes = Buffer.alloc(10); bytes[0] = Number(file.slice(1, -4)); bytes.writeUInt16LE(info.width, 1); bytes.writeUInt16LE(info.height, 3); return bytes;
@@ -424,6 +427,129 @@ async function run() {
     const gate = deferred(), h = harness({ resumeGate: gate }); await h.load(sample('resume', audio()));
     const playing = h.player.play(); await flush(); await h.player.pause(); gate.resolve();
     assert.equal((await playing).status, 'superseded'); assert.equal(h.player.snapshot().state, 'paused'); assert.equal(h.contexts[0].sources.length, 0); await h.close();
+  });
+  await check('compressed pool is opt-in; reads once and shares original RAM ledger with decoded images and audio', async () => {
+    for (const mode of ['baseline', 'compressed-ram']) {
+      const h = harness({ experimentMode: mode, ramBytes: 700000 }); await h.load(sample(mode, audio()));
+      await h.settle(h.player.seek(.9, { kind: 'drag' }));
+      const s = h.player.snapshot(); assert.equal(s.experimentMode, mode);
+      if (mode === 'compressed-ram') {
+        assert.equal(s.compressed.residentBytes, 160); assert.equal(s.compressed.warmedFrames, 16);
+        assert(s.compressed.hits >= 2); assert.equal(s.compressed.misses, 0);
+        assert.equal(h.reads.get(mode + ':f9.jpg'), 1);
+        assert.equal(s.budget.used, Object.values(s.budget.kinds).reduce((sum, bytes) => sum + bytes, 0));
+        assert(s.budget.kinds.audio > 0); assert(s.budget.kinds['decoded-frame'] > 0);
+      } else { assert.equal(s.compressed.residentBytes, 0); assert(!h.reads.has(mode + ':f15.jpg')); }
+      assert(s.cachePeakBytes <= s.budget.limit); assert(h.events.filter(e => e.type === 'cache').every(e => !(e.activeImageTasks > 2))); await h.close();
+    }
+  });
+  await check('partial compressed warm is bounded; missing frames use disk and later source has separate ownership', async () => {
+    const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 30 }); await h.load(sample('first'));
+    assert.equal(h.player.snapshot().compressed.warmedFrames, 3);
+    await h.settle(h.player.seek(.9, { kind: 'drag' }));
+    assert.equal(h.player.snapshot().compressed.misses, 1); assert.equal(h.reads.get('first:f9.jpg'), 1);
+    await h.load(sample('second')); assert.equal(h.player.snapshot().compressed.warmedBytes, 30);
+    assert.equal(h.reads.get('second:f0.jpg'), 1); assert.equal(h.player.snapshot().frameId, 0); await h.close();
+  });
+  await check('compressed warm cancellation holds real reads and reservations until exit; no next-source overlap', async () => {
+    const gate = deferred(); gate.file = 'f0.jpg'; const h = harness({ experimentMode: 'compressed-ram', readGate: gate });
+    const old = h.player.load(sample('old')); await flush(); assert.equal(h.player.snapshot().activeImageTasks, 1);
+    assert(h.player.snapshot().budget.kinds['compressed-loading'] > 0);
+    const next = h.player.load(sample('next')); await flush();
+    assert(!h.reads.has('next:f0.jpg')); assert(h.player.snapshot().cacheBytes > 0);
+    gate.resolve(); assert.equal((await old).status, 'superseded'); await h.settle(next);
+    assert(!h.events.some(e => e.type === 'draw' && e.epoch === 1)); await h.close();
+  });
+  await check('compressed warm failure drains both reads before failing and disposal releases every pool byte', async () => {
+    const gate = deferred(); gate.file = 'f1.jpg'; const h = harness({ experimentMode: 'compressed-ram', readGate: gate, readFailure: 'f0.jpg' });
+    let ended = false; const loading = h.player.load(sample()).then(() => { ended = true; }, error => { ended = true; return error; });
+    await flush(); assert(!ended); assert(h.player.snapshot().cacheBytes > 0); gate.resolve();
+    const failure = await loading; assert.match(failure.message, /read failure/); assert.equal(h.player.snapshot().activeImageTasks, 0); await h.close();
+  });
+  await check('ready submit uses latest guard and one actual submit per logical refresh interval', async () => {
+    const h = harness({ experimentMode: 'ready-submit', observeCanvas: true }); await h.load(sample());
+    await h.frame(); const start = h.events.length;
+    const first = h.player.seek(.7, { kind: 'drag' }); await flush();
+    assert.equal((await first).status, 'drawn');
+    assert.equal(h.events.filter(e => e.type === 'draw').slice(-1)[0].commitSource, 'ready');
+    let done = false; const second = h.player.seek(.9, { kind: 'drag' }).then(value => { done = true; return value; });
+    await flush(); assert(!done); assert.equal(h.events.slice(start).filter(e => e.type === 'draw').length, 1);
+    await h.frame(); assert.equal((await second).frameId, 9);
+    const observations = h.events.slice(start).filter(e => e.type === 'observation');
+    assert.equal(observations.length, 1); assert.equal(observations[0].frameId, 9);
+    assert.equal(observations[0].submissionsSinceLastObservation, 2);
+    assert.equal(observations[0].distinctChanged, true); await h.close();
+  });
+  await check('ready cache hits settle synchronously but cannot draw an observer-superseded target', async () => {
+    let next, activated = false;
+    const h = harness({ experimentMode: 'ready-submit', onEvent: (e, player) => {
+      if (activated && e.type === 'ready' && e.phase === 'effective-target-available' && e.frameId === 7) { activated = false; next = player.seek(1.1, { final: true }); }
+    } });
+    await h.load(sample()); await h.settle(h.player.seek(.7, { kind: 'drag' })); await h.settle(h.player.seek(.9, { kind: 'drag' }));
+    await h.frame(); const before = h.events.length; activated = true;
+    assert.equal((await h.player.seek(.7, { kind: 'drag' })).status, 'superseded');
+    assert.equal((await h.settle(next)).frameId, 11);
+    assert(!h.events.slice(before).some(e => e.type === 'draw' && e.frameId === 7)); await h.close();
+  });
+  await check('rAF observation counts final distinct canvas only; A to B to A before callback is no update', async () => {
+    const h = harness({ experimentMode: 'ready-submit', observeCanvas: true }); await h.load(sample()); await h.frame();
+    await h.settle(h.player.seek(.7, { kind: 'drag' })); await h.frame();
+    // At this point 7 was observed; 9 can submit outside rAF, then 7 can replace
+    // it at the next callback. Two canvas submissions are not two visible updates.
+    const before = h.events.length;
+    await h.player.seek(.9, { kind: 'drag' }); const back = h.player.seek(.7, { kind: 'drag' }); await flush(); await h.frame(); await back;
+    const observations = h.events.slice(before).filter(e => e.type === 'observation');
+    assert.equal(observations.length, 1); assert.equal(observations[0].frameId, 7); assert.equal(observations[0].distinctChanged, false);
+    for (let n = 0; n < 6; n++) await h.frame();
+    assert.equal(h.events.slice(before).filter(e => e.type === 'observation').length, 1); await h.close();
+  });
+  await check('both experimental modes keep audio halt and final frame correctness under two-task budget', async () => {
+    for (const experimentMode of ['compressed-ram', 'ready-submit']) {
+      const h = harness({ experimentMode, decodeMs: 4, observeCanvas: true, ramBytes: 700000 });
+      await h.load(sample(experimentMode, audio())); await h.settle(h.player.play());
+      const requests = [.8, .1, .9, .2, 1.3].map(time => h.player.seek(time, { kind: 'drag' }));
+      const final = await h.settle(h.player.seek(1.59, { kind: 'release', final: true }));
+      assert.equal(final.frameId, 15); assert(h.contexts[0].sources[0].stopped); await Promise.all(requests);
+      assert(h.maxDecodes() <= 2); assert(h.player.snapshot().cachePeakBytes <= 700000); await h.close();
+    }
+  });
+  await check('compressed pool leaves decode headroom, survives decoded eviction and never overlaps more than two warm reads', async () => {
+    const h = harness({ experimentMode: 'compressed-ram', ramBytes: 310000, readMs: 3 });
+    await h.load(sample('small-ram', null, 60));
+    const warm = h.player.snapshot(); assert.equal(warm.compressed.warmedFrames, 60);
+    for (let n = 10; n < 60; n += 3) await h.settle(h.player.seek(n / 10, { kind: 'drag' }));
+    assert(h.closed.length > 0); assert.equal(h.player.snapshot().compressed.residentBytes, 600);
+    assert(h.player.snapshot().cachePeakBytes <= 310000);
+    assert(h.events.filter(e => e.type === 'cache').every(e => !(e.activeImageTasks > 2))); await h.close();
+    const limited = harness({ experimentMode: 'compressed-ram', ramBytes: 202800 }); await limited.load(sample());
+    assert.equal(limited.player.snapshot().compressed.warmedBytes, 0);
+    assert.equal((await limited.settle(limited.player.seek(.7))).frameId, 7); await limited.close();
+  });
+  await check('ready submission canvas failure settles request as error without an unhandled rejection', async () => {
+    const h = harness({ experimentMode: 'ready-submit', drawFailure: 7 }); await h.load(sample()); await h.frame();
+    const result = await h.settle(h.player.seek(.7, { kind: 'drag' })); assert.equal(result.status, 'error');
+    assert.match(result.error, /canvas failure/); assert.equal(h.player.snapshot().state, 'error'); await h.close(); await new Promise(resolve => setImmediate(resolve));
+  });
+  await check('experimental seeks and steps keep variable timestamps, duplicate instants and final source-frame identity', async () => {
+    for (const experimentMode of ['compressed-ram', 'ready-submit']) {
+      const h = harness({ experimentMode }), info = sample(experimentMode, null, 8, 20);
+      const ticks = [0, 20, 50, 130, 130, 200, 320, 400];
+      info.frames = frameIndex.buildIndex(ticks.map((tick, n) => ({ id: n + 100, ptsTicks: String(tick), file: 'f' + n + '.jpg', bytes: 10 })),
+        { timeBase: [1, 1000], lastFrameEndTicks: '500' }).frames; info.duration = .5;
+      await h.load(info); assert.equal((await h.settle(h.player.seek(.129, { final: true }))).frameId, 102);
+      assert.equal((await h.settle(h.player.seek(.130, { final: true }))).frameId, 104);
+      assert.equal((await h.settle(h.player.step(-1))).frameId, 103);
+      assert.equal((await h.settle(h.player.seek(.5, { final: true }))).frameId, 107); await h.close();
+    }
+  });
+  await check('experimental blocked image decode cannot submit after disposal or leak in-flight RAM', async () => {
+    for (const experimentMode of ['compressed-ram', 'ready-submit']) {
+      const h = harness({ experimentMode }); await h.load(sample()); await h.frame(); const gate = h.gate(9);
+      const seek = h.player.seek(.9, { kind: 'drag' }); await flush(); const before = h.events.length;
+      const disposing = h.player.dispose(); assert.equal((await seek).status, 'superseded');
+      assert(h.player.snapshot().cacheBytes > 0); gate.resolve(); await disposing;
+      assert.equal(h.player.snapshot().cacheBytes, 0); assert(!h.events.slice(before).some(e => e.type === 'draw')); await h.close();
+    }
   });
   return { source: 'new-player-fake-unit-and-scheduler-tests', passed, count: passed.length, simulations,
     limits: ['No real JPEG/audio decoding, Eagle, FFmpeg, filesystem cache or physical display measured.',

@@ -21,7 +21,8 @@ function harness(options = {}) {
     holdDispose: false, finishDispose: null, forceDisposeTimeout: false, prepareError: null, playerLoadError: null,
     holdPrepare: false, finishPrepare: null, prepareActive: 0, peakPrepareActive: 0,
     failCleanup: false, memoryRss: 10, constructed: 0, disposed: 0, peakLiveInfos: 0, remainingBytes: 60 * 1024 ** 2,
-    quantizeSeek: false, timelineRect: { left: 100, width: 200 }, captured: null, captureFailure: false };
+    quantizeSeek: false, timelineRect: { left: 100, width: 200 }, captured: null, captureFailure: false,
+    modes: [], changeFingerprintAt: null };
   const element = id => {
     if (!elements.has(id)) elements.set(id, { value: id === 'refresh' ? '60' : '未检查', handlers: {}, children: [], disabled: true,
       addEventListener(name, callback) { this.handlers[name] = callback; }, append(child) { this.children.push(child); }, textContent: '',
@@ -34,7 +35,7 @@ function harness(options = {}) {
   const backend = { HOST_ROOT: host, CACHE_ROOT: path.join(host, 'cache'),
     async listSources() { if (state.holdSources) await new Promise(resolve => { state.finishSources = resolve; }); return sources; },
     async prepare(key, value) {
-      prepared.push({ key, selected: value.selected, signal: value.signal });
+      prepared.push({ key, selected: value.selected, signal: value.signal, reuseOnly: value.reuseOnly });
       const prepareError = state.prepareError;
       state.prepareActive++; state.peakPrepareActive = Math.max(state.peakPrepareActive, state.prepareActive);
       try {
@@ -42,6 +43,7 @@ function harness(options = {}) {
         if (prepareError) throw prepareError;
         if (value.signal.aborted) { const error = new Error('mock preparation aborted'); error.name = 'AbortError'; throw error; }
         const source = key === 'selected' ? { key, ...value.selected, label: value.selected.name, sha256: 'mock-' + value.selected.id } : { key, label: key, sha256: 'mock-' + key };
+        if (state.changeFingerprintAt === prepared.length) source.sha256 += '-changed';
         const info = { source, metrics: { reused: true }, duration: 1, audio: null, width: 1280, height: 720,
           frames: [{ id: 10, time: 0, end: .5 }, { id: 20, time: .5, end: 1 }], expected: null };
         infos.add(info); liveInfos.add(info); state.peakLiveInfos = Math.max(state.peakLiveInfos, liveInfos.size); return info;
@@ -58,11 +60,11 @@ function harness(options = {}) {
     async saveEvidence(kind, value) { saved.push({ kind, value }); return 'mock-evidence-only'; }
   };
   class Player {
-    constructor(value) { this.options = value; this.state = 'empty'; this.time = 0; this.frameId = 10; this.request = 0; state.constructed++; }
+    constructor(value) { this.options = value; this.state = 'empty'; this.time = 0; this.frameId = 10; this.request = 0; state.constructed++; state.modes.push(value.experimentMode); }
     setVerifyMarkers() {}
     setDecodeDelay(value) { this.decodeDelayMs = value; }
     async load() { if (state.playerLoadError) { this.state = 'error'; throw state.playerLoadError; } this.state = 'paused'; }
-    snapshot() { return { state: this.state, time: this.time, frameId: this.frameId, activeImageTasks: 0, cacheBytes: 0 }; }
+    snapshot() { return { state: this.state, time: this.time, frameId: this.frameId, activeImageTasks: 0, pendingTargets: 0, cacheBytes: 0, experimentMode: this.options.experimentMode }; }
     async seek(time, value) {
       this.request++; inputKinds.push(value.kind); inputTimes.push(time);
       this.time = state.quantizeSeek ? (time < .5 ? 0 : .5) : time; this.frameId = time < .5 ? 10 : 20;
@@ -91,6 +93,10 @@ function harness(options = {}) {
       if (name.endsWith('t0-media.cjs')) return backend;
       if (name.endsWith('t0-selection.cjs')) return selection;
       if (name.endsWith('t0-manual-trace.cjs')) return require('./support/t0-manual-trace.cjs');
+      if (name.endsWith('t0-comparison.cjs')) {
+        const comparison = require('./support/t0-comparison.cjs');
+        return options.shortComparison ? { ...comparison, PROTOCOL: { ...comparison.PROTOCOL, roundMs: 24 } } : comparison;
+      }
       if (name.endsWith('t0-protocol.cjs')) {
         const protocol = require('./support/t0-protocol.cjs');
         // Only shorten the mocked host's wait; these statistics never represent
@@ -346,10 +352,60 @@ async function failedVideoManualObservationRegression() {
   assert.strictEqual(failed.value.loadMetrics, null); assert.strictEqual(h.liveInfos.size, 0); await h.close();
 }
 
+async function comparisonModeAndQuotaRegression() {
+  const h = harness({ shortComparison: true }); await h.initialize();
+  h.element('variant').value = 'compressed-ram'; await h.element('variant').handlers.change();
+  assert.strictEqual(h.state.modes[h.state.modes.length - 1], 'compressed-ram');
+  const before = h.prepared.length; await h.click('retest');
+  assert.strictEqual(h.prepared.length, before, 'old full protocol must reject experimental mode without reloading');
+  assert.match(h.element('error').textContent, /基线/);
+  h.element('timeline').value = '.75'; await h.element('timeline').handlers.input();
+  const beforeSaved = h.saved.length, beforeDispose = h.state.disposed; h.state.remainingBytes = 3 * 1024 ** 2 - 1;
+  await h.click('comparison'); assert.strictEqual(h.saved.length, beforeSaved); assert.strictEqual(h.state.disposed, beforeDispose);
+  await h.click('save'); const manual = h.saved[h.saved.length - 1].value;
+  assert.strictEqual(manual.snapshot.experimentMode, 'compressed-ram'); assert(manual.events.some(e => e.type === 'input'));
+  h.state.remainingBytes = 6 * 1024 ** 2; h.state.response = [item('unrelated-Eagle-selection')];
+  const start = h.prepared.length; await h.click('comparison');
+  assert.strictEqual(h.prepared.length - start, 3); assert.strictEqual(h.state.apiCalls, 1);
+  assert(h.prepared.slice(start).every(p => p.selected.id === 'audio-test' && p.reuseOnly === true));
+  assert.deepStrictEqual(h.state.modes.slice(-3), ['baseline', 'compressed-ram', 'ready-submit']);
+  const saved = h.saved[h.saved.length - 1]; assert.strictEqual(saved.kind, 'host-comparison');
+  assert.strictEqual(saved.value.reports.length, 3); assert.strictEqual(saved.value.officialAcceptance, false);
+  assert.strictEqual(saved.value.events.length, 0); assert.strictEqual(saved.value.trace.encoding, 'three-short-rounds-in-reports');
+  assert(saved.value.reports.every(r => r.source.fingerprint === 'mock-audio-test' && r.final.correct));
+  assert.strictEqual(new Set(saved.value.reports.map(r => r.trajectorySha256)).size, 1);
+  assert(Buffer.byteLength(JSON.stringify(saved.value, null, 2)) + 4096 <= 2 * 1024 ** 2);
+  assert.strictEqual(h.state.peakLiveInfos, 1); assert.strictEqual(h.element('timeline').disabled, false);
+  await h.click('save'); assert.strictEqual(h.saved[h.saved.length - 1].value.trace.encoding, 'manual-tail-v3');
+  await h.close(); await flush();
+}
+
+async function comparisonIdentityFailureRegression() {
+  const h = harness({ shortComparison: true }); await h.initialize();
+  h.state.changeFingerprintAt = h.prepared.length + 2; await h.click('comparison');
+  assert(!h.saved.some(s => s.kind === 'host-comparison'));
+  const failed = h.saved[h.saved.length - 1]; assert.strictEqual(failed.kind, 'host-failed');
+  assert.strictEqual(failed.value.failedTask, 'short-comparison'); assert.strictEqual(failed.value.reports.length, 1);
+  assert.strictEqual(failed.value.officialAcceptance, false); assert.strictEqual(h.liveInfos.size, 0);
+  assert.match(failed.value.error.message, /身份发生变化/); await h.close();
+}
+
+async function comparisonCancellationRegression() {
+  const h = harness({ shortComparison: true }); await h.initialize(); h.state.holdPrepare = true;
+  const running = h.click('comparison'); await until(() => !!h.state.finishPrepare, 'comparison did not start reuse preparation');
+  await h.click('cancel'); h.state.holdPrepare = false; h.state.finishPrepare(); await running;
+  assert(!h.saved.some(r => r.kind === 'host-comparison'));
+  const failed = h.saved[h.saved.length - 1]; assert.strictEqual(failed.kind, 'host-failed');
+  assert.strictEqual(failed.value.failedTask, 'short-comparison'); assert.strictEqual(failed.value.sampleBinding.fingerprint, 'mock-audio-test');
+  assert.strictEqual(h.liveInfos.size, 0); assert.strictEqual(h.state.peakPrepareActive, 1);
+  assert.strictEqual(h.element('variant').disabled, false); await h.close();
+}
+
 async function test() {
   for (const scenario of [playbackAndLeaseRegression, pointerOwnershipRegression, manualTailAndQuotaRegression, selectionAndFailureRegression, emptyAndMalformedRegression,
     initializationAndCancellationRegression, interruptedPreparationRegression, currentVideoProtocolRegression,
-    currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression]) {
+    currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression, comparisonModeAndQuotaRegression,
+    comparisonIdentityFailureRegression, comparisonCancellationRegression]) {
     await scenario(); console.log('ok ' + scenario.name);
   }
   console.log('t0-host: real selection adapter in mocked Eagle, current-video startup/protocol, lifecycle interleavings, failure evidence, pointer/lease/resource regression passed (not real Eagle)');

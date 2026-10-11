@@ -2,7 +2,9 @@
   'use strict';
   const $ = id => document.getElementById(id), now = () => performance.now();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  let backend, protocol, selection, frameIndex, manualTrace, root, player, info, controller, initialized = false, busy = true, testing = false, closing = false;
+  let backend, protocol, comparison, selection, frameIndex, manualTrace, root, player, info, controller, initialized = false, busy = true, testing = false, closing = false;
+  let comparisonCapture = null, comparisonReports = [], comparisonBegin = 0, comparisonBinding = null;
+  let comparisonPreparing = null;
   let events = [], samples = [], eventBytes = 0, truncated = false, inputNumber = 0, currentInputId = null, lastRequest = null;
   let loadMetrics = null, allReports = [], lastSaved = null, runSignal = null, runController = null, lastInfo = null;
   const associations = new Map(), inputKeys = new Map();
@@ -24,9 +26,9 @@
     const unavailable = busy || testing || !!selecting;
     const ready = !!player && !unavailable && ['paused', 'playing', 'seeking', 'ended'].includes(snapshot().state);
     for (const id of ['play', 'pause', 'previous', 'next', 'timeline']) $(id).disabled = !ready;
-    for (const id of ['sample', 'selected', 'reload', 'accuracy']) $(id).disabled = unavailable || !dependenciesReady;
+    for (const id of ['sample', 'variant', 'selected', 'reload', 'accuracy']) $(id).disabled = unavailable || !dependenciesReady;
     $('save').disabled = !ready;
-    for (const id of ['preparation', 'performance', 'retest']) $(id).disabled = unavailable || !info;
+    for (const id of ['preparation', 'performance', 'retest', 'comparison']) $(id).disabled = unavailable || !info;
     $('cancel').disabled = !(busy || testing || selecting);
     if ($('timeline').disabled !== wasDisabled) uiEvent('enabled-change', null, { busy, testing, selecting: !!selecting });
   }
@@ -44,6 +46,7 @@
     if (event.type === 'input-end') { associations.delete(inputKeys.get(event.inputId)); inputKeys.delete(event.inputId); }
     const kind = event.type + (event.phase ? ':' + event.phase : '');
     eventCounts[kind] = (eventCounts[kind] || 0) + 1;
+    if (comparisonCapture) { comparisonCapture.append(event); return; }
     event = protocol.compactEvent(event);
     if (!event) return;
     if (!testing && manualTrace) { manualTrace.append(event); return; }
@@ -64,7 +67,7 @@
   }
   function environment() {
     const os = require('os'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-    const files = ['plugin/player.js', 'plugin/frame-index.cjs', 'tests/host/t0/app.js', 'tests/host/t0/index.html', 'tests/support/t0-manual-trace.cjs',
+    const files = ['plugin/player.js', 'plugin/frame-index.cjs', 'tests/host/t0/app.js', 'tests/host/t0/index.html', 'tests/support/t0-manual-trace.cjs', 'tests/support/t0-comparison.cjs',
       'tests/support/t0-protocol.cjs', 'tests/support/t0-media.cjs', 'tests/support/t0-selection.cjs', 'tests/support/t0-reference.cjs'];
     return { node: process.versions.node, chrome: process.versions.chrome || null, electron: process.versions.electron || null,
       platform: process.platform, windows: os.release(), cpu: os.cpus()[0].model, ramBytes: os.totalmem(), processId: process.pid,
@@ -89,13 +92,13 @@
       savedAt: new Date().toISOString(), environment: environment(), protocol: protocol.PROTOCOL, source: savedInfo && savedInfo.source,
       preparation: savedInfo && { metrics: savedInfo.metrics, audio: savedInfo.audio, frames: savedInfo.frames.length, duration: savedInfo.duration },
       loadMetrics, snapshot: snapshot(), ...capture, ...extra };
-    if (manualCapture) {
+    if (manualCapture || kind === 'host-comparison' || extra.failedTask === 'short-comparison') {
       // Reserve a small allowance for the writer's ownership envelope. This
       // never changes the aggregate quota or deletes any persisted evidence.
       const bytes = Buffer.byteLength(JSON.stringify(payload, null, 2), 'utf8') + 4096, capacity = backend.evidenceInfo();
-      if (bytes > 2 * 1024 ** 2) throw new Error('本次手工诊断超过2MiB安全限额，未写文件；请保留现场并报告。');
+      if (bytes > 2 * 1024 ** 2) throw new Error('本次诊断超过2MiB安全限额，未写文件；请保留现场并报告。');
       if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < bytes)
-        throw new Error('剩余证据配额不足以保存本次手工诊断；不会删旧记录或增额。');
+        throw new Error('剩余证据配额不足以保存本次诊断；不会删旧记录或增额。');
     }
     lastSaved = await backend.saveEvidence(kind, payload);
     $('details').textContent = `证据已保存：${lastSaved}\n${JSON.stringify(extra.summary || extra.result || loadMetrics, null, 2)}`;
@@ -116,7 +119,8 @@
     else if (info) { await backend.release(info); info = null; }
   }
   function load(key, options = {}) {
-    const owned = { ...options, startedAt: options.startedAt === undefined ? now() : options.startedAt, selectionEpoch };
+    const owned = { ...options, experimentMode: options.experimentMode || $('variant').value || 'baseline',
+      startedAt: options.startedAt === undefined ? now() : options.startedAt, selectionEpoch };
     // All entry points share the same real completion boundary, including
     // reload/synthetic choices interrupted by a new Eagle invocation.
     loadWork = loadWork.catch(() => {}).then(() => performLoad(key, owned));
@@ -148,22 +152,25 @@
       }
       const backendBegin = now();
       if (options.onStage) options.onStage('media-prepare');
-      info = await backend.prepare(key, { selected: options.selected, signal: loadController.signal,
+      info = await backend.prepare(key, { selected: options.selected, signal: loadController.signal, reuseOnly: !!options.reuseOnly,
         onProgress: p => { $('status').textContent = typeof p === 'string' ? p : JSON.stringify(p); } }); lastInfo = info;
       preparedOwned = true;
       const backendEnd = now(); guardLoad();
       const ownedInfo = info;
       if (options.onStage) options.onStage('player-initialize');
-      player = new window.EVAPlayer.Player({ canvas: $('picture'), frameIndex, readAsset: (_snapshot, file) => backend.readAsset(ownedInfo, file), emit });
+      player = new window.EVAPlayer.Player({ canvas: $('picture'), frameIndex, readAsset: (_snapshot, file) => backend.readAsset(ownedInfo, file), emit,
+        experimentMode: options.experimentMode, observeCanvas: !!options.observeCanvas || options.experimentMode === 'ready-submit' });
       player.setVerifyMarkers(!!info.expected);
       await player.load(info); guardLoad();
-      loadMetrics = { key, trigger: options.fresh ? 'fresh' : 'load-or-reuse', entryAt: started, readyAt: now(), callToReadyMs: now() - started,
+      loadMetrics = { key, experimentMode: options.experimentMode, compressed: snapshot().compressed,
+        trigger: options.fresh ? 'fresh' : 'load-or-reuse', entryAt: started, readyAt: now(), callToReadyMs: now() - started,
         priorReleaseCleanupAndEntryMs: backendBegin - started, backendCallMs: backendEnd - backendBegin, browserReadyMs: now() - backendEnd,
         reused: !!info.metrics.reused, limitMs: info.duration < 5 ? 5000 : info.duration * 1000,
         measuredEnd: 'complete cache + audio/image init + first draw + paused and controls can be enabled', physicalPresentationMs: null };
       loadMetrics.withinTarget = loadMetrics.callToReadyMs <= loadMetrics.limitMs;
       $('timeline').max = info.duration; $('timeline').value = 0;
       $('sample').value = key;
+      $('variant').value = options.experimentMode;
       for (const id of ['manualDrag', 'manualSync', 'manualFrames']) $(id).value = '未检查';
       $('error').textContent = '';
       $('status').textContent = '已就绪，首帧暂停';
@@ -305,17 +312,22 @@
     catch (error) {
       errorText(error); const failedSnapshot = snapshot(); let disposeError = null;
       try { await dispose(); } catch (failure) { disposeError = failure.message; }
-      await save('host-failed', { failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message } }).catch(errorText);
+      const trial = comparisonCapture;
+      comparisonCapture = null;
+      if (name === 'short-comparison' && trial) comparisonReports.push({ interrupted: true, trace: trial.finish(comparisonBegin, Math.max(now(), comparisonBegin + .001)) });
+      await save('host-failed', { failedTask: name, failedSnapshot, disposeError, error: { name: error.name, message: error.message },
+        ...(name === 'short-comparison' ? { events: [], memorySamples: [], trace: null, reports: comparisonReports,
+          sampleBinding: comparisonBinding, preparationResources: comparisonPreparing, officialAcceptance: false } : {}) }).catch(errorText);
     }
-    finally { runSignal = null; runController = null; controller = null; testing = false; resetLog(); controls(); }
+    finally { comparisonCapture = null; comparisonPreparing = null; comparisonBinding = null; runSignal = null; runController = null; controller = null; testing = false; resetLog(); controls(); }
   }
   function testSource() {
     if (!info || !player) throw new Error('请先成功载入要测试的视频。');
     return { key: info.source.key, selected: info.source.key === 'selected' ? selection.validateSnapshot(info.source) : null,
       fingerprint: info.source.sha256, identity: info.source.itemId || null };
   }
-  async function loadTestSource(source, fresh = false) {
-    await load(source.key, { selected: source.selected, fresh });
+  async function loadTestSource(source, fresh = false, experiment = {}) {
+    await load(source.key, { selected: source.selected, fresh, ...experiment });
     if (info.source.sha256 !== source.fingerprint || (info.source.itemId || null) !== source.identity)
       throw new Error('测试视频内容或身份发生变化，本轮结果无效。');
   }
@@ -346,10 +358,77 @@
     allReports.push(summary); await save('host-rapid', { summary }); abortCheck();
   }
   function performancePreflight(normalOnly) {
+    requireBaseline();
     testSource();
     const required = (normalOnly ? 40 : 100) * 1024 ** 2, capacity = backend.evidenceInfo();
     if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < required)
       throw new Error(`剩余证据配额不足：本次至少预留${normalOnly ? 40 : 100}MiB。当前播放器和未保存观察保留；不要删除旧记录或重复协议。`);
+  }
+  function requireBaseline() {
+    if ($('variant').value !== 'baseline' || snapshot().experimentMode && snapshot().experimentMode !== 'baseline')
+      throw new Error('完整性能／首次准备协议只用于原基线；两项试验请使用“三项短对照”，避免混用计量。');
+  }
+  function comparisonPreflight() {
+    testSource();
+    if (!info || info.frames.length < 2) throw new Error('对照至少需要两帧。');
+    const capacity = backend.evidenceInfo();
+    if (!Number.isFinite(capacity.remainingBytes) || capacity.remainingBytes < comparison.PROTOCOL.preflightBytes)
+      throw new Error('三项短对照至少预留3MiB证据配额；保留当前播放器和未保存观察，不删旧记录。');
+  }
+  async function shortComparison() {
+    const source = testSource(), config = comparison.PROTOCOL;
+    comparisonBinding = source;
+    const sequence = comparison.targets(info.frames.length, Math.ceil(config.roundMs * config.inputHz / 1000), config.seed);
+    const trajectorySha256 = require('crypto').createHash('sha256').update(JSON.stringify(sequence)).digest('hex');
+    comparisonReports = [];
+    for (const experimentMode of config.modes) {
+      abortCheck(); $('status').textContent = `定向对照：${experimentMode}，正在复用缓存…`;
+      comparisonPreparing = { samples: 0, rendererRssPeakBytes: 0, managedPeakBytes: 0,
+        scope: '100ms samples across previous-player disposal, disk-cache validation and new-player initialization; excludes whole Eagle/GPU and unsampled peaks' };
+      await loadTestSource(source, false, { experimentMode, observeCanvas: true, reuseOnly: true });
+      player.setVerifyMarkers(false); player.setDecodeDelay(0); resetLog();
+      const initial = snapshot(), preparation = { ...loadMetrics, resources: comparisonPreparing }; comparisonPreparing = null;
+      comparisonCapture = new comparison.Capture(); comparisonBegin = now();
+      const end = comparisonBegin + config.roundMs, pending = [];
+      let n = 0, lastIndex = sequence[0], lastSlot = -1;
+      $('status').textContent = `定向对照：${experimentMode}，6秒固定轨迹`;
+      while (now() < end) {
+        abortCheck();
+        if (document.visibilityState && document.visibilityState !== 'visible') throw new Error('定向对照需要保持窗口前台；本轮中止，不计为性能通过。');
+        // Absolute elapsed time picks the same trajectory, without generating
+        // catch-up bursts when the event loop misses a timer opportunity.
+        const slot = Math.min(sequence.length - 1, Math.floor((now() - comparisonBegin) * config.inputHz / 1000));
+        if (slot === lastSlot) { await sleep(1); continue; }
+        lastSlot = slot;
+        lastIndex = sequence[slot];
+        pending.push(target(info.frames[lastIndex].time, 'rapid', false, lastIndex)); n++;
+        pending[pending.length - 1].catch(() => {});
+        const nextAt = comparisonBegin + (slot + 1) * 1000 / config.inputHz;
+        await sleep(Math.max(1, nextAt - now()));
+      }
+      const releaseAt = now();
+      const final = await timeout(target(info.frames[lastIndex].time, 'release', true, lastIndex), protocol.PROTOCOL.releaseTimeoutMs, '定向对照释放');
+      await timeout(Promise.all(pending), protocol.PROTOCOL.releaseTimeoutMs, '定向对照输入收尾');
+      await timeout((async () => { while (snapshot().activeImageTasks > 0) { abortCheck(); await sleep(10); } })(), protocol.PROTOCOL.disposeTimeoutMs, '定向对照图像收尾');
+      // Wait for an observation of the final Canvas state. This is still not
+      // a physical-screen measurement and remains outside the six-second rate.
+      await sleep(50); abortCheck();
+      const capture = comparisonCapture.finish(comparisonBegin, end), last = snapshot(); comparisonCapture = null;
+      comparisonReports.push({ experimentMode, source, trajectorySha256, requestedInputHz: config.inputHz, actualInputs: n,
+        missedInputSlots: sequence.length - n,
+        preparation, initialSnapshot: initial, finalSnapshot: last, trace: capture,
+        final: { expectedFrameId: info.frames[lastIndex].id, result: final, releaseAt,
+          correct: last.frameId === info.frames[lastIndex].id && last.state === 'paused' && last.pendingTargets === 0 && last.activeImageTasks === 0 },
+        cacheCondition: 'new Player; validated existing disk cache; no media regeneration; OS file cache not flushed',
+        officialAcceptance: false });
+    }
+    resetLog();
+    await save('host-comparison', { events: [], memorySamples: [], truncated: comparisonReports.some(r => r.trace.truncated),
+      trace: { encoding: 'three-short-rounds-in-reports', physicalPresentation: 'not measured' },
+      comparisonProtocol: config, sampleBinding: source, reports: comparisonReports, officialAcceptance: false,
+      resultComplete: comparisonReports.every(r => r.trace.summary.valid && r.final.correct),
+      summary: comparisonReports.map(r => ({ mode: r.experimentMode, ...r.trace.summary, finalCorrect: r.final.correct })) });
+    $('status').textContent = '三项对照已保存；当前为“就绪即显示”，可做人工快拖';
   }
   async function performanceTest(normalOnly = false) {
     const source = testSource();
@@ -380,6 +459,7 @@
     }
   }
   async function preparationTest() {
+    requireBaseline();
     const result = [], source = testSource();
     for (let round = 1; round <= 3; round++) {
       await loadTestSource(source, true); result.push({ ...loadMetrics, round }); await save('host-first-ready', { result: loadMetrics });
@@ -397,6 +477,7 @@
       backend = require(path.join(root, '../../support/t0-media.cjs'));
       if (fs.realpathSync(backend.HOST_ROOT).toLowerCase() !== root.toLowerCase()) throw new Error('测试插件实际目录不符');
       protocol = require(path.join(root, '../../support/t0-protocol.cjs'));
+      comparison = require(path.join(root, '../../support/t0-comparison.cjs'));
       manualTrace = new (require(path.join(root, '../../support/t0-manual-trace.cjs')).ManualTrace)(); manualTrace.reset(now());
       selection = require(path.join(root, '../../support/t0-selection.cjs'));
       frameIndex = require(path.join(root, '../../../plugin/frame-index.cjs'));
@@ -404,7 +485,7 @@
         if (item.key === 'baseline') continue; // Historical input stays available to read-only CLI comparisons only.
         const option = document.createElement('option'); option.value = item.key; option.textContent = item.label; $('sample').append(option);
       }
-      dependenciesReady = true; busy = false; $('sample').value = 'selected';
+      dependenciesReady = true; busy = false; $('sample').value = 'selected'; $('variant').value = 'baseline';
       if (closing || resourceStopped) return;
       if (pendingSelection && pendingSelection.epoch === selectionEpoch) {
         const request = pendingSelection; pendingSelection = null; await queueSelection(request);
@@ -413,6 +494,10 @@
     } catch (error) { selecting = null; busy = false; errorText(error); controls(); }
   }
   $('sample').addEventListener('change', () => $('sample').value === 'selected' ? useSelected('sample-choice') : load($('sample').value).catch(errorText));
+  $('variant').addEventListener('change', () => {
+    if (busy || testing || selecting || !info || !player) return;
+    return load(info.source.key, { selected: info.source.key === 'selected' ? selection.validateSnapshot(info.source) : null }).catch(errorText);
+  });
   $('selected').addEventListener('click', () => useSelected('selected-button'));
   $('reload').addEventListener('click', () => info && player ? load(info.source.key, {
     selected: info.source.key === 'selected' ? selection.validateSnapshot(info.source) : null
@@ -469,22 +554,29 @@
   });
   $('performance').addEventListener('click', () => task('performance', () => performanceTest(false), () => performancePreflight(false)));
   $('retest').addEventListener('click', () => task('normal-retest', () => performanceTest(true), () => performancePreflight(true)));
+  $('comparison').addEventListener('click', () => task('short-comparison', shortComparison, comparisonPreflight));
   $('accuracy').addEventListener('click', () => task('accuracy', accuracyTest));
-  $('preparation').addEventListener('click', () => task('preparation', preparationTest));
+  $('preparation').addEventListener('click', () => task('preparation', preparationTest, requireBaseline));
   $('save').addEventListener('click', () => {
     if (!player || busy || testing || selecting) return;
     return save('host-manual', { manual: { executor: 'user-entered-observation', drag: $('manualDrag').value,
       audioVisual: $('manualSync').value, finalAndSteps: $('manualFrames').value } }).catch(errorText);
   });
   setInterval(() => {
+    const m = process.memoryUsage();
+    if (comparisonPreparing) {
+      comparisonPreparing.samples++; comparisonPreparing.rendererRssPeakBytes = Math.max(comparisonPreparing.rendererRssPeakBytes, m.rss || 0);
+      comparisonPreparing.managedPeakBytes = Math.max(comparisonPreparing.managedPeakBytes, snapshot().cacheBytes || 0);
+    }
     if (!player) return;
-    const s = snapshot(), m = process.memoryUsage();
+    const s = snapshot();
     $('position').textContent = `${s.state} · ${Number(s.time || 0).toFixed(4)}秒 · 源帧${s.frameId} · 在途${s.activeImageTasks}`;
     // A paused frame time is quantized to the source frame boundary. It must
     // never push a user-requested thumb value backwards every 100ms.
     if (s.state === 'playing' && !dragging && !seekPending) syncTimeline('playback-clock');
     const memory = { at: now(), rss: m.rss, external: m.external, arrayBuffers: m.arrayBuffers, managed: s.cacheBytes };
-    if (!testing && manualTrace) manualTrace.sample(memory);
+    if (comparisonCapture) comparisonCapture.append({ type: 'memory', ...memory });
+    else if (!testing && manualTrace) manualTrace.sample(memory);
     else if (samples.length < 4000) samples.push(memory);
     else truncated = true;
     if (m.rss >= 1.5 * 1024 ** 3 && !resourceStopped) {

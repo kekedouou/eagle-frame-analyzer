@@ -446,6 +446,7 @@ async function prepare(key, options = {}) {
       info.source = currentSource(info.source, input);
       info.metrics = { ...info.metrics, reused: true, generationProvenance: { generationMs: info.metrics.generationMs, args: info.metrics.args }, totalMs: Number(process.hrtime.bigint() - started) / 1e6 };
     } else {
+      if (options.reuseOnly) fail('本次定向对照只复用现有完整缓存；缓存缺失，不重新生成媒体。');
       if (!probe) { const captured = await capture(job, config.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input.file], LIMITS.metadataBytes, false); check(job); probe = JSON.parse(captured.stdout.toString('utf8')); }
       videoEnd(probe);
       partial = ownedPartial(job); info = await build(job, input, probe, partial, options.onProgress, generated); check(job);

@@ -22,6 +22,8 @@
   <p class="note">这是独立测试页面，正式播放器不会有这些测试按钮。打开时读取 Eagle 当前单选 MP4（≤30秒）；原视频和素材库只读，不再默认载入旧样本。</p>
   <div class="row"><select id="sample" aria-label="测试素材" disabled></select><button id="selected" disabled>载入 Eagle 当前选中视频</button><button id="reload" disabled>重新载入此视频</button><button id="cancel" disabled>停止当前测试</button><strong id="status">等待 Eagle 初始化</strong></div>
   <p id="source">当前视频：尚未就绪</p>
+  <div class="row"><label>定向试验 <select id="variant" disabled><option value="baseline">原基线</option><option value="compressed-ram">压缩图片放RAM（共用512MiB）</option><option value="ready-submit">就绪即显示（受控）</option></select></label><button id="comparison" disabled>三项短对照（含载入约1分钟）</button></div>
+  <p class="note">三项对照固定当前视频，每项6秒，合计保存一个≤2MiB文件；不会重建缓存。请保持前台，不操作。两项试验独立比较，不叠加、不增加RAM或降低720p画质；短对照不代替正式性能验收。</p>
   <p id="error" role="alert"></p>
   <canvas id="picture" width="1280" height="720"></canvas>
   <input id="timeline" type="range" min="0" max="1" step="any" value="0" aria-label="视频时间轴" disabled>
