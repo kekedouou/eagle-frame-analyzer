@@ -185,12 +185,6 @@
         experimentMode: options.experimentMode, observeCanvas: !!options.observeCanvas || options.experimentMode === 'ready-submit' });
       player.setVerifyMarkers(!!info.expected);
       await player.load(info); guardLoad();
-      loadMetrics = { key, experimentMode: options.experimentMode, compressed: snapshot().compressed,
-        trigger: options.fresh ? 'fresh' : 'load-or-reuse', entryAt: started, readyAt: now(), callToReadyMs: now() - started,
-        priorReleaseCleanupAndEntryMs: backendBegin - started, backendCallMs: backendEnd - backendBegin, browserReadyMs: now() - backendEnd,
-        reused: !!info.metrics.reused, limitMs: info.duration < 5 ? 5000 : info.duration * 1000,
-        measuredEnd: 'complete cache + audio/image init + first draw + paused and controls can be enabled', physicalPresentationMs: null };
-      loadMetrics.withinTarget = loadMetrics.callToReadyMs <= loadMetrics.limitMs;
       $('timeline').max = info.duration; $('timeline').value = 0;
       $('sample').value = key;
       $('variant').value = options.experimentMode;
@@ -198,6 +192,15 @@
       $('error').textContent = '';
       $('status').textContent = '已就绪，首帧暂停';
       $('source').textContent = `${info.source.label || info.source.name || key} · ${info.audio ? '有音轨（是否有声请实际试听）' : '无音轨'}`;
+      busy = false; controls();
+      const readyAt = now();
+      loadMetrics = { key, experimentMode: options.experimentMode, compressed: snapshot().compressed,
+        trigger: options.fresh ? 'fresh' : 'load-or-reuse', entryAt: started, readyAt, callToReadyMs: readyAt - started,
+        backendBeginAt: backendBegin, backendEndAt: backendEnd,
+        priorReleaseCleanupAndEntryMs: backendBegin - started, backendCallMs: backendEnd - backendBegin, browserReadyMs: readyAt - backendEnd,
+        reused: !!info.metrics.reused, limitMs: info.duration < 5 ? 5000 : info.duration * 1000,
+        measuredEnd: 'complete cache + audio/image init + first draw + paused and controls can be enabled', physicalPresentationMs: null };
+      loadMetrics.withinTarget = loadMetrics.callToReadyMs <= loadMetrics.limitMs;
       $('details').textContent = JSON.stringify({ loadMetrics, source: info.source, audio: info.audio, frames: info.frames.length }, null, 2);
     } catch (error) {
       if (preparedOwned) {
@@ -206,15 +209,31 @@
       throw error;
     } finally { if (ownedRunSignal) ownedRunSignal.removeEventListener('abort', stop); if (controller === loadController) controller = null; busy = false; controls(); }
   }
-  function useSelected(trigger = 'selected-button', startedAt = now()) {
-    if (closing || resourceStopped) return Promise.resolve();
-    if (testing) { errorText(new Error('自动测试中不能切换视频，请先停止测试。')); return Promise.resolve(); }
+  function selectionRequest(trigger, startedAt = now()) {
     const request = { epoch: ++selectionEpoch, trigger, startedAt, diagnostics: [], attempted: null, stage: 'selection-api', captured: null };
     // Capture at the explicit run/click, before waiting for old media to exit.
     // Attach rejection handling immediately, including during initialization.
     if (selection) request.captured = Promise.resolve(selection.captureSelected(eagle, {
       onDiagnostic: value => { if (request.diagnostics.length < 8) request.diagnostics.push(value); }
     })).then(value => ({ value }), error => ({ error }));
+    return request;
+  }
+  async function readSelectionRequest(request) {
+    if (!request.captured) request.captured = Promise.resolve(selection.captureSelected(eagle, {
+      onDiagnostic: value => { if (request.diagnostics.length < 8) request.diagnostics.push(value); }
+    })).then(value => ({ value }), error => ({ error }));
+    const result = await timeout(request.captured, 5000, '读取选中视频');
+    if (result.error) throw result.error;
+    request.attempted = result.value; return result.value;
+  }
+  function loadSelectedRequest(request, selected, options = {}) {
+    request.stage = 'media-and-player-load';
+    return load('selected', { ...options, selected, startedAt: request.startedAt, onStage: stage => { request.stage = stage; } });
+  }
+  function useSelected(trigger = 'selected-button', startedAt = now()) {
+    if (closing || resourceStopped) return Promise.resolve();
+    if (testing) { errorText(new Error('自动测试中不能切换视频，请先停止测试。')); return Promise.resolve(); }
+    const request = selectionRequest(trigger, startedAt);
     selecting = request;
     if (controller) controller.abort();
     controls();
@@ -231,14 +250,9 @@
         // saving diagnostics; evidence and media share the bounded writer lock.
         await loadWork.catch(() => {});
         if (!current()) return;
-        if (!request.captured) request.captured = Promise.resolve(selection.captureSelected(eagle, {
-          onDiagnostic: value => { if (request.diagnostics.length < 8) request.diagnostics.push(value); }
-        })).then(value => ({ value }), error => ({ error }));
-        const result = await timeout(request.captured, 5000, '读取选中视频');
+        const selected = await readSelectionRequest(request);
         if (!current()) return;
-        if (result.error) throw result.error;
-        request.attempted = result.value; request.stage = 'media-and-player-load';
-        await load('selected', { selected: result.value, startedAt: request.startedAt, onStage: stage => { request.stage = stage; } });
+        await loadSelectedRequest(request, selected);
         if (current()) await save(request.trigger === 'initialize' ? 'host-initial-ready' : 'host-selected-ready', {
           selectionAttempt: { trigger: request.trigger, stage: 'ready', attempted: request.attempted, diagnostics: request.diagnostics }
         }).catch(failure => { $('error').textContent = '视频已载入，但证据保存失败：' + failure.message; });
@@ -361,6 +375,9 @@
   }
   async function loadTestSource(source, fresh = false, experiment = {}) {
     await load(source.key, { selected: source.selected, fresh, ...experiment });
+    verifyTestSource(source);
+  }
+  function verifyTestSource(source) {
     if (info.source.sha256 !== source.fingerprint || (info.source.itemId || null) !== source.identity)
       throw new Error('测试视频内容或身份发生变化，本轮结果无效。');
   }
@@ -480,22 +497,49 @@
       sampleBinding: source, comparison: 'Only compare identical source fingerprints and conditions; another source does not complete old baseline or 4K/60fps coverage.', reports: allReports });
   }
   function gatePreflight() {
-    testSource();
+    if (testSource().key !== 'selected') throw new Error('完整复验请先载入 Eagle 当前单选 MP4。');
     if (info.frames.length < 2) throw new Error('完整复验至少需要两帧。');
     if (backend.evidenceInfo().remainingBytes < gate.LIMITS.preflightBytes)
       throw new Error('采纳方案完整复验须预留4.5MiB；保留播放器与未保存观察，不清旧记录。');
   }
   async function gateSave(kind, summary, trace) {
     const file = await save(kind, { gateEvidence: true, events: [], memorySamples: [], trace: trace || null,
-      gateProtocol: { ...protocol.PROTOCOL, mode: 'compressed-ram', limits: gate.LIMITS, version: 'adopted-gate-v1' },
+      gateProtocol: { ...protocol.PROTOCOL, mode: 'compressed-ram', limits: gate.LIMITS, version: 'adopted-gate-v2-selected-entry' },
       sourceBinding: gateBinding, summary });
     gateRecords.push({ kind, file, summary }); return file;
   }
-  async function gateLoad(source, fresh, modes) {
+  async function gateLoad(source, fresh, modes, measureSelectedEntry = false) {
+    let fixtureReset = null;
+    if (measureSelectedEntry && fresh) {
+      const previousInfo = info, resetStart = now();
+      if (!previousInfo || previousInfo.source.key !== 'selected' || previousInfo.source.itemId !== source.selected.id ||
+        previousInfo.source.filePath !== source.selected.filePath)
+        throw new Error('首次复验重置只接受当前已载入的固定素材缓存。');
+      $('status').textContent = '正在重置本轮实验缓存（单独记录，不计入首次等待）';
+      await dispose(); abortCheck();
+      await backend.cleanup(previousInfo); abortCheck();
+      const endedAt = now();
+      fixtureReset = { startedAt: resetStart, endedAt, elapsedMs: endedAt - resetStart, excludedFromPreparationMs: true,
+        scope: 'test-only previous trial disposal and registered cache reset; normal load disposal remains timed' };
+    }
     comparisonPreparing = { samples: 0, rendererRssPeakBytes: 0, managedPeakBytes: 0,
-      scope: '100ms samples including previous release, media preparation and JPEG-pool initialization; not whole Eagle/GPU or unsampled peaks' };
-    await loadTestSource(source, fresh, modes);
-    const measured = { ...loadMetrics, resources: comparisonPreparing }; comparisonPreparing = null;
+      scope: '100ms samples including selected query when measured, load release, media and JPEG pool; test-only reset excluded; not whole Eagle/GPU or unsampled peaks' };
+    let request = null;
+    if (measureSelectedEntry) {
+      // Same capture/read/load functions as the explicit selected button. The
+      // API is inside the clock; a changed background selection stops this
+      // frozen-source test instead of silently measuring another video.
+      request = selectionRequest('gate-selected-load');
+      await loadWork.catch(() => {}); abortCheck();
+      const selected = await readSelectionRequest(request); abortCheck();
+      if (request.epoch !== selectionEpoch || selected.id !== source.selected.id || selected.filePath !== source.selected.filePath)
+        throw new Error('Eagle选中素材发生变化，完整复验已停止；请保持同一素材。');
+      await loadSelectedRequest(request, selected, modes); abortCheck(); verifyTestSource(source);
+    } else await loadTestSource(source, fresh, modes);
+    const measured = { ...loadMetrics, resources: comparisonPreparing,
+      ...(measureSelectedEntry ? { measurementBoundary: 'selected-load-entry-after-test-reset', pluginCreationIncluded: false, fixtureReset,
+        selectionAttempt: { trigger: request.trigger, stage: 'ready', attempted: request.attempted, diagnostics: request.diagnostics } } : {}) };
+    comparisonPreparing = null;
     return measured;
   }
   async function adoptedGate() {
@@ -514,7 +558,7 @@
       for (const fresh of [true, false]) {
         gatePhase = { kind: fresh ? 'first' : 'reuse', round };
         foreground(); $('status').textContent = `完整复验：${fresh ? '首次准备' : '完整缓存复用'} ${round}/3`;
-        const preparation = await gateLoad(source, fresh, modes);
+        const preparation = await gateLoad(source, fresh, modes, true);
         foreground();
         await gateSave(fresh ? 'host-gate-first' : 'host-gate-reuse', { ...preparation, round, source: info.source,
           preparationConditionMet: fresh ? !loadMetrics.reused : loadMetrics.reused,
@@ -569,7 +613,7 @@
     const measuredGateMet = complete && gateRecords.every(r => r.summary.roundGateMet === undefined ?
       r.summary.withinTarget && r.summary.firstFramePaused && r.summary.preparationConditionMet : r.summary.roundGateMet);
     await gateSave('host-gate-summary', { resultComplete: complete, measuredGateMet, records: gateRecords.slice(),
-      scope: 'one frozen source, first/reuse 3 each, normal/25/60ms 3x30s each, random 3x200; no physical screen timing; not T4',
+      scope: 'one frozen source, selected-entry first/reuse 3 each after separate fixture reset; dependencies already initialized, plugin creation not included; normal/25/60ms 3x30s each, random 3x200; no physical screen timing; not T4',
       manualAcceptance: 'prior user feedback recorded separately; never automatically filled' });
     $('status').textContent = measuredGateMet ? '完整复验已保存，等待核对；未自动代替总验收' : '完整复验已保存，存在未通过项';
   }

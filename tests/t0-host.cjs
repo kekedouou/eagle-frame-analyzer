@@ -22,7 +22,7 @@ function harness(options = {}) {
     holdPrepare: false, finishPrepare: null, prepareActive: 0, peakPrepareActive: 0,
     failCleanup: false, memoryRss: 10, constructed: 0, disposed: 0, peakLiveInfos: 0, remainingBytes: 60 * 1024 ** 2,
     quantizeSeek: false, timelineRect: { left: 100, width: 200 }, captured: null, captureFailure: false,
-    modes: [], changeFingerprintAt: null };
+    modes: [], changeFingerprintAt: null, cleanupAdvanceMs: 0, selectionAdvanceMs: 0, disposeAdvanceMs: 0, selectionTimes: [], cleanupTimes: [] };
   const element = id => {
     if (!elements.has(id)) elements.set(id, { value: id === 'refresh' ? '60' : '未检查', handlers: {}, children: [], disabled: true,
       addEventListener(name, callback) { this.handlers[name] = callback; }, append(child) { this.children.push(child); }, textContent: '',
@@ -52,6 +52,7 @@ function harness(options = {}) {
     evidenceInfo: () => ({ remainingBytes: state.remainingBytes }),
     async release(info) { assert(infos.has(info), 'release must receive original cache handle'); liveInfos.delete(info); released.push(info); },
     async cleanup(info) {
+      state.cleanupTimes.push({ at: tick, selectedCalls: state.apiCalls }); tick += state.cleanupAdvanceMs;
       cleaned.push(info);
       if (state.failCleanup) throw new Error('Unknown file blocks cleanup');
       assert(infos.has(info), 'selected fresh preparation must clean by original info handle, not key/copy');
@@ -72,13 +73,14 @@ function harness(options = {}) {
       this.options.emit({ type: 'draw', epoch: 1, requestId: this.request, frameId: this.frameId, inputAt: value.inputAt, at: tick++ });
       return { status: 'drawn', requestId: this.request };
     }
-    async dispose() { state.disposed++; if (state.holdDispose) await new Promise(resolve => { state.finishDispose = resolve; }); }
+    async dispose() { state.disposed++; tick += state.disposeAdvanceMs; if (state.holdDispose) await new Promise(resolve => { state.finishDispose = resolve; }); }
     pause() { this.state = 'paused'; }
     async play() { this.state = 'playing'; }
     async step() {}
   }
   const fakeFs = { realpathSync: fs.realpathSync, readFileSync: () => Buffer.from('mock-code-fingerprint') };
   const eagle = { item: { getSelected() {
+    state.selectionTimes.push(tick); tick += state.selectionAdvanceMs;
     state.apiCalls++; if (state.apiError) throw state.apiError;
     const response = state.response;
     if (state.holdSelection) return new Promise(resolve => { state.finishSelection = () => resolve(response); });
@@ -404,12 +406,12 @@ async function comparisonCancellationRegression() {
 
 async function adoptedGateWiringRegression() {
   const h = harness({ shortProtocol: true }); await h.initialize();
-  h.state.response = [item('selection-changed-outside-plugin')];
   const start = h.prepared.length; await h.click('gate');
   assert.strictEqual(h.cleaned.length, 3);
   assert.strictEqual(h.prepared.length - start, 18, 'six preparation, nine drag and three random loads');
   assert(h.state.modes.slice(-18).every(mode => mode === 'compressed-ram'));
-  assert.strictEqual(h.state.apiCalls, 1); assert(h.prepared.slice(start).every(p => p.selected.id === 'audio-test'));
+  assert.strictEqual(h.state.apiCalls, 7, 'each first/reuse repeat must include the real selected API once');
+  assert(h.prepared.slice(start).every(p => p.selected.id === 'audio-test'));
   assert(h.prepared.slice(start + 6).every(p => p.reuseOnly));
   const records = h.saved.filter(s => s.kind.startsWith('host-gate'));
   assert.strictEqual(records.length, 19); assert.strictEqual(records.at(-1).kind, 'host-gate-summary');
@@ -423,6 +425,70 @@ async function adoptedGateWiringRegression() {
   assert(records.reduce((n, r) => n + gate.fileSize(r.value), 0) <= gate.LIMITS.sessionBytes);
   assert.strictEqual(h.state.peakLiveInfos, 1); assert.strictEqual(h.state.peakPrepareActive, 1);
   await h.close(); await flush();
+}
+
+async function adoptedGatePreparationBoundaryRegression() {
+  const h = harness({ shortProtocol: true }); await h.initialize();
+  h.state.cleanupAdvanceMs = 1000; h.state.selectionAdvanceMs = 200; h.state.disposeAdvanceMs = 100;
+  await h.click('gate');
+  const first = h.saved.filter(r => r.kind === 'host-gate-first');
+  const reuse = h.saved.filter(r => r.kind === 'host-gate-reuse');
+  assert.strictEqual(first.length, 3); assert.strictEqual(reuse.length, 3);
+  for (const record of [...first, ...reuse]) {
+    const summary = record.value.summary;
+    assert.strictEqual(summary.measurementBoundary, 'selected-load-entry-after-test-reset');
+    assert.strictEqual(summary.pluginCreationIncluded, false);
+    assert.strictEqual(summary.selectionAttempt.attempted.id, 'audio-test');
+    assert(summary.selectionAttempt.diagnostics.length > 0);
+    assert(summary.backendBeginAt - summary.entryAt >= 200, 'selection query must be inside the total');
+    assert(summary.readyAt >= summary.backendEndAt);
+    assert.strictEqual(summary.callToReadyMs, summary.readyAt - summary.entryAt);
+    assert.strictEqual(summary.browserReadyMs, summary.readyAt - summary.backendEndAt);
+    assert(summary.callToReadyMs < 1000, 'test-only reset must not enter the measured total');
+  }
+  for (const record of first) {
+    const s = record.value.summary;
+    assert(s.fixtureReset.elapsedMs >= 1000);
+    assert(s.fixtureReset.endedAt <= s.entryAt);
+    assert.strictEqual(s.fixtureReset.excludedFromPreparationMs, true);
+  }
+  assert(reuse.every(r => r.value.summary.fixtureReset === null && r.value.summary.callToReadyMs >= 300),
+    'a real load must include both selected query and old-player disposal');
+  assert.deepStrictEqual(h.state.cleanupTimes.map(t => t.selectedCalls), [1, 3, 5]);
+  await h.close();
+}
+
+async function adoptedGateSelectionBoundaryFailureRegression() {
+  for (const failure of ['changed', 'api', 'cancel', 'reset-cancel']) {
+    const h = harness({ shortProtocol: true }); await h.initialize();
+    const before = h.prepared.length;
+    if (failure === 'changed') h.state.response = [item('changed-outside-plugin')];
+    if (failure === 'api') h.state.apiError = new Error('selected API unavailable');
+    if (failure === 'cancel') h.state.holdSelection = true;
+    if (failure === 'reset-cancel') h.state.holdDispose = true;
+    const running = h.click('gate');
+    if (failure === 'cancel') {
+      await until(() => !!h.state.finishSelection, 'gate did not enter selected API');
+      await h.click('cancel'); h.state.holdSelection = false; h.state.finishSelection();
+    }
+    if (failure === 'reset-cancel') {
+      await until(() => !!h.state.finishDispose, 'gate did not wait for reset disposal');
+      await h.click('cancel'); h.state.holdDispose = false; h.state.finishDispose();
+    }
+    await running;
+    assert.strictEqual(h.prepared.length, before, 'changed, failed or cancelled selection must never prepare another source');
+    assert.strictEqual(h.saved.at(-1).kind, 'host-gate-failed');
+    assert.strictEqual(h.saved.at(-1).value.resultComplete, false);
+    assert(!h.saved.some(r => r.kind === 'host-gate-summary')); assert.strictEqual(h.liveInfos.size, 0);
+    if (failure === 'changed') assert.match(h.saved.at(-1).value.error.message, /选中素材.*变化/);
+    if (failure === 'api') assert.match(h.saved.at(-1).value.error.message, /selected API unavailable/);
+    if (failure === 'cancel') assert.strictEqual(h.saved.at(-1).value.cancellation.cause, 'stop-button');
+    if (failure === 'reset-cancel') {
+      assert.strictEqual(h.state.apiCalls, 1); assert.strictEqual(h.cleaned.length, 0);
+      assert.strictEqual(h.saved.at(-1).value.cancellation.cause, 'stop-button');
+    }
+    await h.close();
+  }
 }
 async function adoptedGateFailureRegression() {
   const h = harness({ shortProtocol: true }); await h.initialize();
@@ -482,7 +548,8 @@ async function test() {
     initializationAndCancellationRegression, interruptedPreparationRegression, currentVideoProtocolRegression,
     currentVideoPerformanceWiringRegression, failedVideoManualObservationRegression, comparisonModeAndQuotaRegression,
     comparisonIdentityFailureRegression, comparisonCancellationRegression, adoptedGateWiringRegression, adoptedGateFailureRegression,
-    adoptedGateCancellationAndCleanupRegression, adoptedGateBlurDiagnosticRegression]) {
+    adoptedGateCancellationAndCleanupRegression, adoptedGateBlurDiagnosticRegression, adoptedGatePreparationBoundaryRegression,
+    adoptedGateSelectionBoundaryFailureRegression]) {
     await scenario(); console.log('ok ' + scenario.name);
   }
   console.log('t0-host: real selection adapter in mocked Eagle, current-video startup/protocol, lifecycle interleavings, failure evidence, pointer/lease/resource regression passed (not real Eagle)');
