@@ -8,3 +8,7 @@
 /prototypes/playback-clock/runtime/
 /prototypes/playback-clock/evidence/
 /prototypes/playback-clock/tools-s1.json
+/tests/host/t0/cache/
+/tests/host/t0/config.local.json
+/verification-runs/
+/plugin/cache/

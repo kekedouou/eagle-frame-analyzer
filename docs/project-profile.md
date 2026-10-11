@@ -2,10 +2,12 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格 v1 及目录/基础交互补充、正式架构 v1、3C 工程文档均已批准，3C 于 2026-10-11 获用户验收结束。当前代码仍为 A/B、S1 原型；阶段 4 具备启动准备条件，T0 的具体执行范围尚待落实，未开始编码或实验。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11 用户整体授权阶段 4。当前实施 T0，自动检查/修复连续推进，必要人工测试或变更授权处暂停；实际通过状态见 progress。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
+- T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json 为独立宿主测试入口，正式产品入口在 T1 建立。[T0 计划](experiments/T0/plan.md) 固定输入、预算与验证边界。
+- T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 
@@ -28,7 +30,7 @@
 
 3C 已完成 Git Diff、相对链接/锚点、R/P 与 T0～T4 对应、批准数值和受保护文件核对，并获用户最终验收；收尾仅更新状态、复核规范和固定本地版本，不运行历史实验。阶段 4 的实际检查按获批任务执行。
 
-计划在阶段 4 建立 node scripts/check.cjs：默认检查语法、模块依赖、纯模块/模拟集成及文档链接，不生成媒体、不清缓存、不启动 Eagle、不写库。该脚本和正式 plugin/ 入口当前均不存在，不得把计划命令记成已运行或通过。媒体、性能和宿主检查另行执行，范围与副作用见 verification.md。
+阶段 4 建立 `node scripts/check.cjs`：默认检查新代码语法、模块依赖、纯模块/模拟集成及文档链接，不生成媒体、不清共享缓存、不启动 Eagle、不写库。媒体准备使用显式 `node scripts/prepare-t0.cjs`，只读取本地配置中登记的四个现有输入，写入新的 T0 隔离缓存。已执行结果以 T0 记录为准；真实宿主与性能仍需另验。
 
 ### 历史原型命令及副作用
 
@@ -55,11 +57,11 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 - 迁移前版本使用旧路径，标签可以查看代码但不能保证在新目录直接运行。若需复跑应另获范围并适配路径，不能通过切换标签覆盖当前文件或证据。
 - 不自动创建远程、推送、发布或生成正式安装包。
 
-正式缓存设计为经实际路径校验的 `plugin.path/cache/`，与插件同盘且不得位于 C 盘；临时缓存同样受限，失败不回退 C/TEMP。此处仅记录已批准设计，未创建目录或改变现有实验产物。3B/3C 文档批准不授权新实验、目录迁移或素材库写入。
+正式缓存设计为经实际路径校验的 `plugin.path/cache/`，与插件同盘且不得位于 C 盘；临时缓存同样受限，失败不回退 C/TEMP。T0 使用实际测试插件根下 `tests/host/t0/cache/` 和独立 `verification-runs/t0-*`，本机配置 `tests/host/t0/config.local.json` 均忽略入 Git；不改变现有原型产物，不写素材库。
 
 ## 正式文件组织与边界（计划）
 
-正式实现只设一个 plugin/ 入口，保持 HTML/CSS/JavaScript、Node 内置模块和现有工具链。下表是未来职责，不表示文件已创建；任务、测试和迁移步骤见 development-plan.md。
+正式实现只设一个 plugin/ 入口，保持 HTML/CSS/JavaScript、Node 内置模块和现有工具链。下表是批准的职责规划；T0 先实现 frame-index/player 和独立测试入口，其余模块及正式入口按 T1～T3 逐步建立，不能把表内全部内容记成已实现。
 
 | 文件 | 职责与边界 |
 | --- | --- |

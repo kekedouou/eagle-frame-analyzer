@@ -1,0 +1,18 @@
+'use strict';
+const assert = require('assert');
+const { meanDelta, barcode, selectedIndices, analyzePcm } = require('./support/t0-reference.cjs');
+assert.strictEqual(meanDelta(Buffer.from([0, 10]), Buffer.from([2, 6])), 3);
+assert.throws(() => meanDelta(Buffer.from([1]), Buffer.from([])));
+assert.strictEqual(selectedIndices(828).length, 102);
+assert.strictEqual(selectedIndices(828)[101], 827);
+assert.deepStrictEqual(selectedIndices(1), [0]);
+const expected = { barcode: { bits: 3, step: 2 }, barcodes: [5, 2] };
+assert(barcode(Buffer.from([255, 0, 0, 0, 255, 0, 0, 255, 0, 0]), expected).every(r => r.ok));
+assert.strictEqual(barcode(Buffer.from([128, 0, 0, 0, 255, 0, 0, 255, 0, 0]), expected)[0].ok, false);
+assert.throws(() => barcode(Buffer.from([1]), expected));
+const pcm = Buffer.alloc(16); pcm.writeFloatLE(.1, 8);
+const sound = analyzePcm(pcm, { channels: 1, sampleRate: 1000, start: -.001, dataOffset: 0, dataBytes: 16 }, { beepTime: .001 });
+assert.strictEqual(sound.errorMs, 0); assert.strictEqual(sound.passed, true);
+assert.strictEqual(analyzePcm(Buffer.alloc(0), null, { authoredAudioRelativeStart: null }).passed, true);
+assert.strictEqual(analyzePcm(pcm, { channels: 1, sampleRate: 1000, start: 1, dataOffset: 0, dataBytes: 16 }, { beepTime: .001 }).passed, false);
+console.log('t0-reference: independent sampling, pixel metric and ambiguous barcode detection passed');

@@ -1,8 +1,10 @@
 # Eagle 视频分析
 
-一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B、3C 已结束；产品规格 v1 及目录/基础交互补充、技术架构 v1、3C 工程与验证计划均已获用户批准。2026-10-11 用户确认“3C可以到此结束”，验收节点为 phase3c-approved，仅表示工程文档验收；见 [3C 验收收尾](docs/progress.md#阶段-3c-验收收尾)。阶段 4 具备启动准备条件，T0 的具体执行范围尚待落实，未开始编码或实验。
+一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B、3C 已结束，工程文档节点为 phase3c-approved。2026-10-11 用户另行整体授权阶段 4；当前实施 [T0 核心风险专项](docs/experiments/T0/plan.md)，自动检查与修复连续推进，仅必要人工测试或变更授权处暂停。正式产品界面在 T0 关卡通过后的 T1 接入。
 
-当前基线：[已批准技术架构](docs/architecture.md)采用统一 720p JPEG 缓存画面、实际 PTS 索引与音频时钟。正式缓存设计为实际插件目录下的 `cache/`，完整和临时缓存均不得位于 C 盘；未完成任务取消后清理并于下次重建，完整有效缓存保留复用。以上尚未作为正式产品实现，本次仅完成文档收尾。
+T0 核心、本地检查与独立媒体核对已完成，下一步需要用户加载 `tests/host/t0/manifest.json` 执行真实窗口关卡；步骤和测量局限见 [T0记录](docs/experiments/T0/report.md)。这仍是测试入口，完整 MVP 尚未完成。
+
+当前基线：[已批准技术架构](docs/architecture.md)采用统一 720p JPEG 缓存画面、实际 PTS 索引与音频时钟。正式缓存为实际插件目录下的 `cache/`，完整和临时缓存均不得位于 C 盘；未完成任务取消清理，下次重建，完整有效缓存复用。T0 仅建立可复用核心及独立验证入口，完整生命周期和正式 UI 尚待后续任务。
 
 S1 原型入口为 `prototypes/playback-clock/manifest.json`，可显式读取 Eagle 当前单选短 MP4；已有真实窗口证据及用户“未观察到不同步”的人工反馈，见 [S1 记录](docs/experiments/S1/report.md#真实窗口证据与用户人工验收)。慢解码更新停顿、真实源帧准确性、全部编码覆盖和长期稳定性仍待验证；原实验目录和限额未改动，未重跑实验。
 
@@ -18,7 +20,7 @@ S1 原型入口为 `prototypes/playback-clock/manifest.json`，可显式读取 E
 - [技术架构](docs/architecture.md)：已批准方案、模块/数据流、风险，以及保留的原型说明。
 - [当前进度](docs/progress.md)：当前状态、验收限制及下一步边界。
 - [测试与验收协议](docs/verification.md)：R/P 追踪、样本、性能测量和异常安全验证。
-- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；仅计划，未开始执行。
+- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；已整体授权，从 T0 开始执行。
 - 实验 A：[说明](docs/experiments/A/plan.md) / [报告](docs/experiments/A/report.md)。
 - 实验 B：[说明](docs/experiments/B/plan.md) / [报告](docs/experiments/B/report.md)。
 - [目录迁移与简要复盘](docs/progress/2026-10-10-repository-reorganization.md)：旧位置映射、验证结果、正确流程与修正原因。
