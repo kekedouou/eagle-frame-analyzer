@@ -2,11 +2,11 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11 用户整体授权阶段 4。T0本轮技术关卡已通过，当前进入T1正式入口，自动检查/修复连续推进，必要人工测试或变更授权处暂停；实际通过状态见 progress。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11 用户整体授权阶段 4。T0本轮技术关卡已通过，T1正式入口开发中，现按用户要求保存并暂停；恢复入口与未修问题见[暂停交接](progress.md#阶段-4-t1暂停交接)。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
-- T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json 为独立宿主测试入口，正式产品入口在 T1 建立。[T0 计划](experiments/T0/plan.md) 固定输入、预算与验证边界。
+- T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json 为独立宿主测试入口。[T0 计划](experiments/T0/plan.md) 固定输入、预算与验证边界。正式产品入口plugin/manifest.json已在T1建立，但尚未真实Eagle验收，不将其视为可用交付版。
 - T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
 - A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）。T0修正版完整复验18轮已核对，正常79～81次提交/秒、最长约49ms、P95约9ms；首次3轮约22秒，102点独立源JPEG指纹匹配、1490帧PTS一致。六次首备/复用含选中读取，实验重置单记，不包含插件创建；旧超时/取消记录保留。压力仍有约1秒停顿，不推广到全编码、正式UI或长期稳定。T1按开发计划建立正式分层入口，尚未Eagle人工验收。[收尾证据与边界](experiments/T0/report.md#完整复验核对与独立源帧收尾)。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。

@@ -1,0 +1,182 @@
+'use strict';
+// Session ownership/ordering in memory; no Eagle, files, tools or media output.
+const assert = require('assert');
+const path = require('path');
+const { createSession } = require('../plugin/session.cjs');
+let tests = 0;
+async function test(name, body) { await body(); tests++; console.log('ok ' + name); }
+function deferred() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+const flush = () => new Promise(resolve => setImmediate(resolve));
+const selected = id => Object.freeze({ id, itemId: id, name: '中文 ' + id, filePath: path.resolve('中文 ' + id + '.mp4'), ext: 'mp4' });
+function harness(settings = {}) {
+  const h = { selection: selected('A'), calls: 0, prepared: [], released: [], players: [], reads: [], changes: [], events: [], clock: 100 };
+  h.makeInfo = value => ({ source: { ...value, file: value.filePath, sha256: 'a'.repeat(64) }, duration: 3,
+    frames: [0, 1, 2].map(id => ({ id, time: id, file: String(id) + '.jpg' })), metrics: { reused: false } });
+  const eagleAdapter = { captureSelected() { h.calls++; return settings.capture ? settings.capture(h) : h.selection; } };
+  const media = { async prepare(value, options) {
+    h.prepared.push({ selected: value, options }); h.events.push('prepare-' + value.id);
+    return settings.prepare ? settings.prepare(value, options, h) : h.makeInfo(value);
+  } };
+  const cache = { async readAsset(info, file) { h.reads.push({ info, file }); return Buffer.from('registered asset'); },
+    async release(info) { if (settings.release) await settings.release(info, h); h.released.push(info); h.events.push('release-' + info.source.id); } };
+  function createPlayer(options) {
+    const player = { options, info: null, disposed: false, disposeDone: false,
+      value: { state: 'loading', time: 0, frameId: null, frameOrdinal: null },
+      change(value) { this.value = { ...this.value, ...value }; options.onChange({ ...this.value }); },
+      snapshot() { return { ...this.value }; },
+      async load(info) {
+        this.info = info; this.change({ state: 'loading' });
+        await options.readAsset({ ...info }, info.frames[0].file);
+        if (settings.load) await settings.load(this, info, h);
+        this.change({ state: 'paused', time: 0, frameId: info.frames[0].id, frameOrdinal: 0 });
+      },
+      async dispose() {
+        this.disposed = true; h.events.push('stop-' + (this.info && this.info.source.id));
+        if (settings.dispose) await settings.dispose(this, h);
+        this.disposeDone = true; this.change({ state: 'disposed' }); h.events.push('disposed-' + (this.info && this.info.source.id));
+      },
+      async play() { this.change({ state: 'playing' }); return { status: 'playing' }; },
+      async pause() { this.change({ state: 'paused' }); return { status: 'paused' }; },
+      async seek(time, options) {
+        this.change({ state: 'seeking' }); if (settings.seek) await settings.seek(this, time, options, h);
+        const index = Math.max(0, Math.min(2, Math.floor(time))); this.change({ state: 'paused', time: index, frameId: index, frameOrdinal: index });
+        return { status: 'drawn', frameId: index };
+      },
+      async step(delta) { return this.seek(Math.max(0, Math.min(2, this.value.frameOrdinal + delta)), { final: true }); }
+    };
+    h.players.push(player); return player;
+  }
+  h.session = createSession({ eagleAdapter, media, cache, createPlayer, now: () => h.clock,
+    onChange(value) { h.changes.push(value); if (settings.onChange) settings.onChange(value, h); } });
+  return h;
+}
+async function main() {
+  await test('Selection starts once at entry; load uses adopted mode and original cache handle', async () => {
+    const h = harness(); const pending = h.session.loadSelected({ startedAt: 10 });
+    assert.strictEqual(h.calls, 1); assert.strictEqual(h.session.snapshot().state, 'preparing');
+    assert.strictEqual((await pending).status, 'ready'); const state = h.session.snapshot();
+    assert.strictEqual(state.state, 'paused'); assert.strictEqual(state.playback.frame, 0); assert.strictEqual(state.sourceIdentity.itemId, 'A');
+    assert.strictEqual(state.loadMetrics.totalMs, 90); assert.strictEqual(h.players[0].options.experimentMode, 'compressed-ram');
+    assert.strictEqual(h.reads[0].info, h.players[0].info); assert(Object.isFrozen(state.source));
+    assert(h.changes.filter(value => value.playback && value.playback.frameId === 0).slice(0, -1).every(value => value.state === 'preparing'));
+    await h.session.close(); assert.strictEqual(h.released.length, 1);
+  });
+  await test('Cancelled slow selection does not block latest invocation or become old media', async () => {
+    const old = deferred(); const h = harness({ capture: value => value.calls === 1 ? old.promise : value.selection });
+    const first = h.session.loadSelected(); await flush(); h.selection = selected('B'); const second = h.session.loadSelected();
+    assert.strictEqual(h.calls, 2); assert.strictEqual((await first).status, 'superseded'); assert.strictEqual((await second).status, 'ready');
+    old.resolve(selected('A')); await flush(); assert.deepStrictEqual(h.prepared.map(value => value.selected.id), ['B']);
+    assert.strictEqual(h.session.snapshot().source.id, 'B'); await h.session.close();
+  });
+  await test('Switch aborts preparation but waits its real exit and releases before new preparation', async () => {
+    const old = deferred(); const h = harness({ prepare: async (value, options, state) => value.id === 'A' ? old.promise : state.makeInfo(value) });
+    const first = h.session.loadSelected(); await flush(); h.selection = selected('B'); const second = h.session.loadSelected();
+    assert.strictEqual(h.prepared[0].options.signal.aborted, true); assert.strictEqual(h.prepared.length, 1);
+    old.resolve(h.makeInfo(selected('A'))); await first; await second;
+    assert(h.events.indexOf('release-A') < h.events.indexOf('prepare-B')); assert.strictEqual(h.released[0].source.id, 'A'); await h.session.close();
+  });
+  await test('Switch stops player synchronously and holds lease through real load and dispose completion', async () => {
+    const loading = deferred(), disposing = deferred();
+    const h = harness({ load: (player, info) => info.source.id === 'A' ? loading.promise : undefined,
+      dispose: player => player.info.source.id === 'A' ? disposing.promise : undefined });
+    const first = h.session.loadSelected(); await flush(); h.selection = selected('B'); const second = h.session.loadSelected();
+    assert.strictEqual(h.players[0].disposed, true); assert.strictEqual(h.released.length, 0); assert.strictEqual(h.prepared.length, 1);
+    loading.resolve(); await flush(); assert.strictEqual(h.released.length, 0); disposing.resolve(); await first; await second;
+    assert(h.events.indexOf('disposed-A') < h.events.indexOf('release-A')); assert(h.events.indexOf('release-A') < h.events.indexOf('prepare-B'));
+    await h.session.close();
+  });
+  await test('Old player/progress callbacks cannot replace newer source or displayed frame', async () => {
+    const h = harness(); await h.session.loadSelected(); const old = h.players[0], progress = h.prepared[0].options.onProgress;
+    h.selection = selected('B'); await h.session.loadSelected(); old.options.onChange({ state: 'playing', frameId: 999, time: 999 }); progress({ stage: 'wrong' });
+    assert.strictEqual(h.session.snapshot().source.id, 'B'); assert.strictEqual(h.session.snapshot().playback.frame, 0); assert.strictEqual(h.session.snapshot().progress, null);
+    await h.session.close();
+  });
+  await test('Controls enforce ready/seek gates; latest displayed frame drives state', async () => {
+    const seek = deferred(), h = harness({ seek: () => seek.promise });
+    await assert.rejects(h.session.play(), error => error.code === 'SESSION_NOT_READY'); await h.session.loadSelected();
+    await h.session.toggle(); assert.strictEqual(h.session.snapshot().state, 'playing'); await h.session.toggle();
+    const pending = h.session.seek(2.9, { kind: 'drag', final: false });
+    assert.strictEqual(h.session.snapshot().state, 'seeking'); assert.strictEqual(h.session.snapshot().playback.time, 0);
+    await assert.rejects(h.session.play(), error => error.code === 'SESSION_NOT_READY'); seek.resolve(); await pending;
+    assert.strictEqual(h.session.snapshot().playback.time, 2); await h.session.step(-1); assert.strictEqual(h.session.snapshot().playback.frame, 1); await h.session.close();
+  });
+  await test('Library change clears without reading selection; closed session cannot load again', async () => {
+    const h = harness(); await h.session.loadSelected(); const old = h.players[0];
+    const cleared = h.session.libraryChanged(); assert.strictEqual(old.disposed, true); assert.strictEqual(h.session.snapshot().source, null);
+    await cleared; assert.strictEqual(h.calls, 1); assert.strictEqual(h.session.snapshot().libraryEpoch, 1); assert.strictEqual(h.session.snapshot().state, 'empty');
+    h.selection = selected('B'); await h.session.retry(); assert.strictEqual(h.calls, 2); await h.session.close(); await h.session.close();
+    assert.strictEqual((await h.session.loadSelected()).status, 'ignored'); assert.strictEqual(h.calls, 2); assert.strictEqual(h.session.snapshot().state, 'closed');
+  });
+  await test('Selection failure preserves typed error and retry captures a fresh selection', async () => {
+    const failure = new Error('请单选MP4'); failure.code = 'SELECTION_EMPTY';
+    const h = harness({ capture: value => value.calls === 1 ? Promise.reject(failure) : value.selection });
+    assert.strictEqual((await h.session.loadSelected()).status, 'error'); assert.strictEqual(h.prepared.length, 0);
+    assert.strictEqual(h.session.snapshot().error.code, 'SELECTION_EMPTY'); h.selection = selected('B'); await h.session.retry();
+    assert.strictEqual(h.session.snapshot().source.id, 'B'); await h.session.close();
+  });
+  await test('Prepared source mismatch releases original handle and never creates a player', async () => {
+    let prepared; const h = harness({ prepare: (value, options, state) => { prepared = state.makeInfo(selected('wrong')); return prepared; } });
+    const result = await h.session.loadSelected(); assert.strictEqual(result.status, 'error'); assert.strictEqual(result.error.code, 'PREPARED_IDENTITY_MISMATCH');
+    assert.strictEqual(h.players.length, 0); assert.strictEqual(h.released[0], prepared); await h.session.close();
+  });
+  await test('Disposal failure retains handle and blocks the next video', async () => {
+    const h = harness({ dispose: () => Promise.reject(new Error('decoder still active')) }); await h.session.loadSelected();
+    h.selection = selected('B'); const result = await h.session.loadSelected(); assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.error.code, 'SESSION_RELEASE_FAILED'); assert.strictEqual(h.prepared.length, 1); assert.strictEqual(h.released.length, 0);
+    assert.strictEqual((await h.session.close()).status, 'error');
+  });
+  await test('Close during preparation stops immediately and waits before releasing late result', async () => {
+    const gate = deferred(), h = harness({ prepare: () => gate.promise }); const pending = h.session.loadSelected(); await flush();
+    const close = h.session.close(); assert.strictEqual(h.session.snapshot().state, 'closed'); assert.strictEqual(h.prepared[0].options.signal.aborted, true);
+    assert.strictEqual(h.released.length, 0); gate.resolve(h.makeInfo(selected('A'))); await pending; await close;
+    assert.strictEqual(h.players.length, 0); assert.strictEqual(h.released.length, 1); assert.strictEqual(h.session.snapshot().state, 'closed');
+  });
+  await test('Display cannot become interactive before actual player load resolves', async () => {
+    const gate = deferred(); const h = harness({ load: async player => { player.change({ state: 'paused', time: 0, frameId: 0, frameOrdinal: 0 }); await gate.promise; } });
+    const load = h.session.loadSelected(); await flush(); assert.strictEqual(h.session.snapshot().state, 'preparing');
+    await assert.rejects(h.session.play(), error => error.code === 'SESSION_NOT_READY'); gate.resolve(); await load;
+    assert.strictEqual(h.session.snapshot().state, 'paused'); await h.session.close();
+  });
+  await test('P03 includes final synchronous ready UI initialization before recording endpoint', async () => {
+    let readyCalls = 0;
+    const h = harness({ onChange: (value, state) => { if (value.state === 'paused') { readyCalls++; state.clock += 25; } } });
+    const result = await h.session.loadSelected({ startedAt: 10 });
+    assert.strictEqual(readyCalls, 1); assert.strictEqual(result.snapshot.loadMetrics.readyAt, 125);
+    assert.strictEqual(h.session.snapshot().loadMetrics.totalMs, 115); await h.session.close();
+  });
+  await test('Reentrant latest load cannot be disposed by an older queued invocation', async () => {
+    let switched = false;
+    const h = harness({ onChange: (value, state) => {
+      if (!switched && value.state === 'preparing') { switched = true; state.selection = selected('B'); state.newLoad = state.session.loadSelected(); }
+    } });
+    const old = h.session.loadSelected(); await old; await h.newLoad;
+    assert.deepStrictEqual(h.prepared.map(value => value.selected.id), ['B']);
+    assert.strictEqual(h.players[0].disposed, false); await h.session.play(); await h.session.close();
+  });
+  await test('Library-change notification can load a new source without stale cleanup disposing it', async () => {
+    let switched = false;
+    const h = harness({ onChange: (value, state) => {
+      if (!switched && value.state === 'empty' && value.libraryEpoch === 1) {
+        switched = true; state.selection = selected('B'); state.newLoad = state.session.loadSelected();
+      }
+    } });
+    await h.session.loadSelected(); const cleared = h.session.libraryChanged(); await cleared; await h.newLoad;
+    assert.strictEqual(h.session.snapshot().source.id, 'B'); assert.strictEqual(h.players[1].disposed, false);
+    assert.strictEqual(h.released.length, 1); await h.session.close();
+  });
+  await test('Synchronous selection-side library change cannot restore obsolete preparing state', async () => {
+    const h = harness({ capture: state => { state.clear = state.session.libraryChanged(); return selected('A'); } });
+    assert.strictEqual((await h.session.loadSelected()).status, 'superseded'); await h.clear;
+    assert.strictEqual(h.session.snapshot().state, 'empty'); assert.strictEqual(h.prepared.length, 0);
+    assert.strictEqual(h.calls, 1); await h.session.close();
+  });
+  await test('Cache-release failure prevents new preparation and remains visible on repeated close', async () => {
+    const h = harness({ release: () => { throw new Error('lease still held'); } }); await h.session.loadSelected();
+    h.selection = selected('B'); const result = await h.session.loadSelected();
+    assert.strictEqual(result.error.code, 'SESSION_RELEASE_FAILED'); assert.strictEqual(h.prepared.length, 1);
+    assert.strictEqual(h.released.length, 0); assert.strictEqual((await h.session.close()).status, 'error');
+    assert.strictEqual((await h.session.close()).status, 'error'); assert.strictEqual(h.session.snapshot().state, 'closed');
+  });
+  console.log('T1 session memory tests passed: ' + tests + '. Not real Eagle, media, Canvas or performance verification.');
+}
+main().catch(error => { console.error(error.stack); process.exitCode = 1; });

@@ -43,8 +43,8 @@ function checkDocs() {
 const js = ['plugin', 'tests', 'scripts'].flatMap(d => files(path.join(root, d), f => /\.(cjs|js)$/.test(f)));
 for (const file of js) {
   run(['--check', file]);
-  if (file.startsWith(path.join(root, 'plugin') + path.sep) && /(?:require\s*\([^)]*prototypes|from\s+['"][^'"]*prototypes)/.test(fs.readFileSync(file, 'utf8')))
-    throw new Error('Formal code depends on prototypes: ' + file);
+  if (file.startsWith(path.join(root, 'plugin') + path.sep) && /(?:require\s*\([^)]*(?:prototypes|tests)[/\\]|from\s+['"][^'"]*(?:prototypes|tests)[/\\])/.test(fs.readFileSync(file, 'utf8')))
+    throw new Error('Formal code depends on prototypes/tests: ' + file);
 }
 console.log(`syntax and prototype dependency boundary: ${js.length} files`);
 for (const file of fs.readdirSync(path.join(root, 'tests')).filter(f => f.endsWith('.cjs')).sort()) run([path.join(root, 'tests', file)]);
@@ -55,6 +55,16 @@ if (fs.existsSync(manifestFile)) {
   const html = fs.readFileSync(path.join(path.dirname(manifestFile), manifest.main.url), 'utf8');
   for (const match of html.matchAll(/<script[^>]+src="([^"]+)"/g)) if (!fs.existsSync(path.resolve(path.dirname(manifestFile), match[1]))) throw new Error('Missing host script: ' + match[1]);
   console.log('T0 manifest and script wiring checked; real Eagle not executed');
+}
+const productManifest = path.join(root, 'plugin/manifest.json');
+if (fs.existsSync(productManifest)) {
+  const manifest = JSON.parse(fs.readFileSync(productManifest, 'utf8'));
+  if (!manifest.main || manifest.main.multiple !== false || manifest.main.url !== 'index.html') throw new Error('Product Window entry mismatch');
+  const html = fs.readFileSync(path.join(path.dirname(productManifest), manifest.main.url), 'utf8');
+  for (const match of html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^"]+)"/g)) if (!fs.existsSync(path.resolve(path.dirname(productManifest), match[1]))) throw new Error('Missing product asset: ' + match[1]);
+  if (/(?:setDecodeDelay|performanceTest|adoptedGate|id="(?:gate|comparison|save|refresh)")/.test(html)) throw new Error('Experimental controls in product entry');
+  if (!fs.existsSync(path.join(path.dirname(productManifest), String(manifest.logo || '').replace(/^\//, '')))) throw new Error('Missing product logo');
+  console.log('Product manifest/assets checked; real Eagle not executed');
 }
 checkDocs();
 console.log('default check passed (no media generation, no historical rerun, no Eagle/library writes)');

@@ -1,0 +1,16 @@
+{
+  "id": "EVAVIDEOANALYSIS20261011",
+  "version": "0.1.0",
+  "platform": "win",
+  "arch": "all",
+  "name": "视频分析",
+  "logo": "/logo.png",
+  "keywords": ["视频", "逐帧", "分析"],
+  "devTools": false,
+  "main": {
+    "url": "index.html", "width": 1120, "height": 760,
+    "minWidth": 720, "minHeight": 480,
+    "frame": true, "resizable": true,
+    "multiple": false, "runAfterInstall": false
+  }
+}

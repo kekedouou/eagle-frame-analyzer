@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>视频分析</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="workspace">
+    <section class="player-pane" aria-label="视频播放器">
+      <div class="screen">
+        <canvas id="picture" width="1280" height="720" aria-label="当前视频画面"></canvas>
+        <div id="notice" class="notice" role="status">在 Eagle 中单选 MP4 后打开插件</div>
+      </div>
+      <div class="transport">
+        <div class="timeline-area">
+          <div id="timeline" class="timeline" role="slider" tabindex="0" aria-label="视频进度"
+            aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-disabled="true">
+            <div class="rail"><div id="progress" class="progress"></div></div>
+            <span id="thumb" class="thumb"></span>
+            <output id="timeHint" class="time-hint" hidden>0:00.000</output>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="play" type="button" title="播放 / 暂停（空格）" disabled>播放</button>
+          <button id="previous" type="button" title="上一帧" disabled>上一帧</button>
+          <button id="next" type="button" title="下一帧" disabled>下一帧</button>
+          <span class="time-readout"><output id="currentTime">0:00.000</output><span class="muted"> / </span><output id="duration">0:00.000</output></span>
+        </div>
+      </div>
+    </section>
+    <aside class="sidebar" aria-label="素材信息">
+      <h1>素材</h1>
+      <p id="sourceName" class="source-name">未载入视频</p>
+      <p class="preview-quality">720p 预览</p>
+      <p id="status" class="status" role="status">等待素材</p>
+      <p id="error" class="error" role="alert" hidden></p>
+      <button id="retry" type="button" hidden>重试</button>
+    </aside>
+  </main>
+  <script src="player.js"></script>
+  <script src="ui.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
