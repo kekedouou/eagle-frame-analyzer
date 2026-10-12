@@ -15,7 +15,7 @@ const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toL
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const store = createStore(repo), result = { schema: 't1-isolated-native-chrome-v1', origin: 'Codex-automatic-independent-Chrome',
-  playerVersion: process.argv.includes('--baseline') ? 'git-1afcaa4-baseline' : 'workspace-candidate',
+  playerVersion: process.argv.includes('--before-t2-fix') ? 'git-2d0cfb4-before-t2-fix' : process.argv.includes('--baseline') ? 'git-1afcaa4-baseline' : 'workspace-candidate',
   sourceSha256: SHA, source: SOURCE, complete: false, EagleHostVerified: false, formalPerformancePassed: null,
   limits: { scratchBytes: SCRATCH_LIMIT, observedRendererRssBytes: RSS_LIMIT, deadlineMs: 90000, evidenceBytes: 2 * MIB },
   limitation: 'Filesystem/RSS limits are sampled stop lines, not OS-enforced quotas; observed overshoot is recorded as failure.', rounds: [] };
@@ -109,12 +109,19 @@ async function main() {
   result.sourceBefore = { sha256: SHA, size: fs.statSync(SOURCE).size, mtimeMs: fs.statSync(SOURCE).mtimeMs };
   result.sourceCode = {};
   const code = {};
-  for (const name of ['player.js', 'ui.js', 'styles.css', 'index.html', 'frame-index.cjs', 'session.cjs', 'cache.cjs']) {
+  for (const name of ['player.js', 'ui.js', 'styles.css', 'index.html', 'frame-index.cjs', 'session.cjs', 'cache.cjs', 'process-identity.cjs']) {
     code[name] = fs.readFileSync(path.join(pluginRoot, name), 'utf8'); result.sourceCode[name] = sha(Buffer.from(code[name]));
   }
   if (process.argv.includes('--baseline')) {
     code['player.js'] = execFileSync('git', ['show', '1afcaa4:plugin/player.js'], { cwd: repo, encoding: 'utf8', windowsHide: true, maxBuffer: MIB });
     result.sourceCode['player.js'] = sha(Buffer.from(code['player.js']));
+  }
+  if (process.argv.includes('--before-t2-fix')) {
+    if (process.argv.includes('--baseline')) throw new Error('Choose only one historical diagnostic candidate.');
+    for (const name of ['player.js', 'session.cjs']) {
+      code[name] = execFileSync('git', ['show', '2d0cfb4:plugin/' + name], { cwd: repo, encoding: 'utf8', windowsHide: true, maxBuffer: MIB });
+      result.sourceCode[name] = sha(Buffer.from(code[name]));
+    }
   }
   result.driverSha256 = sha(fs.readFileSync(path.join(repo, 'tests/support/t1-browser.js')));
   cache = createCache({ pluginRoot }); transaction = cache.begin({ sourceSha256: SHA });

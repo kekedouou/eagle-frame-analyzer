@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1限定关卡通过；T2维护/淘汰、已确认残留恢复及新记录去重本地验证通过，当前真实宿主回归待验，见[当前候选](progress.md#阶段-4-t2维护与恢复候选)。T2未整体验收。
+- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1限定关卡通过；T2额外UE素材真实回归未通过，已定向修复只读资源快照和部分预读分布，本地/独立Chrome验证完成，真实修正版待复验，见[当前候选](progress.md#阶段-4-t2宿主回归失败与修复)。T2未整体验收。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -91,3 +91,5 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 新任务先读本文件和 progress，再读目标目录局部规范、相关 R/P、architecture 决策与 development-plan 中的目标任务；核对 Git 状态与既有证据后继续，不能仅靠聊天摘要或旧原型入口恢复上下文。
 
 T2本地命令及副作用：`node scripts/verify-t2-cache.cjs checks`跑统一检查并有界保存T2回执；`filesystem`仅在2MiB自有scratch用≤512KiB小缓存及本轮Node自然退出验证文件/进程恢复，成功轮按预存清单定点清理，旧失败保留；`filesystem --retry-retained`在同一额度内新建attempt，不清旧失败；`reuse`仅对已登记H.264完整缓存调用正式media/cache及现有FFprobe，禁止生成，逐资产读回及源校验，更新本次最近使用字段后释放占用。默认检查不执行上述文件/媒体副作用。具体输入、配额、失败和真实宿主停点见[T2报告](experiments/T2/report.md#维护事务恢复和文件管理候选)；节点间连续开发，必要宿主操作仍由用户打开插件完成，不要求调试命令。
+
+T2回归补充：`node scripts/verify-t2-cache.cjs audit-host <明确T1运行ID>`只读原回执及其选中源/缓存清单，解包复算、核对SHA后有界保存T2审计，不把保存失败改成通过。既有`verify-t1-browser.cjs --before-t2-fix`仅将捕获的Player/session替为`2d0cfb4`代码，当前代码由无参数命令捕获；两次仍使用原UE固定源、既有缓存、原64MiB scratch/90秒/T1证据配额，清自己的成功轮产物，不操作Eagle。它与`--baseline`互斥，保留旧`1afcaa4`诊断身份；不把本机对照记为真实宿主回归。

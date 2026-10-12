@@ -13,9 +13,14 @@ function createSession(options) {
   let epoch = 0, libraryEpoch = 0, closed = false, tail = Promise.resolve(), controller = null, owner = null;
   let state = 'empty', source = null, duration = 0, playback = null, error = null, progress = null, loadMetrics = null;
   function snapshot() {
+    // Background image tasks finish without a UI state notification. Observe
+    // the current ready owner directly so diagnostics do not hold an old task
+    // count/RAM ledger forever. Never borrow a superseded material's player.
+    const observed = !closed && owner && owner.ready && owner.epoch === epoch && owner.player
+      ? owner.player.snapshot() : playback;
     return Object.freeze({ state, epoch, libraryEpoch, source, duration,
       sourceIdentity: source ? Object.freeze({ libraryEpoch, itemId: source.id, filePath: source.filePath, sha256: source.sha256 || null }) : null,
-      playback: playback ? { ...playback, frame: playback.frameId, time: playback.time } : null,
+      playback: observed ? { ...observed, frame: observed.frameId, time: observed.time } : null,
       error: error ? { ...error } : null, progress: progress ? { ...progress } : null,
       loadMetrics: loadMetrics ? { ...loadMetrics } : null });
   }

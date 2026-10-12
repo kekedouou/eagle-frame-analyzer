@@ -80,7 +80,7 @@ function harness(options = {}) {
       if (options.readMs && file !== 'audio.wav') await env.sleep(options.readMs);
       if (options.readFailure === file) throw new Error('fake asset read failure');
       if (file === 'audio.wav') { const bytes = Buffer.alloc(info.audio.bytes); bytes.writeDoubleLE(info.audio.duration, 0); bytes[8] = info.audio.channels; return bytes; }
-      const bytes = Buffer.alloc(10); bytes[0] = Number(file.slice(1, -4)); bytes.writeUInt16LE(info.width, 1); bytes.writeUInt16LE(info.height, 3); return bytes;
+      const bytes = Buffer.alloc(info.frames.find(frame => frame.file === file).bytes); bytes[0] = Number(file.slice(1, -4)); bytes.writeUInt16LE(info.width, 1); bytes.writeUInt16LE(info.height, 3); return bytes;
     } });
   const advance = async (milliseconds, render) => {
     now += milliseconds;
@@ -446,8 +446,9 @@ async function run() {
   await check('partial compressed warm is bounded; missing frames use disk and later source has separate ownership', async () => {
     const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 30 }); await h.load(sample('first'));
     assert.equal(h.player.snapshot().compressed.warmedFrames, 3);
+    const initialMisses = h.player.snapshot().compressed.misses; // Initial neighbour can now be outside the distributed pool.
     await h.settle(h.player.seek(.9, { kind: 'drag' }));
-    assert.equal(h.player.snapshot().compressed.misses, 1); assert.equal(h.reads.get('first:f9.jpg'), 1);
+    assert.equal(h.player.snapshot().compressed.misses - initialMisses, 1); assert.equal(h.reads.get('first:f9.jpg'), 1);
     await h.load(sample('second')); assert.equal(h.player.snapshot().compressed.warmedBytes, 30);
     assert.equal(h.reads.get('second:f0.jpg'), 1); assert.equal(h.player.snapshot().frameId, 0); await h.close();
   });
@@ -543,6 +544,25 @@ async function run() {
       assert.equal(final.frameId, 15); assert(h.contexts[0].sources[0].stopped); await Promise.all(requests);
       assert(h.maxDecodes() <= 2); assert(h.player.snapshot().cachePeakBytes <= 700000); await h.close();
     }
+  });
+  await check('a partial JPEG warm pool covers both ends and the middle within its original byte limit', async () => {
+    const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 80, ramBytes: 310000 });
+    await h.load(sample('distributed'));
+    const warm = h.events.filter(e => e.type === 'cache' && e.phase === 'image-work-start' && e.role === 'compressed-warm').map(e => e.frameId);
+    assert.strictEqual(warm.length, 8); assert(warm.includes(0) && warm.includes(15) && warm.includes(8));
+    const sorted = warm.slice().sort((a, b) => a - b);
+    assert(Math.max(...sorted.slice(1).map((n, i) => n - sorted[i])) <= 4, 'No large unprepared tail');
+    assert.strictEqual(new Set(warm).size, warm.length);
+    assert(h.player.snapshot().compressed.residentBytes <= 80); await h.close();
+  });
+  await check('partial warm planning skips an oversized image, retains finite coverage and respects exact bytes', async () => {
+    const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 80, ramBytes: 310000 });
+    const info = sample('unequal'); info.frames[8] = { ...info.frames[8], bytes: 90 };
+    await h.load(info);
+    const warm = h.events.filter(e => e.type === 'cache' && e.phase === 'image-work-start' && e.role === 'compressed-warm').map(e => e.frameId);
+    assert(warm.includes(15)); assert(!warm.includes(8)); assert.strictEqual(warm.length, 8);
+    assert.strictEqual(new Set(warm).size, warm.length); assert(h.player.snapshot().cachePeakBytes <= 310000);
+    await h.close();
   });
   await check('compressed pool leaves decode headroom, survives decoded eviction and never overlaps more than two warm reads', async () => {
     const h = harness({ experimentMode: 'compressed-ram', ramBytes: 310000, readMs: 3 });

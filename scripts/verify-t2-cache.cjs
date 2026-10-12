@@ -31,7 +31,7 @@ function files(dir, depth = 0, output = []) {
   return output;
 }
 function codeHashes() {
-  return Object.fromEntries(['plugin/cache.cjs', 'plugin/process-identity.cjs', 'plugin/media.cjs', 'tests/support/t2-evidence.cjs',
+  return Object.fromEntries(['plugin/cache.cjs', 'plugin/process-identity.cjs', 'plugin/media.cjs', 'plugin/player.js', 'plugin/session.cjs', 'tests/support/t2-evidence.cjs',
     'scripts/verify-t2-cache.cjs'].map(file => [file, sha(fs.readFileSync(path.join(repo, file)))]));
 }
 function worker(root, keepChild) {
@@ -185,9 +185,71 @@ async function reuseIntegration() {
       passed: false, error: String(error.stack).slice(0, 8192) }))); throw error;
   } finally { try { if (handle) cache.release(handle); } finally { store.close(); } }
 }
+async function auditHost(runId) {
+  if (typeof runId !== 'string' || !/^t1-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{20}$/.test(runId)) throw new Error('An explicit T1 host run ID is required.');
+  const dir = path.join(repo, 'verification-runs', runId), gate = require('../tests/support/t0-gate.cjs');
+  const { _test: { registeredManifest } } = require('../tests/support/t1-host.cjs');
+  const read = file => {
+    const before = fs.lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 2 * 1024 ** 2 ||
+      fs.realpathSync(file).toLowerCase() !== path.resolve(file).toLowerCase()) throw new Error('Host audit file boundary changed.');
+    const bytes = fs.readFileSync(file), after = fs.lstatSync(file);
+    if (before.ino !== after.ino || before.dev !== after.dev || before.size !== after.size || before.mtimeMs !== after.mtimeMs || bytes.length !== before.size) throw new Error('Host receipt changed during audit.');
+    return { value: JSON.parse(bytes), bytes: bytes.length, sha256: sha(bytes) };
+  };
+  const owner = read(path.join(dir, 'owner.json')).value;
+  if (owner.owner !== require('../tests/support/t1-evidence.cjs').OWNER || owner.runId !== runId || owner.root !== path.join(repo, 'verification-runs')) throw new Error('Host receipt owner mismatch.');
+  const files = fs.readdirSync(dir).filter(n => /^host-[0-9a-f]{20}-\d+\.json$/.test(n));
+  const records = files.map(n => ({ file: path.join(dir, n), ...read(path.join(dir, n)) }));
+  const summaries = records.filter(r => r.value.type === 'summary'); if (summaries.length !== 1) throw new Error('Exactly one final host summary required.');
+  const saved = summaries[0], summary = saved.value;
+  const formalFiles = ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs'];
+  if (JSON.stringify(Object.keys(summary.sourceFingerprints || {}).sort()) !== JSON.stringify(formalFiles.sort()) ||
+    Object.values(summary.sourceFingerprints).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Measured formal source list is invalid.');
+  if (summary.schema !== 't1-formal-dom-regression-v1' || !summary.sourceFingerprintsUnchanged || !summary.launchSourcesVerifiedAtEnd ||
+    JSON.stringify(summary.initialSourceFingerprints) !== JSON.stringify(summary.sourceFingerprints)) throw new Error('Measured source fingerprint consistency failed.');
+  const manifest = registeredManifest(path.join(repo, 'plugin'), summary.initialSnapshot);
+  if (manifest.manifestSha256 !== summary.manifestSha256 || manifest.manifestBytes !== summary.manifestBytes) throw new Error('Measured manifest changed.');
+  const protocol = require('../tests/support/t0-protocol.cjs'), rounds = [];
+  for (const record of records.filter(r => r.value.type === 'round')) {
+    const item = record.value, s = item.summary, trace = item.trace;
+    if (JSON.stringify(item.protocol) !== JSON.stringify(protocol.PROTOCOL) || JSON.stringify(item.source) !== JSON.stringify(summary.source)) throw new Error('Measured protocol/source mismatch.');
+    const reference = summary.receipts.find(r => r.file === record.file);
+    if (!reference || reference.bytes !== record.bytes || reference.sha256 !== record.sha256) throw new Error('Summary receipt reference mismatch.');
+    const events = gate.unpack(trace), capture = new gate.Capture(manifest.info.frames.map(f => f.id));
+    for (const event of events) capture.append(event); capture.maxTasks = trace.maxImageTasks;
+    const computed = capture.summarize(s.begin, s.end, { kind: s.kind, delayMs: s.delayMs });
+    for (const key of Object.keys(computed)) if (JSON.stringify(computed[key]) !== JSON.stringify(s[key])) throw new Error('Round recomputation mismatch: ' + key);
+    if (s.final.expectedFrameId !== s.final.snapshot.playback.frameId || s.final.hint.text !== s.final.hint.expected || !s.final.correct) throw new Error('Final displayed frame/hint mismatch.');
+    rounds.push({ file: record.file, sha256: record.sha256, round: s.round, kind: s.kind, valid: s.valid,
+      roundGateMet: s.roundGateMet, submittedUpdatesPerSecond: s.submittedUpdatesPerSecond, longestNoSubmissionMs: s.longestNoSubmissionMs,
+      requestToDraw: s.requestToDraw, terminals: s.terminals, resources: s.resources, diskReads: s.diskReads, compressedReads: s.compressedReads });
+  }
+  const interrupted = summary.interruptedTrace ? gate.unpack(summary.interruptedTrace) : null;
+  const original = summary.source.filePath, before = fs.lstatSync(original);
+  if (!before.isFile() || before.isSymbolicLink() || before.size > 2 * 1024 ** 3 || fs.realpathSync(original).toLowerCase() !== original.toLowerCase()) throw new Error('Selected source boundary changed.');
+  const hash = crypto.createHash('sha256'); for await (const bytes of fs.createReadStream(original, { highWaterMark: 1024 ** 2 })) hash.update(bytes);
+  const after = fs.lstatSync(original), sourceSha = hash.digest('hex');
+  if (sourceSha !== summary.source.sha256 || before.ino !== after.ino || before.dev !== after.dev || before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('Selected source changed.');
+  const currentSourceMatches = Object.fromEntries(Object.entries(summary.sourceFingerprints).map(([file, expected]) => [file, sha(fs.readFileSync(path.join(repo, 'plugin', file))) === expected]));
+  const store = createStore(repo); store.start({ reserveBytes: 128 * 1024 });
+  try {
+    const result = store.save('audit', { protocol: 't2-saved-host-audit-v1', runId, receiptSha256: saved.sha256, source: summary.source,
+      evidenceIntegrityPassed: true, complete: summary.complete, earlyRegressionPassed: summary.earlyRegressionPassed, error: summary.error || null,
+      currentSourceMatches, sourceShaVerified: true, manifestSha256: manifest.manifestSha256, allAssetHashesVerified: false,
+      rounds, interruptedTraceEvents: interrupted ? interrupted.length : 0,
+      interruptedDraws: interrupted ? interrupted.filter(e => e.type === 'draw').length : 0,
+      interruptedInputs: interrupted ? interrupted.filter(e => e.type === 'input').length : 0,
+      interruptedLastActivityAt: interrupted ? Math.max(...interrupted.filter(e => e.type !== 'memory').map(e => e.at)) : null,
+      finalObservedPlayback: summary.finalSnapshot.playback, existingP03: summary.existingP03,
+      limitation: 'Independent integrity/statistics audit only; a saved failure remains failed. Session telemetry may be stale in this candidate. No actual monitor presentation or new host run.' });
+    console.log(JSON.stringify(result));
+  } finally { store.close(); }
+}
 if (require.main === module) {
   const command = process.argv[2];
   Promise.resolve().then(() => command === 'filesystem' ? filesystem() : command === 'checks' ? checks() : command === 'reuse' ? reuseIntegration() :
-    command === 'worker' || command === 'worker-child' ? worker(path.resolve(process.argv[3]), command === 'worker-child') :
-      Promise.reject(new Error('Use explicit filesystem, reuse or checks command.'))).catch(error => { console.error(error.stack); process.exitCode = 1; });
+    command === 'audit-host' ? auditHost(process.argv[3]) :
+      command === 'worker' || command === 'worker-child' ? worker(path.resolve(process.argv[3]), command === 'worker-child') :
+      Promise.reject(new Error('Use explicit filesystem, reuse, checks or audit-host command.'))).catch(error => { console.error(error.stack); process.exitCode = 1; });
 }

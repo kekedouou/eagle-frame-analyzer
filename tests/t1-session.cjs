@@ -51,6 +51,26 @@ function harness(settings = {}) {
   return h;
 }
 async function main() {
+  await test('Read-only snapshots follow completed background work without UI notifications', async () => {
+    const h = harness(); await h.session.loadSelected(); const player = h.players[0];
+    player.change({ activeImageTasks: 1, cacheBytes: 100, rafOpportunity: 20 });
+    const observed = h.session.snapshot(), changes = h.changes.length;
+    player.value = { ...player.value, activeImageTasks: 0, cacheBytes: 80, rafOpportunity: 23 };
+    const current = h.session.snapshot();
+    assert.strictEqual(observed.playback.activeImageTasks, 1);
+    assert.strictEqual(current.playback.activeImageTasks, 0);
+    assert.strictEqual(current.playback.cacheBytes, 80); assert.strictEqual(current.playback.rafOpportunity, 23);
+    assert.strictEqual(h.changes.length, changes, 'Observation must not notify or draw UI');
+    await h.session.close(); assert.strictEqual(h.session.snapshot().playback, null);
+  });
+  await test('A changing or closing session never borrows the old player live snapshot', async () => {
+    const gate = deferred(), h = harness({ capture: value => value.calls === 2 ? gate.promise : value.selection });
+    await h.session.loadSelected(); const old = h.players[0]; old.value = { ...old.value, activeImageTasks: 1 };
+    const loading = h.session.loadSelected(); assert.strictEqual(h.session.snapshot().playback, null);
+    gate.resolve(selected('B')); await loading;
+    old.value = { ...old.value, activeImageTasks: 99, frameId: 99 };
+    assert.strictEqual(h.session.snapshot().playback.frameId, 0); await h.session.close();
+  });
   await test('Selection starts once at entry; load uses adopted mode and original cache handle', async () => {
     const h = harness(); const pending = h.session.loadSelected({ startedAt: 10 });
     assert.strictEqual(h.calls, 1); assert.strictEqual(h.session.snapshot().state, 'preparing');

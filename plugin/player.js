@@ -359,7 +359,28 @@
       const cap = Math.max(0, Math.min(this.compressedLimit, ledger.limit - ledger.used - 2 * (rgba + largest * 2) - largest * 2));
       this.compressedCapacity = cap;
       const ordinals = []; let planned = 0;
-      for (let n = 0; n < info.frames.length && planned + info.frames[n].bytes <= cap; n++) { ordinals.push(n); planned += info.frames[n].bytes; }
+      const total = info.frames.reduce((sum, frame) => sum + frame.bytes, 0);
+      const include = ordinal => {
+        if (planned + info.frames[ordinal].bytes <= cap) { ordinals.push(ordinal); planned += info.frames[ordinal].bytes; }
+      };
+      if (total <= cap) {
+        for (let n = 0; n < info.frames.length; n++) include(n);
+      } else {
+        // Partial coverage must not leave one long cold tail. Select both
+        // endpoints, then subdivide the remaining ranges breadth-first under
+        // the same exact byte cap. Oversized images remain normal disk reads.
+        include(0); if (info.frames.length > 1) include(info.frames.length - 1);
+        const ranges = [[1, info.frames.length - 2]];
+        for (let next = 0; next < ranges.length; next++) {
+          const [left, right] = ranges[next]; if (left > right) continue;
+          const middle = Math.ceil((left + right) / 2); include(middle);
+          if (left < middle) ranges.push([left, middle - 1]);
+          if (middle < right) ranges.push([middle + 1, right]);
+        }
+        // Fetch the selected set in source order; selection and byte accounting
+        // stay distributed while avoiding unnecessary scattered disk access.
+        ordinals.sort((a, b) => a - b);
+      }
       for (let n = 0; n < ordinals.length && this._valid(epoch); n += 2) {
         const results = await Promise.allSettled(ordinals.slice(n, n + 2).map(ordinal => this._readCompressed(info, epoch, ordinal)));
         const failure = results.find(result => result.status === 'rejected'); if (failure) throw failure.reason;
