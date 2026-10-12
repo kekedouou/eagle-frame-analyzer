@@ -361,4 +361,6 @@ async function main() {
   });
   console.log('T1 cache: ' + count + ' in-memory safety tests passed; no real cache/media writes.');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
+// Share only the in-memory filesystem and fixtures with lifecycle regressions.
+module.exports = { harness, prepared, SOURCE_SHA };

@@ -1,7 +1,8 @@
 'use strict';
 
-// Formal cache ownership and bounded I/O. T1 deliberately refuses orphaned
-// locks/partials and damaged caches; eviction and recovery belong to T2.
+// Formal cache ownership and bounded I/O, with T2 read-only inventory.
+// Orphaned locks/partials and damaged caches still refuse use; maintenance
+// writes, eviction and recovery require their own guarded transactions.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -436,7 +437,62 @@ function createCache(options = {}) {
     if (!sameFile(lease.markerIdentity, stat) || sha(fs.readFileSync(lease.file)) !== lease.markerSha) fail('占用记录身份已改变；未执行删除。');
     fs.unlinkSync(lease.file); lease.active = false; return true;
   }
-  return Object.freeze({ root, begin, readAsset, release });
+  // Read-only preflight, never a deletion capability or a liveness verdict.
+  // A future maintenance transaction must reacquire exclusion and revalidate.
+  function inventory() {
+    directory(plugin);
+    const base = { root, diskLimitBytes: diskBytes, deletionAuthorized: false, assetHashesVerified: false };
+    if (!fs.existsSync(root)) return frozenCopy({ ...base, exists: false, usedBytes: 0, caches: [], leases: [] });
+    const rootBefore = directory(root); verifyRoot();
+    const names = fs.readdirSync(root).sort(), stamps = new Map();
+    const stamp = stat => JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs]);
+    function capture(file) { stamps.set(file, stamp(regular(file))); }
+    if (names.includes('writer.lock')) { const error = new Error('缓存正在写入或留有未确认写锁，暂不盘点；未修改文件。'); error.code = 'CACHE_BUSY'; throw error; }
+    const caches = [], leases = [];
+    for (const name of names) {
+      const file = path.join(root, name), stat = fs.lstatSync(file);
+      if (stat.isDirectory()) {
+        const match = /^media-([0-9a-f]{64})-([0-9a-f]{12})$/.exec(name);
+        if (!match || match[2] !== recipeId) fail('未知或未完成目录阻止盘点，原件保留。');
+        directory(file); capture(path.join(file, 'owner.json')); capture(path.join(file, 'manifest.json'));
+        const checked = inspectDirectory(file, 'cache', match[1]);
+        for (const leaf of checked.names) if (!stamps.has(path.join(file, leaf))) capture(path.join(file, leaf));
+        caches.push({ directory: file, sourceSha256: match[1], recipe: RECIPE, bytes: checked.totalBytes,
+          assetCount: checked.map.size, leaseCount: 0, protected: false, lastUsedAt: null });
+      } else {
+        capture(file);
+        if (name === 'owner.json') continue;
+        if (!/^lease-[0-9a-f]{24}\.json$/.test(name)) fail('缓存根存在未知文件，停止盘点并保留原件。');
+        const value = readJSON(file);
+        if (value.owner !== OWNER || value.schema !== 1 || value.recipe !== RECIPE || value.root !== root || value.kind !== 'lease' ||
+          value.token !== name.slice(6, -5) || !Number.isSafeInteger(value.pid) || value.pid <= 0 ||
+          typeof value.cacheDir !== 'string' || !path.isAbsolute(value.cacheDir) || !samePath(path.dirname(value.cacheDir), root))
+          fail('占用记录身份不明，停止盘点并保留原件。');
+        leases.push({ file, cacheDir: value.cacheDir, sourceSha256: value.sourceSha256, pid: value.pid, liveness: 'not-checked' });
+      }
+    }
+    for (const lease of leases) {
+      const item = caches.find(value => samePath(value.directory, lease.cacheDir));
+      if (!item || item.sourceSha256 !== lease.sourceSha256) fail('占用记录与完整缓存不匹配，停止盘点。');
+      item.leaseCount++; item.protected = true;
+    }
+    let usedBytes = 0;
+    for (const [file, before] of stamps) {
+      const stat = regular(file); if (stamp(stat) !== before) fail('盘点期间缓存文件已变化，丢弃本次结果。');
+      usedBytes += stat.size;
+      if (!Number.isSafeInteger(usedBytes) || usedBytes > diskBytes) fail('缓存现有容量超过预算。');
+    }
+    for (const item of caches) {
+      const leaves = fs.readdirSync(item.directory).sort(), captured = [...stamps.keys()]
+        .filter(file => samePath(path.dirname(file), item.directory)).map(file => path.basename(file)).sort();
+      if (JSON.stringify(leaves) !== JSON.stringify(captured)) fail('盘点期间缓存目录内容已变化。');
+    }
+    const rootAfter = directory(root); verifyRoot();
+    if (rootBefore.dev !== rootAfter.dev || rootBefore.ino !== rootAfter.ino ||
+      JSON.stringify(names) !== JSON.stringify(fs.readdirSync(root).sort())) fail('盘点期间缓存根已变化，丢弃本次结果。');
+    return frozenCopy({ ...base, exists: true, usedBytes, caches, leases });
+  }
+  return Object.freeze({ root, begin, readAsset, release, inventory });
 }
 
 module.exports = { createCache, OWNER, RECIPE, LIMITS };

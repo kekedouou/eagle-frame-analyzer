@@ -22,7 +22,7 @@
 | 测试与验收协议 | docs/verification.md | R/P 追踪、样本及统一测量；批准的协议不记成运行通过 |
 | 正式开发计划 | docs/development-plan.md | T0～T4 的依赖、关卡、版本节点和迁移；不在此处提前实施 |
 | 当前进度 | docs/progress.md | 当前事实、限制、下一步授权边界 |
-| 各实验与开发关卡报告 | docs/experiments/A、B、S1、T0、T1 | 分别保存范围、真实结果与验收边界 |
+| 各实验与开发关卡报告 | docs/experiments/A、B、S1、T0、T1、T2 | 分别保存范围、真实结果与验收边界 |
 | 日期记录与旧过程 | docs/progress/ | 历史记录保留上下文 |
 | 实验实现 | prototypes/window-player/、playback-clock/ | A/B 与 S1 分开，遵守局部 AGENTS.md |
 | 原始证据、本机配置、合成输入 | 原型内 evidence/、tools-b.json、b-test-fixtures/ | 本机忽略，迁移保留，原始证据不覆写 |
