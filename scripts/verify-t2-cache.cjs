@@ -31,7 +31,7 @@ function files(dir, depth = 0, output = []) {
   return output;
 }
 function codeHashes() {
-  return Object.fromEntries(['plugin/cache.cjs', 'plugin/process-identity.cjs', 'plugin/media.cjs', 'plugin/player.js', 'plugin/session.cjs', 'tests/support/t2-evidence.cjs',
+  return Object.fromEntries(['plugin/cache.cjs', 'plugin/process-identity.cjs', 'plugin/media.cjs', 'plugin/player.js', 'plugin/session.cjs', 'plugin/ui.js', 'tests/support/t2-evidence.cjs',
     'scripts/verify-t2-cache.cjs'].map(file => [file, sha(fs.readFileSync(path.join(repo, file)))]));
 }
 function worker(root, keepChild) {
@@ -221,10 +221,33 @@ async function auditHost(runId) {
     const computed = capture.summarize(s.begin, s.end, { kind: s.kind, delayMs: s.delayMs });
     for (const key of Object.keys(computed)) if (JSON.stringify(computed[key]) !== JSON.stringify(s[key])) throw new Error('Round recomputation mismatch: ' + key);
     if (s.final.expectedFrameId !== s.final.snapshot.playback.frameId || s.final.hint.text !== s.final.hint.expected || !s.final.correct) throw new Error('Final displayed frame/hint mismatch.');
+    let releaseToDraw = null;
+    if (s.kind === 'independent') {
+      const releases = events.filter(e => e.type === 'input' && e.kind === 'release');
+      const ids = new Set(releases.map(e => e.inputId));
+      releaseToDraw = protocol.distribution(events.filter(e => e.type === 'draw' && ids.has(e.inputId)).map(e => e.at - e.inputAt));
+      if (releases.length !== protocol.PROTOCOL.randomTargets || JSON.stringify(releaseToDraw) !== JSON.stringify(s.releaseToDraw))
+        throw new Error('Random release count/statistics mismatch.');
+    }
+    const roundGateMet = s.valid && s.final.correct && (s.kind === 'rapid' ? computed.normalThresholdsMet :
+      releaseToDraw && releaseToDraw.n > 0 && releaseToDraw.p95Ms <= protocol.PROTOCOL.p95Ms);
+    if (!!roundGateMet !== s.roundGateMet) throw new Error('Round gate recomputation mismatch.');
+    const draws = events.filter(e => e.type === 'draw' && e.at >= s.begin && e.at < s.end);
+    const longGaps = draws.slice(1).map((to, i) => ({ from: draws[i], to, ms: to.at - draws[i].at }))
+      .filter(gap => gap.ms > protocol.PROTOCOL.maxGapMs).slice(0, 8).map(gap => {
+        const inside = events.filter(e => e.at > gap.from.at && e.at < gap.to.at);
+        return { fromAt: gap.from.at, toAt: gap.to.at, ms: gap.ms,
+          rafOpportunitiesBetweenDraws: gap.to.rafOpportunity - gap.from.rafOpportunity,
+          inputs: inside.filter(e => e.type === 'input').length,
+          ready: inside.filter(e => e.type === 'ready' && e.phase === 'read-and-image-decode-complete')
+            .map(e => ({ at: e.at, frameId: e.frameId, assetSource: e.assetSource, readMs: e.readMs, decodeMs: e.decodeMs, stillTarget: e.stillTarget })) };
+      });
     rounds.push({ file: record.file, sha256: record.sha256, round: s.round, kind: s.kind, valid: s.valid,
       roundGateMet: s.roundGateMet, submittedUpdatesPerSecond: s.submittedUpdatesPerSecond, longestNoSubmissionMs: s.longestNoSubmissionMs,
-      requestToDraw: s.requestToDraw, terminals: s.terminals, resources: s.resources, diskReads: s.diskReads, compressedReads: s.compressedReads });
+      requestToDraw: s.requestToDraw, releaseToDraw, longGaps, terminals: s.terminals, resources: s.resources, diskReads: s.diskReads, compressedReads: s.compressedReads });
   }
+  if (summary.complete && (rounds.length !== 6 || summary.earlyRegressionPassed !== rounds.every(r => r.roundGateMet)))
+    throw new Error('Complete host gate mismatch.');
   const interrupted = summary.interruptedTrace ? gate.unpack(summary.interruptedTrace) : null;
   const original = summary.source.filePath, before = fs.lstatSync(original);
   if (!before.isFile() || before.isSymbolicLink() || before.size > 2 * 1024 ** 3 || fs.realpathSync(original).toLowerCase() !== original.toLowerCase()) throw new Error('Selected source boundary changed.');
@@ -234,7 +257,7 @@ async function auditHost(runId) {
   const currentSourceMatches = Object.fromEntries(Object.entries(summary.sourceFingerprints).map(([file, expected]) => [file, sha(fs.readFileSync(path.join(repo, 'plugin', file))) === expected]));
   const store = createStore(repo); store.start({ reserveBytes: 128 * 1024 });
   try {
-    const result = store.save('audit', { protocol: 't2-saved-host-audit-v1', runId, receiptSha256: saved.sha256, source: summary.source,
+    const result = store.save('audit', { protocol: 't2-saved-host-audit-v2', runId, receiptSha256: saved.sha256, source: summary.source,
       evidenceIntegrityPassed: true, complete: summary.complete, earlyRegressionPassed: summary.earlyRegressionPassed, error: summary.error || null,
       currentSourceMatches, sourceShaVerified: true, manifestSha256: manifest.manifestSha256, allAssetHashesVerified: false,
       rounds, interruptedTraceEvents: interrupted ? interrupted.length : 0,
@@ -242,7 +265,7 @@ async function auditHost(runId) {
       interruptedInputs: interrupted ? interrupted.filter(e => e.type === 'input').length : 0,
       interruptedLastActivityAt: interrupted ? Math.max(...interrupted.filter(e => e.type !== 'memory').map(e => e.at)) : null,
       finalObservedPlayback: summary.finalSnapshot.playback, existingP03: summary.existingP03,
-      limitation: 'Independent integrity/statistics audit only; a saved failure remains failed. Session telemetry may be stale in this candidate. No actual monitor presentation or new host run.' });
+      limitation: 'Independent integrity/statistics audit only; task counts are saved observations, not proof of actual resource release. Long-gap context lists up to eight internal gaps and does not replace the full-window maximum. No physical monitor presentation or new host run.' });
     console.log(JSON.stringify(result));
   } finally { store.close(); }
 }

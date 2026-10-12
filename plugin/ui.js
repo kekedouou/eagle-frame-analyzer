@@ -29,7 +29,12 @@
     const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'status', 'error', 'retry'];
     const el = Object.fromEntries(ids.map(id => [id, doc.getElementById(id)]));
     if (ids.some(id => !el[id])) throw new Error('播放器界面缺少必要元素。');
-    let session = null, state = { state: 'empty', duration: 0 }, gesture = null, hintEpoch = null, lastRequestedTime = 0;
+    let session = null, state = { state: 'empty', duration: 0 }, gesture = null, hintEpoch = null, hintGeometry = null, lastRequestedTime = 0;
+    const attributes = new Map();
+    const set = (node, key, value) => { if (node[key] !== value) node[key] = value; };
+    function attribute(name, value) {
+      if (attributes.get(name) !== value) { el.timeline.setAttribute(name, value); attributes.set(name, value); }
+    }
     const listeners = [];
     const on = (target, type, handler) => { target.addEventListener(type, handler); listeners.push([target, type, handler]); };
     const interactive = () => !!session && ['paused', 'playing', 'seeking'].includes(state.state);
@@ -38,15 +43,22 @@
     };
     function thumb(time) {
       const ratio = state.duration > 0 ? clamp(time / state.duration) : 0;
-      el.thumb.style.left = ratio * 100 + '%'; el.progress.style.width = ratio * 100 + '%';
+      set(el.thumb.style, 'left', ratio * 100 + '%'); set(el.progress.style, 'width', ratio * 100 + '%');
+    }
+    function measureHint(rect) {
+      // The <=30s time string uses tabular digits of constant width. Measure
+      // on gesture start/resize, not after every DOM write in the seek loop.
+      hintGeometry = { width: (rect || el.timeline.getBoundingClientRect()).width,
+        half: Math.max(35, (el.timeHint.offsetWidth || 80) / 2) };
     }
     function hint(time) {
-      el.timeHint.textContent = formatTime(time);
-      const width = el.timeline.getBoundingClientRect().width, half = Math.max(35, (el.timeHint.offsetWidth || 80) / 2);
+      set(el.timeHint, 'textContent', formatTime(time));
+      if (!hintGeometry) measureHint();
+      const { width, half } = hintGeometry;
       const x = state.duration > 0 ? clamp(time / state.duration) * width : 0;
-      el.timeHint.style.left = Math.max(Math.min(half, width / 2), Math.min(width - half, x)) + 'px';
+      set(el.timeHint.style, 'left', Math.max(Math.min(half, width / 2), Math.min(width - half, x)) + 'px');
     }
-    function clearHint() { hintEpoch = null; el.timeHint.hidden = true; }
+    function clearHint() { hintEpoch = null; hintGeometry = null; set(el.timeHint, 'hidden', true); }
     function clearGesture(hideHint = true) {
       const old = gesture; gesture = null; if (hideHint) clearHint();
       if (old) { try { if (el.timeline.hasPointerCapture(old.id)) el.timeline.releasePointerCapture(old.id); } catch (_) {} }
@@ -68,7 +80,9 @@
       if (!interactive() || gesture || (event.button !== undefined && event.button !== 0)) return;
       event.preventDefault(); gesture = { id: event.pointerId, rect: el.timeline.getBoundingClientRect(), epoch: state.epoch };
       el.timeline.focus(); try { el.timeline.setPointerCapture(event.pointerId); } catch (_) {}
-      hintEpoch = state.epoch; el.timeHint.hidden = false; hint(state.playback ? state.playback.time : 0); requestAt(event, false, inputAt);
+      hintEpoch = state.epoch; set(el.timeHint, 'hidden', false);
+      set(el.timeHint, 'textContent', formatTime(state.playback ? state.playback.time : 0));
+      measureHint(gesture.rect); hint(state.playback ? state.playback.time : 0); requestAt(event, false, inputAt);
     });
     // Capture loss does not end a physical drag: window moves/up still own it.
     on(el.timeline, 'lostpointercapture', () => {});
@@ -79,7 +93,10 @@
       if (interactive()) requestAt(event, false, inputAt);
     });
     on(win, 'pointerup', end); on(win, 'pointercancel', end); on(win, 'blur', () => end(null));
-    on(win, 'resize', () => { if (gesture) gesture.rect = el.timeline.getBoundingClientRect(); hint(state.playback ? state.playback.time : 0); });
+    on(win, 'resize', () => {
+      if (gesture) gesture.rect = el.timeline.getBoundingClientRect();
+      if (hintEpoch !== null) { measureHint(gesture && gesture.rect); hint(state.playback ? state.playback.time : 0); }
+    });
     on(el.play, 'click', () => { if (session && !gesture) { clearHint(); invoke(() => session.toggle()); } });
     on(el.previous, 'click', () => { if (interactive()) { clearHint(); invoke(() => session.step(-1)); } });
     on(el.next, 'click', () => { if (interactive()) { clearHint(); invoke(() => session.step(1)); } });
@@ -97,23 +114,21 @@
       if (gesture && (gesture.epoch !== state.epoch || !interactive())) clearGesture();
       if (hintEpoch !== null && (hintEpoch !== state.epoch || !interactive() || state.state === 'playing')) clearHint();
       const ready = interactive(), time = state.playback && Number.isFinite(state.playback.time) ? state.playback.time : 0;
-      el.play.disabled = !session || !['paused', 'playing'].includes(state.state);
-      el.previous.disabled = el.next.disabled = !ready;
-      el.play.textContent = state.state === 'playing' ? '暂停' : '播放';
-      el.timeline.setAttribute('aria-disabled', String(!ready));
-      el.timeline.setAttribute('aria-valuemax', String(state.duration || 0));
-      el.timeline.setAttribute('aria-valuenow', String(time));
-      el.timeline.setAttribute('aria-valuetext', formatTime(time));
-      el.currentTime.textContent = formatTime(time); el.duration.textContent = formatTime(state.duration);
-      el.sourceName.textContent = state.source ? state.source.name : '未载入视频';
+      set(el.play, 'disabled', !session || !['paused', 'playing'].includes(state.state));
+      set(el.previous, 'disabled', !ready); set(el.next, 'disabled', !ready);
+      set(el.play, 'textContent', state.state === 'playing' ? '暂停' : '播放');
+      attribute('aria-disabled', String(!ready)); attribute('aria-valuemax', String(state.duration || 0));
+      attribute('aria-valuenow', String(time)); attribute('aria-valuetext', formatTime(time));
+      set(el.currentTime, 'textContent', formatTime(time)); set(el.duration, 'textContent', formatTime(state.duration));
+      set(el.sourceName, 'textContent', state.source ? state.source.name : '未载入视频');
       const messages = { empty: '等待素材', preparing: '正在准备视频', paused: '已暂停', playing: '播放中', seeking: '正在定位', error: '无法继续', closed: '已关闭' };
       const progress = state.progress && Number.isSafeInteger(state.progress.frames) ? '（' + state.progress.frames + ' 帧）' : '';
       const emptyMessage = state.state === 'empty' && state.progress && state.progress.message;
-      el.status.textContent = emptyMessage || (messages[state.state] || '等待素材') + (state.state === 'preparing' ? progress : '');
-      el.error.hidden = !state.error; el.error.textContent = state.error ? state.error.message : '';
-      el.retry.hidden = !session || state.state !== 'error';
-      el.notice.hidden = ready || !!(state.playback && Number.isSafeInteger(state.playback.frameId));
-      el.notice.textContent = emptyMessage || (state.state === 'preparing' ? '正在准备视频…' : state.state === 'error' ? '视频未就绪' : '在 Eagle 中单选 MP4 后打开插件');
+      set(el.status, 'textContent', emptyMessage || (messages[state.state] || '等待素材') + (state.state === 'preparing' ? progress : ''));
+      set(el.error, 'hidden', !state.error); set(el.error, 'textContent', state.error ? state.error.message : '');
+      set(el.retry, 'hidden', !session || state.state !== 'error');
+      set(el.notice, 'hidden', ready || !!(state.playback && Number.isSafeInteger(state.playback.frameId)));
+      set(el.notice, 'textContent', emptyMessage || (state.state === 'preparing' ? '正在准备视频…' : state.state === 'error' ? '视频未就绪' : '在 Eagle 中单选 MP4 后打开插件'));
       if (!gesture) thumb(time);
       if (hintEpoch !== null) hint(time); // Includes final release settlement; only actual submitted frame time.
     }

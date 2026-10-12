@@ -138,4 +138,35 @@ test('Library-change empty state tells the user to call the plugin again', () =>
   assert.strictEqual(h.el('notice').textContent, '素材库已变化，请重新调用插件。');
   assert(!h.el('notice').hidden); assert(h.el('timeHint').hidden); assert(h.el('play').disabled); h.ui.destroy();
 });
+test('Continuous hint updates do not repeatedly force layout; resize and new gestures remeasure', () => {
+  const h = harness(); let rectangles = 0, widths = 0, trackWidth = 200;
+  h.el('timeline').getBoundingClientRect = () => { rectangles++; return { left: 100, width: trackWidth }; };
+  Object.defineProperty(h.el('timeHint'), 'offsetWidth', { get() { widths++; return 80; } });
+  h.el('timeline').fire('pointerdown', { clientX: 200 });
+  const afterDown = { rectangles, widths };
+  for (let i = 0; i < 120; i++) {
+    h.win.fire('pointermove', { clientX: 200 + i / 10 });
+    h.ui.update({ ...h.state, state: i % 2 ? 'seeking' : 'paused', playback: { time: i / 60, frameId: i } });
+  }
+  assert.equal(rectangles, afterDown.rectangles, 'No layout measurement inside the input/draw loop.');
+  assert.equal(widths, afterDown.widths);
+  trackWidth = 400; h.win.fire('resize');
+  assert(rectangles > afterDown.rectangles && widths > afterDown.widths);
+  h.ui.update({ ...h.state, playback: { time: 9.9, frameId: 594 } });
+  assert.equal(h.el('timeHint').style.left, '360px');
+  h.win.fire('pointerup', { clientX: 500, buttons: 0 });
+  const afterResize = rectangles; trackWidth = 300; h.el('timeline').fire('pointerdown');
+  assert(rectangles > afterResize); h.ui.destroy();
+});
+test('Identical observations do not rewrite static material text or ARIA attributes', () => {
+  const h = harness(); let textWrites = 0, attributes = 0, sourceName = h.el('sourceName').textContent;
+  Object.defineProperty(h.el('sourceName'), 'textContent', { get() { return sourceName; }, set(value) { textWrites++; sourceName = value; } });
+  const set = h.el('timeline').setAttribute;
+  h.el('timeline').setAttribute = function(name, value) { attributes++; set.call(this, name, value); };
+  for (let i = 0; i < 120; i++) h.ui.update({ ...h.state });
+  assert.equal(textWrites, 0); assert.equal(attributes, 0);
+  h.ui.update({ ...h.state, source: { name: '另一视频' }, playback: { time: 3, frameId: 180 } });
+  assert.equal(textWrites, 1); assert.equal(sourceName, '另一视频'); assert.equal(attributes, 2);
+  h.ui.destroy();
+});
 console.log('T1 UI: ' + checks + ' in-memory checks passed; real layout/input experience not tested.');

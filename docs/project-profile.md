@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1限定关卡通过；T2额外UE素材真实回归未通过，已定向修复只读资源快照和部分预读分布，本地/独立Chrome验证完成，真实修正版待复验，见[当前候选](progress.md#阶段-4-t2宿主回归失败与修复)。T2未整体验收。
+- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1限定关卡通过；T2第二次UE真实回归完整但首轮117.8ms停顿仍失败，当前减少UI重复写入/布局读取，14组UI模型及独立Chrome回归通过，Eagle修正版待验，见[当前候选](progress.md#阶段-4-t2第二次宿主复验与界面优化)。T2未整体验收。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
