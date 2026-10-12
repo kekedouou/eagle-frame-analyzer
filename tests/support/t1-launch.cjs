@@ -55,6 +55,7 @@ function install(options) {
         throw new Error('SDK提供的验证插件目录与准备记录不符。');
       safeToRecord = true;
       context = { kind: 'real-Eagle-formal-code-independent-entry', sdkPluginRoot: prepared.host,
+        entryScheme: options.entryScheme || 'unspecified',
         mappedFormalRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
         boundary: 'Real SDK/media/cache/UI/player; test entry maps create.path only. Not the formal manifest startup.', sdkCallbackAt: callbackAt };
       state = 'preparing';

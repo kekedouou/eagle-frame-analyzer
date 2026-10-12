@@ -60,9 +60,32 @@ function fileTests() {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/t1/bootstrap.js'), 'utf8'), { URL, window: win, document: {}, eagle: {},
     require(name) { return name.endsWith('t1-launch.cjs') ? { install(options) { installed = options; return {}; } } : require(name); } });
   assert.strictEqual(installed.hostRoot, m.host); assert(win.EVAT1Automatic);
-  assert.throws(() => vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/t1/bootstrap.js'), 'utf8'),
-    { URL, window: { location: { href: 'https://invalid.test' } }, require }), /本地文件/);
-  ok('bootstrap strips query/hash before fileURLToPath and rejects non-file scheme');
+  installed = null;
+  const eagleUrl = pathToFileURL(path.join(m.host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAT1AUTO20261012/') + '?theme=DARK&locale=zh_CN#test';
+  const eagleWin = { location: { href: eagleUrl } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/t1/bootstrap.js'), 'utf8'), { URL, window: eagleWin, document: {}, eagle: {},
+    require(name) { return name.endsWith('t1-launch.cjs') ? { install(options) { installed = options; return {}; } } : require(name); } });
+  assert.strictEqual(installed.hostRoot, m.host); assert.strictEqual(installed.entryScheme, 'eagleplugin:'); assert(eagleWin.EVAT1Automatic);
+  ok('Windows Eagle main-process eagleplugin URL reaches the test launcher with Chinese/space paths');
+  for (const address of ['https://invalid.test', 'eagleplugin://id/remote/path']) {
+    const failedWin = { location: { href: address } }, nodes = { error: { hidden: true }, status: {}, notice: {} };
+    let registered = false; const sdk = { onPluginCreate() { registered = true; } }, original = sdk.onPluginCreate;
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/t1/bootstrap.js'), 'utf8'),
+      { URL, window: failedWin, document: { getElementById: id => nodes[id] }, eagle: sdk, require });
+    sdk.onPluginCreate(() => { throw new Error('product must not start'); });
+    assert.strictEqual(registered, false); assert.strictEqual(sdk.onPluginCreate, original);
+    assert(!failedWin.EVAT1Automatic); assert.strictEqual(nodes.error.hidden, false); assert(/未开始测量/.test(nodes.error.textContent));
+  }
+  ok('remote/invalid addresses visibly fail and block product startup against the test directory');
+  const missing = { location: { href: eagleUrl } }, missingNodes = { error: { hidden: true } };
+  let wronglyRegistered = false;
+  const missingSdk = { onPluginCreate() { wronglyRegistered = true; } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/t1/bootstrap.js'), 'utf8'),
+    { URL, window: missing, document: { getElementById: id => missingNodes[id] }, eagle: missingSdk,
+      require(name) { if (name.endsWith('t1-launch.cjs')) throw new Error('controlled launcher module failure'); return require(name); } });
+  missingSdk.onPluginCreate(() => {}); assert.strictEqual(wronglyRegistered, false);
+  assert(/launcher module failure/.test(missingNodes.error.textContent));
+  ok('launcher module failure preserves the original error without secondary product module loading');
 }
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function launchModel(settings = {}) {
@@ -86,7 +109,13 @@ function launchModel(settings = {}) {
       save(kind, value) { if (settings.saveFailure) throw new Error('controlled evidence full');
         saved.push({ kind, value }); return { file: 'memory-failure' }; }, close() { storeCloses++; } }; }
   };
-  const controller = install(options);
+  let controller;
+  if (settings.bootstrap) {
+    win.location = { href: pathToFileURL(path.join(host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAT1AUTO20261012/') + '?theme=DARK&locale=zh_CN' };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/t1/bootstrap.js'), 'utf8'), { URL, window: win, document: doc, eagle,
+      require(name) { return name.endsWith('t1-launch.cjs') ? { install: input => install({ ...options, ...input }) } : require(name); } });
+    controller = win.EVAT1Automatic; assert(controller);
+  } else controller = install(options);
   eagle.onPluginCreate(async value => { preparedCalls++; assert.strictEqual(value.path, plugin); assert.strictEqual(value.extra, 'unchanged');
     if (settings.prepare) await settings.prepare.promise; clock += 100; });
   assert.strictEqual(eagle.onPluginCreate, register);
@@ -101,10 +130,11 @@ function launchModel(settings = {}) {
 }
 const tick = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 async function launchTests() {
-  const m = launchModel(), done = m.launch(); await tick();
+  const m = launchModel({ bootstrap: true }), done = m.launch(); await tick();
   assert.strictEqual(m.counts().driverCalls, 1); assert.strictEqual(m.controller.snapshot().state, 'measuring');
   const args = m.options.lastDriver;
   assert.strictEqual(args.bridge, m.win.EVADiagnostics); assert.strictEqual(args.pluginRoot, m.plugin);
+  assert.strictEqual(args.launchContext.entryScheme, 'eagleplugin:');
   assert.strictEqual(args.launchContext.callbackToReadyMs, 102); assert.strictEqual(args.launchContext.appEntryToReadyMs, 100);
   assert.strictEqual(args.launchContext.sdkPluginRoot, m.host); args.verifyLaunch();
   assert.strictEqual(m.launch(), done); // Duplicate SDK create cannot start another measurement.
