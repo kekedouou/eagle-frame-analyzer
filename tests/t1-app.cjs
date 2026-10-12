@@ -3,12 +3,12 @@ const fs = require('fs'), path = require('path'), vm = require('vm'), assert = r
 const code = fs.readFileSync(path.join(__dirname, '../plugin/app.js'), 'utf8');
 function harness(settings = {}) {
   const hooks = {}, log = [], updates = [], root = path.resolve(__dirname, '../plugin'), discoveries = [];
-  let config, discovered = 0, prepared = 0, closed = 0, destroyed = 0;
+  let config, discovered = 0, prepared = 0, closed = 0, destroyed = 0, windowDestroyed = false, closeAttempts = 0;
   const ui = { canvas: {}, bindSession() {}, update(value) { updates.push(value); }, destroy() { destroyed++; } };
   const session = {
     loadSelected(options) { log.push({ type: 'selected', options }); return Promise.resolve(); },
     libraryChanged() { log.push({ type: 'library' }); return Promise.resolve(); },
-    close() { closed++; return Promise.resolve(); },
+    close() { closed++; return settings.closeSession ? settings.closeSession() : Promise.resolve(); },
     snapshot() { return { epoch: 3, libraryEpoch: 1, sourceIdentity: { itemId: 'fixed', sha256: 'a'.repeat(64) } }; }
   };
   const adapter = {
@@ -24,12 +24,25 @@ function harness(settings = {}) {
     'frame-index.cjs': {}
   };
   const eagle = Object.fromEntries(['onPluginCreate', 'onPluginRun', 'onLibraryChanged', 'onPluginBeforeExit'].map(name => [name, callback => { hooks[name] = callback; }]));
-  const win = { EVAUI: { createUI: () => ui }, EVAPlayer: { Player: function (options) { this.options = options; } }, addEventListener(type, fn) { hooks[type] = fn; } };
+  function requestClose() {
+    closeAttempts++;
+    // Like Eagle main + plugin IPC: invoke the callback without awaiting it.
+    if (hooks.onPluginBeforeExit) hooks.onPluginBeforeExit();
+    const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    if (hooks.beforeunload) hooks.beforeunload(event);
+    if (!event.defaultPrevented && event.returnValue === undefined) {
+      windowDestroyed = true; if (hooks.pagehide) hooks.pagehide();
+    }
+    return event;
+  }
+  const win = { EVAUI: { createUI: () => ui }, EVAPlayer: { Player: function (options) { this.options = options; } },
+    close: requestClose, addEventListener(type, fn) { hooks[type] = fn; } };
   vm.runInNewContext(code, { window: win, eagle, performance: { now: () => 100 }, require(name) {
     if (name === 'path') return path; if (name === 'fs') return { realpathSync: file => file };
     assert.strictEqual(path.dirname(name), root); assert(modules[path.basename(name)], name); return modules[path.basename(name)];
   }, Promise });
-  return { hooks, log, updates, root, ui, discoveries, win, get config() { return config; },
+  return { hooks, log, updates, root, ui, discoveries, win, requestClose,
+    windowState: () => ({ destroyed: windowDestroyed, attempts: closeAttempts }), get config() { return config; },
     counts: () => ({ discovered, prepared, closed, destroyed }) };
 }
 async function bounded(pending) {
@@ -39,6 +52,34 @@ async function bounded(pending) {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function main() {
+  {
+    let finish;
+    const cleanup = new Promise(resolve => { finish = resolve; });
+    const h = harness({ closeSession: () => cleanup }); await h.hooks.onPluginCreate({ path: h.root });
+    const event = h.requestClose();
+    assert.strictEqual(event.returnValue, false, 'Native close must be blocked synchronously even when Eagle ignores the cleanup promise');
+    assert.strictEqual(h.windowState().destroyed, false, 'Renderer must stay alive until cleanup really settles');
+    h.requestClose(); await tick(); assert.strictEqual(h.counts().closed, 1); assert.strictEqual(h.counts().destroyed, 1);
+    assert.strictEqual(h.windowState().destroyed, false);
+    finish({ status: 'closed' }); await tick();
+    assert.strictEqual(h.windowState().destroyed, true); assert.strictEqual(h.windowState().attempts, 3);
+    assert.strictEqual(h.counts().closed, 1);
+    const after = {}; h.hooks.beforeunload(after); assert.strictEqual(after.returnValue, undefined, 'Final native close is allowed without another cleanup loop');
+    console.log('T1 app: nonawaiting Eagle close waits for cleanup then closes once passed');
+  }
+  for (const rejected of [false, true]) {
+    let finish, reject;
+    const cleanup = new Promise((resolve, fail) => { finish = resolve; reject = fail; });
+    const h = harness({ closeSession: () => cleanup }); await h.hooks.onPluginCreate({ path: h.root });
+    h.requestClose();
+    if (rejected) reject(new Error('cleanup failure'));
+    else finish({ status: 'error', error: { message: 'lease release failure' } });
+    await tick(); assert.strictEqual(h.windowState().destroyed, false);
+    assert.strictEqual(h.updates.at(-1).state, 'closed'); assert.match(h.updates.at(-1).error.message, /关闭清理失败/);
+    h.requestClose(); await tick(); assert.strictEqual(h.windowState().destroyed, false);
+    assert.strictEqual(h.counts().closed, 1);
+    console.log('T1 app: cleanup ' + (rejected ? 'rejection' : 'error result') + ' cannot destroy the renderer or retry cleanup silently passed');
+  }
   const h = harness();
   await h.hooks.onPluginCreate({ path: h.root });
   assert.strictEqual(h.log[0].type, 'selected'); assert.strictEqual(h.log[0].options.startedAt, 100);

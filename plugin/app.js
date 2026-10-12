@@ -4,6 +4,7 @@
   const path = require('path'), fs = require('fs');
   const ui = window.EVAUI.createUI();
   let session = null, diagnostics = null, initializing = false, closed = false;
+  let closeTask = null, allowUnload = false, exitScheduled = false;
   const now = () => performance.now();
   const startupError = error => ui.update({ state: 'error', source: null, duration: 0, playback: null, error: { message: String(error && error.message || error) } });
   function cancelled() { const error = new Error('视频准备已取消。'); error.name = 'AbortError'; error.code = 'PREPARATION_CANCELLED'; return error; }
@@ -68,16 +69,37 @@
     finally { initializing = false; }
   }
   function close() {
-    if (closed) return;
+    if (closeTask) return closeTask;
     closed = true;
-    const result = session ? session.close() : Promise.resolve();
-    ui.destroy(); return result;
+    try { closeTask = Promise.resolve(session ? session.close() : null); }
+    catch (error) { closeTask = Promise.reject(error); }
+    closeTask.catch(() => {});
+    ui.destroy(); return closeTask;
+  }
+  function beforeUnload(event) {
+    if (allowUnload) return;
+    // Eagle's exit notification does not await our Promise. Keep this renderer
+    // alive so media can stop/wait for children and streams, abort its own
+    // partial and release writer/leases before allowing the actual close.
+    event.returnValue = false;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (exitScheduled) return;
+    exitScheduled = true;
+    close().then(result => {
+      if (result && result.status === 'error') throw new Error(result.error && result.error.message || '资源释放未完成');
+      allowUnload = true; window.close();
+    }).catch(error => {
+      allowUnload = false; exitScheduled = false;
+      ui.update({ state: 'closed', source: null, duration: 0, playback: null,
+        error: { message: '关闭清理失败，窗口暂未关闭：' + String(error && error.message || error).slice(0, 1024) } });
+    });
   }
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);
     if (typeof eagle.onPluginRun === 'function') eagle.onPluginRun(() => session && !closed ? loadSelected({ startedAt: now(), trigger: 'plugin-run' }).catch(() => {}) : undefined);
     if (typeof eagle.onLibraryChanged === 'function') eagle.onLibraryChanged(() => session && !closed ? session.libraryChanged().catch(startupError) : undefined);
     if (typeof eagle.onPluginBeforeExit === 'function') eagle.onPluginBeforeExit(close);
+    window.addEventListener('beforeunload', beforeUnload);
     window.addEventListener('pagehide', close);
   } else startupError(new Error('请从 Eagle 打开视频分析插件。'));
 })();
