@@ -1,6 +1,6 @@
 # Eagle 视频分析
 
-一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B、3C 已结束，工程文档节点为 phase3c-approved。用户已整体授权阶段 4，并于2026-10-12恢复开发；T0本轮技术关卡已通过。T1预缓存关窗修复获用户人工确认，完整缓存关窗及后段快拖又发现问题；本轮已定向修正并完成本地回归，仍待Eagle体验反馈，尚未通过T1验收，见[当前进度](docs/progress.md#阶段-4-t1恢复开发)。
+一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B、3C 已结束，工程文档节点为 phase3c-approved。用户已整体授权阶段4；T0限定关卡通过，2026-10-12用户确认T1阶段体验通过并授权收尾。体验认可节点为`phase4-t1-experience-approved`，正式Eagle性能/完整就绪耗时量化仍待补，不能当作全项技术验收通过。T2按用户要求暂不启动，见[当前收尾与遗留](docs/progress.md#阶段-4-t1用户体验验收与收尾)。
 
 T0完整复验及独立源帧参考已核对，本轮技术关卡通过，正按阶段4授权进入T1正式入口。4K H.264正常三轮约79～81次画布提交/秒、最长49ms、已提交请求P95约9ms；首次准备三轮约22秒，低于24.85秒媒体时长。保持720p、512MiB内最多64MiB压缩JPEG池、仅rAF提交。人为慢处理压力仍有约1秒停顿，不宣称全部素材/正式UI/长期性能通过；真实窗口操作来源为用户。[结果与限制](docs/experiments/T0/report.md#完整复验核对与独立源帧收尾)。T0入口保留为 `tests/host/t0/manifest.json`，无需重跑。
 
@@ -20,15 +20,15 @@ S1 原型入口为 `prototypes/playback-clock/manifest.json`，可显式读取 E
 - [技术架构](docs/architecture.md)：已批准方案、模块/数据流、风险，以及保留的原型说明。
 - [当前进度](docs/progress.md)：当前状态、验收限制及下一步边界。
 - [测试与验收协议](docs/verification.md)：R/P 追踪、样本、性能测量和异常安全验证。
-- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；T1本地链路已验证，等待必要宿主关卡。
-- [T1 正式窗口报告](docs/experiments/T1/report.md)：本地真实媒体结果、环境与测量限制，以及待执行的 Eagle 人工步骤。
+- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；T1体验已确认，宿主量化遗留保持。
+- [T1 正式窗口报告](docs/experiments/T1/report.md)：人工体验验收、既有媒体/性能证据、量化遗留及收尾边界。
 - 实验 A：[说明](docs/experiments/A/plan.md) / [报告](docs/experiments/A/report.md)。
 - 实验 B：[说明](docs/experiments/B/plan.md) / [报告](docs/experiments/B/report.md)。
 - [目录迁移与简要复盘](docs/progress/2026-10-10-repository-reorganization.md)：旧位置映射、验证结果、正确流程与修正原因。
 
 ## 打开正式开发入口
 
-本轮 T1 入口是 `plugin/manifest.json`，在 Eagle 中以本地开发项目加载；当前尚待真实宿主验收。单选 MP4 后打开插件会自动准备，首帧就绪暂停；改选另一素材后再次调用插件入口切换。界面没有性能测试按钮，取证步骤见 [T1 报告](docs/experiments/T1/report.md#真实-eagle-关卡待执行)。T2 自动清理、T3 标注尚未实现，不将此开发候选视为完整 MVP。
+本轮 T1 入口是 `plugin/manifest.json`，在 Eagle 中以本地开发项目加载；用户已确认本阶段体验通过，技术量化范围见[T1报告](docs/experiments/T1/report.md#t1-用户体验验收与收尾)。单选MP4后自动准备，首帧就绪暂停；改选另一素材后再次调用插件入口切换。界面没有性能测试按钮，不要求用户输入调试命令。T2自动清理、T3标注尚未实现，不将此体验节点视为完整MVP。
 
 ## 打开历史原型
 
