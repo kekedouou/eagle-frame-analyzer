@@ -451,6 +451,37 @@ async function run() {
     await h.load(sample('second')); assert.equal(h.player.snapshot().compressed.warmedBytes, 30);
     assert.equal(h.reads.get('second:f0.jpg'), 1); assert.equal(h.player.snapshot().frameId, 0); await h.close();
   });
+  await check('late frames enter the bounded compressed pool and survive decoded eviction', async () => {
+    const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 40, ramBytes: 310000 });
+    await h.load(sample('late', null, 60));
+    // Alternate direction to avoid motion prediction; keep the drag active so
+    // paused neighbour prefetch does not change which four frames are visited.
+    for (const ordinal of [50, 53, 51, 54, 50]) {
+      assert.equal((await h.settle(h.player.seek(ordinal / 10, { kind: 'drag' }))).frameId, ordinal);
+      assert(h.player.snapshot().compressed.residentBytes <= 40);
+      assert(h.player.snapshot().cachePeakBytes <= 310000);
+    }
+    assert(h.closed.includes(50), 'The second visit must really require another JPEG decode');
+    assert.equal(h.reads.get('late:f50.jpg'), 1, 'A late disk frame must remain usable from the compressed pool');
+    await h.load(sample('replacement', null, 60));
+    assert.equal(h.player.snapshot().compressed.residentBytes, 40);
+    await h.close(); assert.equal(h.player.snapshot().cacheBytes, 0);
+  });
+  await check('a completed obsolete late read remains reusable without entering the decoder', async () => {
+    const gate = deferred(); gate.file = 'f50.jpg';
+    const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 40, ramBytes: 310000, readGate: gate });
+    await h.load(sample('superseded-read', null, 60));
+    const obsolete = h.player.seek(5, { kind: 'drag' }); await flush();
+    await h.settle(h.player.seek(5.3, { kind: 'drag' })); gate.resolve(); await flush();
+    assert.equal((await obsolete).status, 'superseded');
+    assert.equal(h.events.filter(event => event.type === 'ready' && event.frameId === 50).length, 0,
+      'Obsolete disk reads must not enter the image decoder or draw');
+    assert.equal((await h.settle(h.player.seek(5, { kind: 'drag' }))).frameId, 50);
+    assert.equal(h.reads.get('superseded-read:f50.jpg'), 1, 'Fast changing targets must not repeatedly discard completed JPEG reads');
+    assert(h.player.snapshot().compressed.residentBytes <= 40);
+    assert(h.player.snapshot().cachePeakBytes <= 310000); await h.close();
+    assert.equal(h.player.snapshot().cacheBytes, 0);
+  });
   await check('compressed warm cancellation holds real reads and reservations until exit; no next-source overlap', async () => {
     const gate = deferred(); gate.file = 'f0.jpg'; const h = harness({ experimentMode: 'compressed-ram', readGate: gate });
     const old = h.player.load(sample('old')); await flush(); assert.equal(h.player.snapshot().activeImageTasks, 1);

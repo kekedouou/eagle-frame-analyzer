@@ -77,7 +77,8 @@
       this.compressedLimit = options.compressedRamBytes === undefined ? 64 * 1024 ** 2 : options.compressedRamBytes;
       if (!Number.isSafeInteger(this.compressedLimit) || this.compressedLimit < 0 || this.compressedLimit > 64 * 1024 ** 2) throw new Error('压缩图像池不得超过64MiB。');
       this.observeCanvas = !!options.observeCanvas;
-      this.compressed = new Map(); this.compressedStats = { warmedBytes: 0, warmedFrames: 0, hits: 0, misses: 0, warmMs: 0 };
+      this.compressed = new Map(); this.compressedBytes = 0; this.compressedCapacity = 0;
+      this.compressedStats = { warmedBytes: 0, warmedFrames: 0, hits: 0, misses: 0, warmMs: 0, admittedFrames: 0, evictions: 0 };
       this.inRaf = false; this.lastSubmissionRaf = -1; this.submissionSerial = 0; this.lastSubmission = null;
       this.observedSerial = 0; this.observedFrame = null;
       this.info = null; this.state = 'empty'; this.epoch = 0; this.playToken = 0; this.requestId = 0;
@@ -131,7 +132,7 @@
       if (this.disposed) throw new Error('播放器已释放。');
       const oldLoads = Array.from(this.loads), oldTasks = Array.from(this.tasks.values()).map(task => task.promise);
       const epoch = ++this.epoch; this.state = 'loading'; this._halt(false); this._clearTarget('material-switch'); this._clearCache(); this._clearCompressed();
-      this.compressedStats = { warmedBytes: 0, warmedFrames: 0, hits: 0, misses: 0, warmMs: 0 };
+      this.compressedStats = { warmedBytes: 0, warmedFrames: 0, hits: 0, misses: 0, warmMs: 0, admittedFrames: 0, evictions: 0 };
       this.lastSubmission = null; this.observedSerial = this.submissionSerial; this.observedFrame = null;
       const oldContext = this.audioContext; this.audioContext = null; this.audioBuffer = null;
       this.budget.release(this.audioBudget); this.audioBudget = null; this.info = null;
@@ -322,13 +323,33 @@
       }
       if (!victim) {
         const compressed = this.compressed.entries().next(); if (compressed.done) return false;
-        const [ordinal, entry] = compressed.value; this.compressed.delete(ordinal); this.budget.release(entry.budget); return true;
+        this._dropCompressed(compressed.value[0]); return true;
       }
       this.cache.delete(victim.index); this._closeEntry(victim);
       this._emit('cache', { phase: 'evict', frameId: victim.id, budgetBytes: this.budget.used }); return true;
     }
     _clearCache() { for (const entry of this.cache.values()) this._closeEntry(entry); this.cache.clear(); }
-    _clearCompressed() { for (const entry of this.compressed.values()) this.budget.release(entry.budget); this.compressed.clear(); }
+    _dropCompressed(ordinal) {
+      const entry = this.compressed.get(ordinal); if (!entry) return;
+      this.compressed.delete(ordinal); this.compressedBytes -= entry.bytes.byteLength; this.budget.release(entry.budget);
+      this.compressedStats.evictions++;
+    }
+    _clearCompressed() {
+      for (const entry of this.compressed.values()) this.budget.release(entry.budget);
+      this.compressed.clear(); this.compressedBytes = 0; this.compressedCapacity = 0;
+    }
+    _rememberCompressed(ordinal, bytes) {
+      if (this.experimentMode !== 'compressed-ram' || this.compressed.has(ordinal) || bytes.byteLength > this.compressedCapacity) return;
+      while (this.compressedBytes + bytes.byteLength > this.compressedCapacity) {
+        const oldest = this.compressed.keys().next(); if (oldest.done) return;
+        this._dropCompressed(oldest.value);
+      }
+      // The completed read's reservation was released, or the finished
+      // decoder's reservation shrank. Retain one JPEG in that same ledger.
+      const token = this.budget.reserve(bytes.byteLength, 'compressed-jpeg');
+      this.compressed.set(ordinal, { bytes, budget: token }); this.compressedBytes += bytes.byteLength;
+      this.compressedStats.admittedFrames++;
+    }
     async _warmCompressed(info, epoch) {
       const began = this.env.now(), rgba = info.width * info.height * 4;
       const largest = info.frames.reduce((maximum, frame) => Math.max(maximum, frame.bytes), 0);
@@ -336,6 +357,7 @@
       // two warm reads. This pool competes with RGBA inside the same ledger.
       const ledger = this.budget.snapshot();
       const cap = Math.max(0, Math.min(this.compressedLimit, ledger.limit - ledger.used - 2 * (rgba + largest * 2) - largest * 2));
+      this.compressedCapacity = cap;
       const ordinals = []; let planned = 0;
       for (let n = 0; n < info.frames.length && planned + info.frames[n].bytes <= cap; n++) { ordinals.push(n); planned += info.frames[n].bytes; }
       for (let n = 0; n < ordinals.length && this._valid(epoch); n += 2) {
@@ -360,7 +382,7 @@
           if (!this._valid(epoch)) return;
           if (!bytes || bytes.byteLength !== frame.bytes) throw new Error('压缩预读长度与清单不符。');
           this.budget.shrink(reservation, frame.bytes, 'compressed-jpeg');
-          this.compressed.set(ordinal, { bytes, budget: reservation }); transferred = true;
+          this.compressed.set(ordinal, { bytes, budget: reservation }); this.compressedBytes += bytes.byteLength; transferred = true;
           this.compressedStats.warmedBytes += frame.bytes; this.compressedStats.warmedFrames++;
         } finally {
           if (!transferred) this.budget.release(reservation);
@@ -407,14 +429,25 @@
           reservation = this.budget.reserve(rgba + frame.bytes * 2, 'frame-inflight', () => this._evict());
           const readStartedAt = this.env.now();
           const compressed = this.compressed.get(ordinal);
+          if (compressed) { this.compressed.delete(ordinal); this.compressed.set(ordinal, compressed); }
           const bytes = compressed ? compressed.bytes : await this.readAsset(info, frame.file);
           const readEndedAt = this.env.now();
           if (!bytes || bytes.byteLength !== frame.bytes) throw new Error('JPEG资源长度与清单不符。');
           if (!this._valid(epoch)) return null;
           if (this.experimentMode === 'compressed-ram') this.compressedStats[compressed ? 'hits' : 'misses']++;
-          // Obsolete foreground reads need not turn into another expensive decode.
-          if (role === 'target' && (!this.target || this.target.index !== ordinal)) return null;
-          if (role === 'drag-ahead' && (!this.target || this.target.index !== ordinal && this.target.predictedIndex !== ordinal)) return null;
+          // A fast drag may supersede a completed disk read before decoding.
+          // Keep its verified JPEG for the next visit instead of repeatedly
+          // paying I/O. No decoder has started; transfer the finished read's
+          // reservation to the bounded pool synchronously, without an await.
+          const obsoleteRead = role === 'target' && (!this.target || this.target.index !== ordinal) ||
+            role === 'drag-ahead' && (!this.target || this.target.index !== ordinal && this.target.predictedIndex !== ordinal);
+          if (obsoleteRead) {
+            if (!compressed && this.experimentMode === 'compressed-ram') {
+              this.budget.release(reservation); reservation = null;
+              this._rememberCompressed(ordinal, bytes);
+            }
+            return null;
+          }
           const delay = this.decodeDelayMs, decodeStartedAt = this.env.now();
           bitmap = await this.env.decodeImage(bytes);
           const decodeEndedAt = this.env.now();
@@ -424,6 +457,7 @@
           if (!this._valid(epoch)) return null;
           if (!bitmap || bitmap.width !== info.width || bitmap.height !== info.height) throw new Error('JPEG解码尺寸与索引不符。');
           this.budget.shrink(reservation, rgba, 'decoded-frame');
+          if (!compressed) this._rememberCompressed(ordinal, bytes);
           const entry = { index: ordinal, id: frame.id, bitmap, budget: reservation, readyAt: this.env.now(), usedAt: this.env.now() };
           this.cache.set(ordinal, entry); transferred = true;
           this._emit('ready', { epoch, phase: 'read-and-image-decode-complete', requestId: request ? request.requestId : null,

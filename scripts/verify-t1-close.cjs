@@ -29,19 +29,26 @@ async function bounded(pending) {
 async function run(mode, result) {
   const cache = createCache({ pluginRoot: root }), hooks = {}, states = [], blocks = [];
   let currentSession, closeTriggered = false, destroyed = false, attempts = 0, resolveClosed, releaseDispose, loadFrame;
+  let nativeCloseBusy = false, mergedCloseAttempts = 0;
   const closed = new Promise(resolve => { resolveClosed = resolve; });
   const dispose = new Promise(resolve => { releaseDispose = resolve; });
   Object.assign(result, { mode, sourceBefore: source(), before: snapshot(), startedAt: new Date().toISOString() });
   assert.strictEqual(result.sourceBefore.sha256, input.sha256); assert.strictEqual(result.before.transient.length, 0);
   const capability = { ...cache, async begin(settings) {
     const tx = await cache.begin(settings);
-    return mode === 'complete-held-lease' ? tx : { ...tx, readComplete: () => null };
+    return mode.startsWith('complete-') ? tx : { ...tx, readComplete: () => null };
   } };
   function nativeClose() {
-    attempts++; if (hooks.onPluginBeforeExit) hooks.onPluginBeforeExit(); // No await, exactly the missed host behavior.
+    attempts++;
+    if (nativeCloseBusy) { mergedCloseAttempts++; return; }
+    nativeCloseBusy = true;
+    if (hooks.onPluginBeforeExit) hooks.onPluginBeforeExit(); // No await, exactly the missed host behavior.
     const event = { prevented: false, preventDefault() { this.prevented = true; } };
     hooks.beforeunload(event); blocks.push(event.returnValue === false);
     if (!event.prevented && event.returnValue === undefined) { destroyed = true; hooks.pagehide(); resolveClosed(); }
+    // Model the browser's cancellation ACK after renderer microtasks, rather
+    // than accepting a second close while the first native request is pending.
+    setTimeout(() => { nativeCloseBusy = false; }, 0);
   }
   const ui = { canvas: {}, bindSession(value) { currentSession = value; }, destroy() {}, update(value) {
     states.push({ state: value.state, stage: value.progress && value.progress.stage, frames: value.progress && value.progress.frames });
@@ -55,9 +62,10 @@ async function run(mode, result) {
   const win = { EVAUI: { createUI: () => ui }, EVAPlayer: { Player: function () {
     this.load = async info => { loadFrame = info.frames[0]; };
     this.snapshot = () => ({ state: 'paused', frameId: loadFrame.id, frameOrdinal: 0, time: 0 });
-    this.dispose = () => dispose; for (const name of ['play', 'pause', 'seek', 'step']) this[name] = () => {};
+    this.dispose = () => mode === 'complete-fast-release' ? Promise.resolve() : dispose;
+    for (const name of ['play', 'pause', 'seek', 'step']) this[name] = () => {};
   } }, close: nativeClose, addEventListener(type, fn) { hooks[type] = fn; } };
-  vm.runInNewContext(code, { window: win, eagle, performance, Promise, require(name) {
+  vm.runInNewContext(code, { window: win, eagle, performance, Promise, setTimeout, require(name) {
     if (name === path.join(root, 'cache.cjs')) return { createCache: () => capability };
     if (name === path.join(root, 'eagle.cjs')) return { createEagleAdapter: () => ({
       captureSelected: async () => ({ id: 'registered-h264-cfr', itemId: 'registered-h264-cfr', name: 'registered H.264', ext: 'mp4', filePath: input.file }),
@@ -67,19 +75,22 @@ async function run(mode, result) {
   } });
   try {
     const loading = hooks.onPluginCreate({ path: root });
-    if (mode === 'complete-held-lease') {
+    if (mode.startsWith('complete-')) {
       await bounded(loading); assert.strictEqual(currentSession.snapshot().state, 'paused'); nativeClose();
-      await new Promise(resolve => setImmediate(resolve));
-      result.whileDisposing = snapshot().transient;
-      assert(result.whileDisposing.some(name => name.startsWith('lease-'))); assert.strictEqual(destroyed, false);
-      releaseDispose();
+      if (mode === 'complete-held-lease') {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        result.whileDisposing = snapshot().transient;
+        assert(result.whileDisposing.some(name => name.startsWith('lease-'))); assert.strictEqual(destroyed, false);
+        releaseDispose();
+      }
     }
     await bounded(closed); await bounded(loading);
     assert.deepStrictEqual(blocks, [true, false]); assert.strictEqual(attempts, 2);
+    assert.strictEqual(mergedCloseAttempts, 0);
     result.after = snapshot(); result.sourceAfter = source(); result.states = states;
     assert.deepStrictEqual(result.after, result.before); assert.deepStrictEqual(result.sourceAfter, result.sourceBefore);
     assert.strictEqual(currentSession.snapshot().state, 'closed'); result.passed = true;
-    result.nativeCloseAttempts = attempts; result.closeBlocks = blocks;
+    result.nativeCloseAttempts = attempts; result.closeBlocks = blocks; result.mergedCloseAttempts = mergedCloseAttempts;
     return result;
   } catch (error) { result.passed = false; result.error = error.message; throw error; }
   finally {
@@ -92,10 +103,10 @@ async function main() {
     startedAt: new Date().toISOString(), appSha256: sha(Buffer.from(code)), cases: [], limitations: [
       'Real media/cache/process lifecycle; mocked Eagle selection, DOM close, UI and Player. Not a real Eagle window-close test.',
       'Two cases bypass complete reuse and cancel only their own bounded partial. Existing complete caches remain unchanged.',
-      'Third case uses a real lease and a controlled asynchronous Player disposal; not real browser image decoder or sound.',
+      'Third and fourth cases use a real lease with controlled delayed/immediate Player disposal and a deferred native cancellation ACK; not real browser image decoder or sound.',
       'Complete preservation uses file stats plus owner/manifest hashes, not every retained asset hash.' ] };
   let error; store.start({ reserveBytes: 256 * 1024 });
-  try { for (const mode of ['first-written-frame', 'before-final-validation', 'complete-held-lease']) {
+  try { for (const mode of ['first-written-frame', 'before-final-validation', 'complete-held-lease', 'complete-fast-release']) {
     const result = { mode }; report.cases.push(result); await run(mode, result);
     console.log(JSON.stringify({ mode, passed: result.passed, attempts: result.nativeCloseAttempts, transientAfter: result.after.transient.length }));
   } report.passed = true;

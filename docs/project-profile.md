@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11用户整体授权阶段4，2026-10-12恢复开发。T0本轮技术关卡已通过，T1正式入口实施及验证中；恢复入口与遗留问题见[恢复记录](progress.md#阶段-4-t1恢复开发)。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11用户整体授权阶段4，2026-10-12恢复开发。T0本轮技术关卡已通过；T1预缓存关窗修复获用户确认，完整缓存关窗和后段快拖已修正并完成本地回归，待Eagle体验反馈。恢复入口与遗留问题见[恢复记录](progress.md#阶段-4-t1恢复开发)。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -36,6 +36,8 @@
 T1 正式入口为 `plugin/manifest.json`；加载与真实窗口操作由用户执行。`node scripts/verify-t1.cjs record-checks` 执行默认检查并写 T1 回执；`media` 对四登记输入调用正式准备并逐资产读回，缺缓存时会生成；`cancel` 只在专用 H.264 尚无完整缓存时执行一次取消，已有则跳过；`profile` / `profile-final baseline|h264-cfr` 是保留既有完整缓存的有界临时生成诊断，前者至提交入口停止，后者执行最终内容校验后因已有目标拒绝覆盖，均清理自己 partial，不能充当完整首备。后三类属于有副作用的显式验证，不在默认检查中运行。详细证据、环境差异及宿主取证见 [T1 报告](experiments/T1/report.md)。
 
 用户关窗失败修复后的显式 `node scripts/verify-t1-close.cjs` 用登记H.264与正式cache验证首帧/最终校验前取消和完整缓存关闭；生成自己的partial、取消并清理，保留旧完整缓存，回执仍计T1预算。Eagle窗口/DOM/Player为模型，媒体/缓存真实，不能记成实际宿主关窗通过。正常退出靠beforeunload同步门禁等待异步清理，不能只返回退出通知Promise。详见[T1关闭记录](experiments/T1/report.md#用户关闭失败与修复)。
+
+最新关闭模型另覆盖快速清理：等待首次取消响应后，在下一事件任务请求真实关闭，不把关窗实现成卸载素材。技术命令及证据统计由Codex执行，用户负责Eagle中的真实使用体验，不再要求用户输入开发者控制台命令。显式 `node scripts/verify-t1-reads.cjs` 只测用户指定片段的现存缓存读取；`node scripts/verify-t1-browser.cjs [--baseline]` 用现有Chrome/本机Node24进行独立真实JPEG/Canvas诊断，基线固定`1afcaa4`旧核心。两者仅从本机环境变量 `EVA_T1_DIAGNOSTIC_SOURCE` 读取该视频绝对路径、核对固定SHA，不扫描库/生成媒体/重置旧缓存；不在默认检查中执行。Chrome有额外本机传输和不同内核限制、64MiB临时目录/1.5GiB RSS采样停止线、90秒上限，结束只清本轮自有临时目录。证据仍受T1预算约束；独立诊断不等于Eagle宿主性能验收，细节及失败原件见[T1本轮记录](experiments/T1/report.md#完整缓存关闭与后段拖动修复)。
 
 ### 历史原型命令及副作用
 

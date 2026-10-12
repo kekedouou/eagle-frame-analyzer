@@ -4,6 +4,8 @@ const code = fs.readFileSync(path.join(__dirname, '../plugin/app.js'), 'utf8');
 function harness(settings = {}) {
   const hooks = {}, log = [], updates = [], root = path.resolve(__dirname, '../plugin'), discoveries = [];
   let config, discovered = 0, prepared = 0, closed = 0, destroyed = 0, windowDestroyed = false, closeAttempts = 0;
+  let nativeCloseBusy = false, mergedCloseAttempts = 0;
+  const nativeTasks = [];
   const ui = { canvas: {}, bindSession() {}, update(value) { updates.push(value); }, destroy() { destroyed++; } };
   const session = {
     loadSelected(options) { log.push({ type: 'selected', options }); return Promise.resolve(); },
@@ -26,6 +28,9 @@ function harness(settings = {}) {
   const eagle = Object.fromEntries(['onPluginCreate', 'onPluginRun', 'onLibraryChanged', 'onPluginBeforeExit'].map(name => [name, callback => { hooks[name] = callback; }]));
   function requestClose() {
     closeAttempts++;
+    if (settings.deferNativeAck && nativeCloseBusy) { mergedCloseAttempts++; return { merged: true }; }
+    if (settings.throwNativeClose && closeAttempts > 1) throw new Error('native close failure');
+    nativeCloseBusy = true;
     // Like Eagle main + plugin IPC: invoke the callback without awaiting it.
     if (hooks.onPluginBeforeExit) hooks.onPluginBeforeExit();
     const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
@@ -33,16 +38,31 @@ function harness(settings = {}) {
     if (!event.defaultPrevented && event.returnValue === undefined) {
       windowDestroyed = true; if (hooks.pagehide) hooks.pagehide();
     }
+    // The browser processes the cancelled-beforeunload acknowledgement after
+    // the renderer callback and its microtasks. A second close before that ACK
+    // is merged with the already-pending request instead of firing another event.
+    if (settings.deferNativeAck) nativeTasks.push(() => { nativeCloseBusy = false; });
+    else nativeCloseBusy = false;
     return event;
   }
+  const schedule = (callback, milliseconds) => {
+    if (settings.throwTimer) throw new Error('close timer failure');
+    if (settings.deferNativeAck) { nativeTasks.push(callback); return nativeTasks.length; }
+    return setTimeout(callback, milliseconds);
+  };
   const win = { EVAUI: { createUI: () => ui }, EVAPlayer: { Player: function (options) { this.options = options; } },
     close: requestClose, addEventListener(type, fn) { hooks[type] = fn; } };
   vm.runInNewContext(code, { window: win, eagle, performance: { now: () => 100 }, require(name) {
     if (name === 'path') return path; if (name === 'fs') return { realpathSync: file => file };
     assert.strictEqual(path.dirname(name), root); assert(modules[path.basename(name)], name); return modules[path.basename(name)];
-  }, Promise });
+  }, Promise, setTimeout: schedule });
   return { hooks, log, updates, root, ui, discoveries, win, requestClose,
-    windowState: () => ({ destroyed: windowDestroyed, attempts: closeAttempts }), get config() { return config; },
+    async flushNativeTasks() {
+      const microtasks = async () => { for (let index = 0; index < 20; index++) await Promise.resolve(); };
+      await microtasks();
+      while (nativeTasks.length) { nativeTasks.shift()(); await microtasks(); }
+    },
+    windowState: () => ({ destroyed: windowDestroyed, attempts: closeAttempts, merged: mergedCloseAttempts }), get config() { return config; },
     counts: () => ({ discovered, prepared, closed, destroyed }) };
 }
 async function bounded(pending) {
@@ -50,8 +70,17 @@ async function bounded(pending) {
   try { return await Promise.race([pending, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Operation remained blocked by tool discovery')), 1000); })]); }
   finally { clearTimeout(timer); }
 }
-const tick = () => new Promise(resolve => setImmediate(resolve));
+const tick = () => new Promise(resolve => setTimeout(resolve, 5));
 async function main() {
+  for (const fastResult of [null, { status: 'closed' }]) {
+    const h = harness({ deferNativeAck: true, closeSession: () => Promise.resolve(fastResult) });
+    await h.hooks.onPluginCreate({ path: h.root }); h.requestClose();
+    await h.flushNativeTasks();
+    assert.strictEqual(h.windowState().destroyed, true, 'Fast ready/empty cleanup must wait for the native cancellation ACK before requesting another close');
+    assert.strictEqual(h.windowState().attempts, 2); assert.strictEqual(h.windowState().merged, 0);
+    assert.strictEqual(h.counts().closed, 1); assert.strictEqual(h.counts().destroyed, 1);
+    console.log('T1 app: fast ' + (fastResult ? 'ready' : 'empty') + ' close runs in a new task after native ACK passed');
+  }
   {
     let finish;
     const cleanup = new Promise(resolve => { finish = resolve; });
@@ -79,6 +108,16 @@ async function main() {
     h.requestClose(); await tick(); assert.strictEqual(h.windowState().destroyed, false);
     assert.strictEqual(h.counts().closed, 1);
     console.log('T1 app: cleanup ' + (rejected ? 'rejection' : 'error result') + ' cannot destroy the renderer or retry cleanup silently passed');
+  }
+  for (const setting of ['throwTimer', 'throwNativeClose']) {
+    const h = harness({ [setting]: true }); await h.hooks.onPluginCreate({ path: h.root });
+    h.requestClose(); await tick();
+    assert.strictEqual(h.windowState().destroyed, false);
+    assert.match(h.updates.at(-1).error.message, /关闭清理失败/);
+    assert.strictEqual(h.counts().closed, 1); assert.strictEqual(h.counts().destroyed, 1);
+    const blocked = {}; h.hooks.beforeunload(blocked); assert.strictEqual(blocked.returnValue, false);
+    await tick(); assert.strictEqual(h.windowState().destroyed, false);
+    console.log('T1 app: ' + setting + ' remains blocked and reports the failure passed');
   }
   const h = harness();
   await h.hooks.onPluginCreate({ path: h.root });

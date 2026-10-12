@@ -76,6 +76,11 @@
     closeTask.catch(() => {});
     ui.destroy(); return closeTask;
   }
+  function closeFailed(error) {
+    allowUnload = false; exitScheduled = false;
+    ui.update({ state: 'closed', source: null, duration: 0, playback: null,
+      error: { message: '关闭清理失败，窗口暂未关闭：' + String(error && error.message || error).slice(0, 1024) } });
+  }
   function beforeUnload(event) {
     if (allowUnload) return;
     // Eagle's exit notification does not await our Promise. Keep this renderer
@@ -87,12 +92,15 @@
     exitScheduled = true;
     close().then(result => {
       if (result && result.status === 'error') throw new Error(result.error && result.error.message || '资源释放未完成');
-      allowUnload = true; window.close();
-    }).catch(error => {
-      allowUnload = false; exitScheduled = false;
-      ui.update({ state: 'closed', source: null, duration: 0, playback: null,
-        error: { message: '关闭清理失败，窗口暂未关闭：' + String(error && error.message || error).slice(0, 1024) } });
-    });
+      // A settled ready/empty session can finish entirely in microtasks. Asking
+      // Electron to close again there can reach the browser before its first
+      // cancelled-beforeunload ACK, so Chromium merges that second request.
+      // A new task lets the cancellation finish before making the real close.
+      setTimeout(() => {
+        try { allowUnload = true; window.close(); }
+        catch (error) { closeFailed(error); }
+      }, 0);
+    }).catch(closeFailed);
   }
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);
