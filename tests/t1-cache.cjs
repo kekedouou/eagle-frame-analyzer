@@ -55,6 +55,7 @@ function memoryFileSystem() {
       return id;
     },
     closeSync(fd) { if (!descriptors.delete(fd)) error('EBADF'); },
+    fsyncSync(fd) { descriptor(fd); },
     fstatSync(fd) { return stat(descriptor(fd).node); },
     writeSync(fd, data, offset, length, position) {
       const value = descriptor(fd).node;
@@ -72,7 +73,8 @@ function memoryFileSystem() {
     ftruncateSync(fd, size) { const value = descriptor(fd).node, next = Buffer.alloc(size); value.data.copy(next); value.data = next; value.mtimeMs = ++tick; },
     renameSync(from, to) {
       if (state.failRename) error('EACCES');
-      const a = normal(from), b = normal(to); if (nodes.has(b)) error('EEXIST'); nodeFor(a);
+      const a = normal(from), b = normal(to); nodeFor(a);
+      if (nodes.has(b)) { if (nodeFor(b).kind !== 'file' || nodeFor(a).kind !== 'file') error('EEXIST'); nodes.delete(b); }
       for (const [file, value] of [...nodes]) if (file === a || file.startsWith(a + '\\')) { nodes.delete(file); nodes.set(b + file.slice(a.length), value); }
     },
     unlinkSync(file) { const value = nodeFor(file); if (value.kind === 'dir') error('EISDIR'); nodes.delete(normal(file)); deleted.push(normal(file)); },
@@ -85,13 +87,19 @@ function memoryFileSystem() {
   return { api, nodes, state, descriptors, deleted, normal, make };
 }
 function harness(options = {}) {
-  const memory = memoryFileSystem(), module = { exports: {} };
-  vm.runInNewContext(sourceCode, { module, exports: module.exports,
-    require: name => name === 'fs' ? memory.api : name === 'path' ? win : moduleRequire(name),
-    Buffer, process: { pid: 4242, platform: 'win32' }, console }, { filename: 'plugin/cache.cjs' });
-  const api = module.exports;
-  const cache = api.createCache({ pluginRoot: 'D:\\fixtures\\plugin', ...options });
-  return { ...memory, api, cache, root: cache.root };
+  const memory = memoryFileSystem();
+  const identity = { self: () => ({ pid: 4242, startTicks: '638958000000000000', image: 'D:\\fixtures\\Eagle.exe' }),
+    child: pid => ({ pid, startTicks: '638958000010000000', image: 'D:\\fixtures\\ffmpeg.exe' }),
+    inspect: () => ({ safe: false, reason: 'model-process-alive' }) };
+  function load(settings) {
+    const module = { exports: {} };
+    vm.runInNewContext(sourceCode, { module, exports: module.exports,
+      require: name => name === 'fs' ? memory.api : name === 'path' ? win : name === './process-identity.cjs' ? { createIdentity: () => identity } : moduleRequire(name),
+      Buffer, process: { pid: 4242, platform: 'win32' }, console }, { filename: 'plugin/cache.cjs' });
+    const api = module.exports; return { api, cache: api.createCache({ pluginRoot: 'D:\\fixtures\\plugin', ...settings }) };
+  }
+  const { api, cache } = load(options);
+  return { ...memory, api, cache, root: cache.root, reboot: settings => load({ ...options, ...settings }).cache };
 }
 function snapshot(id = 'item-1') {
   return { sha256: SOURCE_SHA, codec: 'h264', width: 1920, height: 1080, hasAudioStream: false,
@@ -260,7 +268,8 @@ async function main() {
     const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA }); h.state.shortWrite = 2;
     const asset = await tx.writeAsset('000000.jpg', Buffer.from('frame-data'));
     assert.strictEqual(asset.bytes, 10); assert.strictEqual(asset.sha256, crypto.createHash('sha256').update('frame-data').digest('hex'));
-    assert.strictEqual(h.descriptors.size, 0);
+    assert.strictEqual(h.descriptors.size, 1); // Only this transaction's bounded ownership ledger remains open.
+    assert([...h.descriptors.values()].every(fd => fd.file.endsWith('transaction.log')));
     assert.strictEqual(h.state.readOpens.filter(file => file.endsWith('.jpg')).length, 0);
     const info = await tx.finish(manifest(asset), snapshot()); tx.close();
     assert(h.state.readOpens.some(file => file.endsWith('.jpg')));
@@ -272,7 +281,8 @@ async function main() {
       h.state.zeroWrite = !partialFailure; h.state.shortWrite = 2; h.state.writesUntilError = partialFailure ? 1 : Infinity;
       await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('frame-data')), /写入未完整|EIO/);
       h.state.zeroWrite = false; h.state.writesUntilError = Infinity;
-      assert.strictEqual(h.descriptors.size, 0); assert.strictEqual(tx.abort(), true); tx.close();
+      assert.strictEqual(h.descriptors.size, 1); assert([...h.descriptors.values()].every(fd => fd.file.endsWith('transaction.log')));
+      assert.strictEqual(tx.abort(), true); tx.close(); assert.strictEqual(h.descriptors.size, 0);
       assert.deepStrictEqual([...h.nodes.keys()].filter(file => win.dirname(file) === h.root), [win.join(h.root, 'owner.json')]);
     }
   });
@@ -280,7 +290,7 @@ async function main() {
     const h = harness({ diskBytes: 1600 }), tx = h.cache.begin({ sourceSha256: SOURCE_SHA });
     await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.alloc(1600)), /容量不足/);
     const jpeg = [...h.nodes].find(([file]) => file.endsWith('.jpg'));
-    assert(jpeg); assert.strictEqual(jpeg[1].data.length, 0); assert.strictEqual(h.descriptors.size, 0);
+    assert(jpeg); assert.strictEqual(jpeg[1].data.length, 0); assert.strictEqual(h.descriptors.size, 1);
     tx.abort(); tx.close();
   });
   await test('one-shot same-length disk corruption is rejected by commit rather than published', async () => {
@@ -297,7 +307,7 @@ async function main() {
       const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA });
       h.state.afterWrite = ({ node, file }) => { if (file.endsWith('.jpg')) { if (mutation === 'inode') node.ino += 100; else node.nlink = 2; } };
       await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('frame-data')), /输出身份|普通文件/);
-      h.state.afterWrite = null; assert.strictEqual(h.descriptors.size, 0); const deletedAt = h.deleted.length;
+      h.state.afterWrite = null; assert.strictEqual(h.descriptors.size, 1); const deletedAt = h.deleted.length;
       assert.throws(() => tx.abort(), /身份或长度|普通文件/); assert.strictEqual(h.deleted.length, deletedAt); tx.close();
     }
   });
@@ -305,7 +315,7 @@ async function main() {
     const h = harness(), controller = new AbortController(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA, signal: controller.signal });
     h.state.afterWrite = ({ file }) => { if (file.endsWith('.jpg')) controller.abort(); };
     await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('frame-data')), error => error.name === 'AbortError');
-    h.state.afterWrite = null; assert.strictEqual(h.descriptors.size, 0); tx.abort(); tx.close();
+    h.state.afterWrite = null; assert.strictEqual(h.descriptors.size, 1); tx.abort(); tx.close(); assert.strictEqual(h.descriptors.size, 0);
     assert.deepStrictEqual([...h.nodes.keys()].filter(file => win.dirname(file) === h.root), [win.join(h.root, 'owner.json')]);
   });
   await test('one-shot rejects changed root, partial paths and writer token before next write', async () => {
@@ -318,7 +328,7 @@ async function main() {
       if (change === 'lock-token') { const value = JSON.parse(lock.data); value.token = 'unknown'; lock.data = Buffer.from(JSON.stringify(value)); }
       if (change === 'lock-inode') lock.ino += 100;
       const nodeCount = h.nodes.size; await assert.rejects(() => tx.writeAsset('000001.jpg', Buffer.from('late')), /链接|所有权|写锁身份/);
-      assert.strictEqual(h.nodes.size, nodeCount); assert.strictEqual(h.descriptors.size, 0);
+      assert.strictEqual(h.nodes.size, nodeCount); assert.strictEqual(h.descriptors.size, 1);
       delete h.nodes.get(h.root).real; delete h.nodes.get(partial).real; lock.data = lockData; lock.ino = lockIno;
       tx.abort(); tx.close();
     }

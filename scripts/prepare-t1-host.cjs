@@ -6,7 +6,7 @@ const { pathToFileURL } = require('url');
 const SCHEMA = 'eva-t1-host-entry-v1', LIMIT = 256 * 1024;
 const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
 const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
-  ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs'].map(n => 'plugin/' + n),
+  ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs'].map(n => 'plugin/' + n),
   'scripts/prepare-t1-host.cjs', 'tests/host/t1/bootstrap.js', 'tests/support/t1-launch.cjs', 'tests/support/t1-host.cjs',
   'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t1-evidence.cjs'];
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
@@ -60,9 +60,14 @@ function generated(root, io) {
 }
 function verify(repo, io = fs, verifySources = true) {
   const p = paths(repo, io), marker = JSON.parse(read(path.join(p.host, 'prepared.local.json'), io));
+  const keys = JSON.stringify(Object.keys(marker.sourceHashes || {}).sort());
+  const current = JSON.stringify(SOURCES.slice().sort()), previous = JSON.stringify(SOURCES.filter(name => name !== 'plugin/process-identity.cjs').sort());
+  // Only preparation can migrate the immediately preceding, fully owned
+  // source list. Actual launch verification always requires the complete list.
+  const knownSourceList = keys === current || !verifySources && keys === previous;
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
-      JSON.stringify(Object.keys(marker.sourceHashes).sort()) !== JSON.stringify(SOURCES.slice().sort())) throw new Error('Unknown test entry ownership or file list.');
+      !knownSourceList || Object.values(marker.sourceHashes).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Unknown test entry ownership or file list.');
   let bytes = read(path.join(p.host, 'prepared.local.json'), io).length;
   for (const name of OUTPUTS) { const data = read(path.join(p.host, name), io); bytes += data.length;
     if (sha(data) !== marker.files[name]) throw new Error('Generated test entry changed: ' + name); }

@@ -123,6 +123,12 @@ function harness(settings = {}) {
     async abort() { events.push('cache-abort'); state.aborted = true; },
     async close() { events.push('cache-close'); state.closed = true; if (settings.failClose) throw new Error('controlled lock close failure'); }
   };
+  if (settings.registration) {
+    let serial = 0;
+    tx.beforeSpawn = () => { events.push('registration-before'); if (settings.failRegistrationBefore) throw new Error('controlled before-spawn failure'); return 'child-' + (++serial); };
+    tx.childStarted = (token, pid) => { events.push('registration-start:' + token + ':' + pid); if (settings.failRegistrationStart) throw new Error('controlled child-start failure'); };
+    tx.childClosed = token => { events.push('registration-close:' + token); if (settings.failRegistrationClose) throw new Error('controlled child-close failure'); };
+  }
   const cache = {
     async begin(value) { assert.strictEqual(value.sourceSha256, sha(state.content)); events.push('cache-begin'); return tx; },
     async release(handle) { assert(handle.leaseId); events.push('lease-release'); state.acquired = false; }
@@ -304,4 +310,5 @@ async function main() {
   });
   console.log(`t1-media: ${tests} memory-only checks passed; no real media/filesystem writes/Eagle executed`);
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
+module.exports = { harness };

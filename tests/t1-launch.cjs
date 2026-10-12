@@ -42,6 +42,12 @@ function fileTests() {
   assert.throws(() => entry.verify(m.root, m.io), /重新准备/);
   entry.prepare(m.root, m.io); entry.verify(m.root, m.io);
   ok('changed source stops measurement until known generated entry is prepared again');
+  const legacy = fileModel(); entry.prepare(legacy.root, legacy.io);
+  const legacyPath = path.join(legacy.host, 'prepared.local.json'), old = JSON.parse(legacy.files.get(legacyPath));
+  delete old.sourceHashes['plugin/process-identity.cjs']; legacy.files.set(legacyPath, Buffer.from(JSON.stringify(old)));
+  assert.throws(() => entry.verify(legacy.root, legacy.io), /ownership or file list/);
+  entry.prepare(legacy.root, legacy.io); assert(entry.verify(legacy.root, legacy.io).marker.sourceHashes['plugin/process-identity.cjs']);
+  ok('known preceding source list can be migrated only by explicit preparation, never accepted for measurement');
   const foreign = fileModel(); foreign.files.set(path.join(foreign.host, 'manifest.json'), Buffer.from('unrelated file'));
   assert.throws(() => entry.prepare(foreign.root, foreign.io)); assert.strictEqual(foreign.writes.length, 0);
   const modified = fileModel(); entry.prepare(modified.root, modified.io);

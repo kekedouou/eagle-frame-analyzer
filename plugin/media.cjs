@@ -211,19 +211,31 @@ function ffmpegArgs(source, hasAudio) {
   if (hasAudio) args.push('-map', '0:a:0', '-vn', '-sn', '-dn', '-af', 'aresample=48000,ashowinfo@a', '-c:a', 'pcm_f32le', '-f', 'wav', 'pipe:3');
   return args;
 }
+function beforeChild(job) { return job.tx && typeof job.tx.beforeSpawn === 'function' ? job.tx.beforeSpawn() : null; }
+function startedChild(job, token, child) {
+  if (!token) return;
+  try { job.tx.childStarted(token, child.pid); }
+  catch (error) { job.failure = job.failure || error; stopChildren(job); }
+}
+function closedChild(job, token) {
+  if (!token) return;
+  try { job.tx.childClosed(token); }
+  catch (error) { job.failure = job.failure || error; }
+}
 function monitorRss(job, child, metrics) {
   metrics.rssSamples = 0; metrics.peakRssBytes = null;
   metrics.rssNote = 'Owned FFmpeg working set/OS peak, requested ~100ms samples after helper startup; may miss peaks; separate from managed RAM and plugin/GPU memory.';
   if (process.platform !== 'win32' || !child.pid) { metrics.rssNote = 'FFmpeg working-set sampler unavailable.'; return async () => {}; }
   const script = '$ErrorActionPreference="Stop"; try {$p=[Diagnostics.Process]::GetProcessById(' + child.pid + '); while(!$p.HasExited){$p.Refresh(); [Console]::WriteLine(([string]$p.WorkingSet64)+","+([string]$p.PeakWorkingSet64)); Start-Sleep -Milliseconds 100}} catch {}';
-  let helper;
+  let helper; const token = beforeChild(job);
   try { helper = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'ignore'] }); }
-  catch (_) { metrics.rssNote = 'FFmpeg working-set sampler failed to start.'; return async () => {}; }
+  catch (_) { closedChild(job, token); metrics.rssNote = 'FFmpeg working-set sampler failed to start.'; return async () => {}; }
   job.children.add(helper); let pending = '', bytes = 0;
   const closed = track(job, new Promise(resolve => {
     helper.once('error', () => { metrics.rssNote = 'FFmpeg working-set sampler unavailable; no sample reported.'; });
-    helper.once('close', () => { job.children.delete(helper); resolve(); });
+    helper.once('close', () => { job.children.delete(helper); closedChild(job, token); resolve(); });
   }));
+  startedChild(job, token, helper);
   helper.stdout.on('data', chunk => {
     try {
       bytes = boundedAdd(bytes, chunk.length, LIMITS.monitorBytes); pending += chunk.toString('ascii');
@@ -241,13 +253,17 @@ function monitorRss(job, child, metrics) {
 function childProcess(job, tool, args, stdio, sample) {
   check(job); regular(tool);
   const started = process.hrtime.bigint(), metrics = { pid: null, startedAt: new Date().toISOString() };
-  const child = spawn(tool, args, { windowsHide: true, shell: false, stdio }); job.children.add(child); metrics.pid = child.pid || null;
+  const token = beforeChild(job); let child;
+  try { child = spawn(tool, args, { windowsHide: true, shell: false, stdio }); }
+  catch (error) { closedChild(job, token); throw error; }
+  job.children.add(child); metrics.pid = child.pid || null;
   let spawnError = null;
   child.once('error', error => { spawnError = error; });
-  const closed = new Promise(resolve => child.once('close', (code, signal) => { job.children.delete(child); resolve({ code, signal, error: spawnError }); }));
+  const closed = track(job, new Promise(resolve => child.once('close', (code, signal) => { job.children.delete(child); closedChild(job, token); resolve({ code, signal, error: spawnError }); })));
   const stopMonitor = sample ? monitorRss(job, child, metrics) : async () => {};
   const timer = setTimeout(() => { job.failure = job.failure || Object.assign(new Error('媒体工具处理超时。'), { code: 'MEDIA_TOOL_TIMEOUT' }); stopChildren(job); }, LIMITS.timeoutMs);
   const finish = track(job, closed.then(async result => { clearTimeout(timer); await stopMonitor(); metrics.totalMs = Number(process.hrtime.bigint() - started) / 1e6; return { ...result, metrics }; }));
+  startedChild(job, token, child);
   return { child, finish };
 }
 function guarded(job, operation) {
@@ -362,7 +378,7 @@ function createMedia(options) {
       check(job); notify(job, { stage: 'hash' });
       let phaseStart = process.hrtime.bigint();
       const fingerprint = await hashSource(snapshot.filePath, job); check(job); phases.sourceFingerprintMs = elapsed(phaseStart);
-      phaseStart = process.hrtime.bigint(); tx = await cache.begin({ sourceSha256: fingerprint.sha256, signal }); check(job); phases.writerAcquireMs = elapsed(phaseStart);
+      phaseStart = process.hrtime.bigint(); tx = await cache.begin({ sourceSha256: fingerprint.sha256, signal }); job.tx = tx; check(job); phases.writerAcquireMs = elapsed(phaseStart);
       notify(job, { stage: 'analyze' }); phaseStart = process.hrtime.bigint();
       const analyzed = await captureProbe(job, tools, snapshot.filePath); check(job); phases.probeMs = elapsed(phaseStart);
       const selectedMetadata = validateProbe(analyzed.probe);

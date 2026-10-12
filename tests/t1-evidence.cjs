@@ -111,4 +111,5 @@ async function main() {
   });
   console.log('T1 evidence: ' + count + ' pure checks passed; no files/media/Eagle created');
 }
-main().catch(error => { console.error(error.stack); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });
+module.exports = { memoryFS };

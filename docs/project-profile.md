@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1用户体验与真实Eagle六轮早期技术关卡通过，保留体验节点并固定`phase4-t1-early-verified`；当前推进T2，见[技术收尾](progress.md#阶段-4-t1真实测量核对与技术收尾)。
+- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1限定关卡通过；T2维护/淘汰、已确认残留恢复及新记录去重本地验证通过，当前真实宿主回归待验，见[当前候选](progress.md#阶段-4-t2维护与恢复候选)。T2未整体验收。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -83,8 +83,11 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 | plugin/eagle.cjs | 唯一素材/标注 API 边界；独立读回，不直接写 metadata.json |
 | plugin/media.cjs | 只读源媒体、分析和 FFmpeg；通过缓存句柄受限写入，不自行淘汰目录 |
 | plugin/cache.cjs | 文件所有权、实际路径、预算、锁、完整提交、淘汰与清理；不操作 UI 或素材元数据 |
+| plugin/process-identity.cjs | 缓存内部只读Windows进程出生/后代证明；未知时保留，不主动终止进程，不调用Eagle API |
 | plugin/frame-index.cjs | 纯时间/源帧映射；整数 PTS、呈现编号与源时间关系 |
 | plugin/player.js | Canvas、Web Audio 与调度；通过缓存读取/预算句柄取得资源，不调用标注 API |
 | tests/、scripts/check.cjs | 隔离测试与统一检查；正式代码不依赖 prototypes，开发检查不进入产品 UI |
 
 新任务先读本文件和 progress，再读目标目录局部规范、相关 R/P、architecture 决策与 development-plan 中的目标任务；核对 Git 状态与既有证据后继续，不能仅靠聊天摘要或旧原型入口恢复上下文。
+
+T2本地命令及副作用：`node scripts/verify-t2-cache.cjs checks`跑统一检查并有界保存T2回执；`filesystem`仅在2MiB自有scratch用≤512KiB小缓存及本轮Node自然退出验证文件/进程恢复，成功轮按预存清单定点清理，旧失败保留；`filesystem --retry-retained`在同一额度内新建attempt，不清旧失败；`reuse`仅对已登记H.264完整缓存调用正式media/cache及现有FFprobe，禁止生成，逐资产读回及源校验，更新本次最近使用字段后释放占用。默认检查不执行上述文件/媒体副作用。具体输入、配额、失败和真实宿主停点见[T2报告](experiments/T2/report.md#维护事务恢复和文件管理候选)；节点间连续开发，必要宿主操作仍由用户打开插件完成，不要求调试命令。

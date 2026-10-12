@@ -16,7 +16,7 @@ async function main() {
     const expected = [...h.nodes].filter(([file, value]) => file.startsWith(h.root + '\\') && value.kind === 'file').reduce((n, [, value]) => n + value.data.length, 0);
     assert.strictEqual(result.usedBytes, expected); assert.strictEqual(result.caches.length, 1);
     assert.strictEqual(result.caches[0].sourceSha256, SOURCE_SHA); assert.strictEqual(result.caches[0].protected, true);
-    assert.strictEqual(result.caches[0].leaseCount, 1); assert.strictEqual(result.caches[0].lastUsedAt, null);
+    assert.strictEqual(result.caches[0].leaseCount, 1); assert(result.caches[0].lastUsedAt > 0); assert.strictEqual(result.caches[0].useSequence, 1);
     assert.strictEqual(result.leases[0].liveness, 'not-checked'); assert.strictEqual(result.assetHashesVerified, false);
     assert(Object.isFrozen(result) && Object.isFrozen(result.caches[0])); assert.strictEqual(unchanged(h), before);
     h.cache.release(info); const after = h.cache.inventory(); assert.strictEqual(after.caches[0].protected, false); assert.strictEqual(after.leases.length, 0);

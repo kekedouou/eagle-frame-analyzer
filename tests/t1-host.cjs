@@ -100,7 +100,7 @@ function lifecycleHarness(settings = {}) {
   const indexed = frames.map(frame => ({ ...frame, ptsTicks: String(frame.id), timeBase: [1, 10], file: frame.id + '.jpg', bytes: 1, sha256: 'a'.repeat(64) }));
   files.set(path.join(target, 'manifest.json'), Buffer.from(JSON.stringify({ schema: 1, owner: OWNER, recipe: RECIPE, width: 1280, height: 720,
     source: { sha256: sourceSha }, duration: .3, frames: indexed, audio: null })));
-  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'player.js', 'frame-index.cjs']) files.set(path.join(pluginRoot, file), Buffer.from('in-memory source'));
+  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs']) files.set(path.join(pluginRoot, file), Buffer.from('in-memory source'));
   const fakeFs = { lstatSync(file) {
     const directory = directories.has(file), data = files.get(file); if (!directory && !data) throw new Error('Unexpected fake path');
     return { isFile: () => !directory, isDirectory: () => directory, isSymbolicLink: () => false, nlink: 1, dev: 1, ino: 1, mtimeMs: 1, size: directory ? 0 : data.length };

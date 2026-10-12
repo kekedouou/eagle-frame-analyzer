@@ -1,0 +1,193 @@
+'use strict';
+// Explicit, bounded side effects. Not invoked by the default check command.
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const { spawn, spawnSync } = require('child_process');
+const { createCache } = require('../plugin/cache.cjs');
+const { createStore } = require('../tests/support/t2-evidence.cjs');
+const { publish, reuse, demand, hash } = require('../tests/t2-lifecycle.cjs');
+const repo = path.resolve(__dirname, '..'), scratch = path.join(repo, 'tests/host/t2/cache-scratch');
+const OWNER = 'eva-t2-isolated-filesystem-v1', LIMIT = 2 * 1024 ** 2;
+const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const assert = require('assert');
+function directory(file) {
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isDirectory() || fs.realpathSync(file).toLowerCase() !== path.resolve(file).toLowerCase()) throw new Error('Scratch path must be canonical and without links.');
+  return stat;
+}
+function files(dir, depth = 0, output = []) {
+  directory(dir); if (depth > 4) throw new Error('Scratch depth exceeds ownership boundary.');
+  for (const name of fs.readdirSync(dir).sort()) {
+    const file = path.join(dir, name), stat = fs.lstatSync(file);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) files(file, depth + 1, output);
+    else {
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(file).toLowerCase() !== file.toLowerCase() || stat.size > 512 * 1024)
+        throw new Error('Unknown scratch leaf identity or size; retained.');
+      const bytes = fs.readFileSync(file), after = fs.lstatSync(file);
+      if (bytes.length !== stat.size || stat.ino !== after.ino || stat.mtimeMs !== after.mtimeMs) throw new Error('Scratch changed while reading.');
+      output.push({ relative: path.relative(scratch, file), dev: stat.dev, ino: stat.ino, bytes: stat.size, mtimeMs: stat.mtimeMs, sha256: sha(bytes) });
+    }
+  }
+  if (output.reduce((n, item) => n + item.bytes, 0) > LIMIT) throw new Error('Scratch exceeds 2MiB; stop without broad cleanup.');
+  return output;
+}
+function codeHashes() {
+  return Object.fromEntries(['plugin/cache.cjs', 'plugin/process-identity.cjs', 'plugin/media.cjs', 'tests/support/t2-evidence.cjs',
+    'scripts/verify-t2-cache.cjs'].map(file => [file, sha(fs.readFileSync(path.join(repo, file)))]));
+}
+function worker(root, keepChild) {
+  const parent = path.dirname(root);
+  if (!(parent === scratch || path.dirname(parent) === scratch && /^attempt-[0-9a-f]{24}$/.test(path.basename(parent))) ||
+    !/^case-[0-9a-f]{24}$/.test(path.basename(root))) throw new Error('Invalid owned worker root.');
+  directory(root); const marker = JSON.parse(fs.readFileSync(path.join(root, 'owner.json')));
+  if (marker.owner !== OWNER || marker.root !== scratch || marker.case !== path.basename(root)) throw new Error('Unknown worker owner.');
+  return (async () => {
+    const cache = createCache({ pluginRoot: root, diskBytes: 512 * 1024 }), tx = cache.begin({ sourceSha256: hash(2) });
+    await tx.writeAsset('000000.jpg', Buffer.from('owned incomplete output'));
+    let childPid = null;
+    if (keepChild) {
+      const token = tx.beforeSpawn(), child = spawn(process.execPath, ['-e', 'setTimeout(()=>process.exit(0),15000)'], { windowsHide: true, shell: false, detached: true, stdio: 'ignore' });
+      childPid = child.pid; tx.childStarted(token, childPid); child.unref();
+    }
+    process.stdout.write(JSON.stringify({ root, childPid, writer: JSON.parse(fs.readFileSync(path.join(cache.root, 'writer.lock'))) }) + '\n');
+    // Intentional exit of this owned test process, not Eagle or a real media
+    // tool. OS closes its ledger handle; no cleanup callback is run.
+    process.exit(0);
+  })();
+}
+async function runWorker(root, keepChild) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [__filename, keepChild ? 'worker-child' : 'worker', root], { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = ''; const timeout = setTimeout(() => reject(new Error('Owned worker exceeded 20 seconds; no external process terminated.')), 20000);
+    child.stdout.on('data', b => { out += b; if (out.length > 32768) reject(new Error('Worker output limit exceeded.')); });
+    child.stderr.on('data', b => { err = (err + b).slice(-8192); }); child.once('error', reject);
+    child.once('close', code => { clearTimeout(timeout); if (code !== 0) reject(new Error('Owned worker failed: ' + err)); else { try { resolve(JSON.parse(out)); } catch (e) { reject(e); } } });
+  });
+}
+async function filesystem() {
+  const store = createStore(repo), results = [], sourceHashes = codeHashes(); store.start({ reserveBytes: 512 * 1024 });
+  let owned = false;
+  try {
+    directory(repo); const host = path.join(repo, 'tests/host/t2');
+    if (!fs.existsSync(host)) fs.mkdirSync(host); directory(host);
+    if (fs.existsSync(scratch)) {
+      if (!process.argv.includes('--retry-retained')) throw new Error('Previous scratch exists; retain it for review rather than deleting.');
+      directory(scratch); const old = JSON.parse(fs.readFileSync(path.join(scratch, 'owner.json')));
+      if (old.schema !== 1 || old.owner !== OWNER || old.root !== scratch || old.quota !== LIMIT) throw new Error('Unknown retained scratch owner.');
+      files(scratch); // Existing failures remain inside the same 2MiB budget.
+    } else {
+      fs.mkdirSync(scratch);
+      fs.writeFileSync(path.join(scratch, 'owner.json'), JSON.stringify({ schema: 1, owner: OWNER, root: scratch, quota: LIMIT }), { flag: 'wx' });
+    }
+    const attempt = path.join(scratch, 'attempt-' + crypto.randomBytes(12).toString('hex')); fs.mkdirSync(attempt); owned = true;
+    fs.writeFileSync(path.join(attempt, 'owner.json'), JSON.stringify({ schema: 1, owner: OWNER, root: scratch, attempt: path.basename(attempt) }), { flag: 'wx' });
+    const cases = [];
+    function newCase() {
+      const name = 'case-' + crypto.randomBytes(12).toString('hex'), root = path.join(attempt, name); fs.mkdirSync(root);
+      fs.writeFileSync(path.join(root, 'owner.json'), JSON.stringify({ schema: 1, owner: OWNER, root: scratch, case: name }), { flag: 'wx' });
+      cases.push(root); return root;
+    }
+    const capacityRoot = newCase(), h = { cache: createCache({ pluginRoot: capacityRoot, diskBytes: 128 * 1024 }) }, list = [];
+    for (const n of [1, 2, 3]) { const item = await publish(h, n); h.cache.release(item); list.push(item); }
+    const held = await reuse(h, 1); await demand(h);
+    assert(fs.existsSync(list[0].cacheDir)); assert(!fs.existsSync(list[1].cacheDir)); assert(fs.existsSync(list[2].cacheDir)); h.cache.release(held);
+    results.push({ test: 'real-Windows-LRU-and-live-lease', passed: true, inventory: h.cache.inventory() }); files(scratch);
+    for (const keepChild of [false, true]) {
+      const root = newCase(), child = await runWorker(root, keepChild), cache = createCache({ pluginRoot: root, diskBytes: 512 * 1024 });
+      const result = { test: keepChild ? 'real-parent-gone-child-alive-then-natural-exit' : 'real-parent-exit-owned-partial-recovery',
+        passed: false, child }; results.push(result);
+      if (keepChild) {
+        const identity = require('../plugin/process-identity.cjs').createIdentity();
+        result.beforeRecovery = identity.inspect(child.writer);
+        assert.strictEqual(result.beforeRecovery.safe, false, 'Owned test child must be verified alive before exercising recovery.');
+        assert.throws(() => cache.begin({ sourceSha256: hash(2) }), error => error.code === 'CACHE_BUSY');
+        // Owned helper naturally exits after 15 seconds. No kill command,
+        // arbitrary PID termination or manipulation of Eagle is performed.
+        await new Promise(resolve => setTimeout(resolve, 15500));
+      }
+      const tx = cache.begin({ sourceSha256: hash(2) }); assert.strictEqual(await tx.readComplete(), null); tx.close();
+      assert(!fs.readdirSync(cache.root).some(name => /^partial-/.test(name)));
+      result.passed = true; result.inventory = cache.inventory(); files(scratch);
+    }
+    // Only exact, newly created case paths are eligible for final cleanup.
+    assert.deepStrictEqual(fs.readdirSync(attempt).sort(), ['owner.json', ...cases.map(dir => path.basename(dir))].sort());
+    const manifest = files(attempt), plan = store.save('cleanup', { protocol: 't2-isolated-filesystem-v1', at: new Date().toISOString(), sourceHashes,
+      scratch, attempt, budgetBytes: LIMIT, cases, files: manifest, results, phase: 'before-scratch-cleanup' });
+    assert.deepStrictEqual(files(attempt), manifest);
+    for (const item of manifest.filter(item => path.basename(item.relative) !== 'owner.json').concat(manifest.filter(item => path.basename(item.relative) === 'owner.json'))) {
+      const file = path.resolve(scratch, item.relative);
+      if (!file.startsWith(scratch + path.sep)) throw new Error('Scratch cleanup target escapes its root.');
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.ino !== item.ino || stat.dev !== item.dev || stat.size !== item.bytes || sha(fs.readFileSync(file)) !== item.sha256)
+        throw new Error('Scratch cleanup target changed; retained.');
+      fs.unlinkSync(file);
+    }
+    function removeEmpty(dir) {
+      directory(dir);
+      for (const name of fs.readdirSync(dir)) { const target = path.join(dir, name); if (!fs.lstatSync(target).isDirectory()) throw new Error('Unknown cleanup residue.'); removeEmpty(target); }
+      fs.rmdirSync(dir);
+    }
+    removeEmpty(attempt); owned = false;
+    const saved = store.save('cache', { protocol: 't2-isolated-filesystem-v1', at: new Date().toISOString(), sourceHashes, passed: true,
+      results, cleanupPlan: plan, cleanedFiles: manifest.length, cleanedBytes: manifest.reduce((n, f) => n + f.bytes, 0), attemptRemoved: true,
+      retainedScratchBytes: files(scratch).reduce((n, f) => n + f.bytes, 0),
+      limitation: 'Real filesystem/process identity only; generated byte assets are not JPEG decoding, Eagle interaction, performance or long-run acceptance.' });
+    console.log(JSON.stringify(saved));
+  } catch (error) {
+    console.log(JSON.stringify(store.save('cache', { protocol: 't2-isolated-filesystem-v1', at: new Date().toISOString(), sourceHashes,
+      passed: false, results, scratchRetained: owned, error: String(error.stack).slice(0, 8192) })));
+    throw error;
+  } finally { store.close(); }
+}
+function checks() {
+  const store = createStore(repo); store.start({ reserveBytes: 256 * 1024 });
+  try {
+    const output = spawnSync(process.execPath, [path.join(repo, 'scripts/check.cjs')], { cwd: repo, windowsHide: true, encoding: 'utf8', maxBuffer: 192 * 1024, timeout: 120000 });
+    const saved = store.save('checks', { protocol: 't2-default-check-v1', at: new Date().toISOString(), sourceHashes: codeHashes(),
+      passed: !output.error && output.status === 0, status: output.status, error: output.error?.message || null, stdout: output.stdout, stderr: output.stderr });
+    console.log(JSON.stringify(saved)); if (output.error || output.status !== 0) throw new Error(output.stderr || output.error?.message || 'Default checks failed.');
+  } finally { store.close(); }
+}
+async function reuseIntegration() {
+  const store = createStore(repo); store.start({ reserveBytes: 128 * 1024 });
+  let handle, cache;
+  const sourceHashes = codeHashes();
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(repo, 'tests/host/t0/config.local.json'))), input = config.sources.find(item => item.key === 'h264-cfr');
+    if (!input || input.sha256 !== '2275abc6a31d82870e53510019edbc16b6b8cd10b8f0d9b75f3b02abb9a1f79e') throw new Error('Known H264 fixture registration changed; no generation attempted.');
+    const fingerprint = () => {
+      const stat = fs.lstatSync(input.file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 ** 2 || fs.realpathSync(input.file).toLowerCase() !== input.file.toLowerCase()) throw new Error('Fixture identity or bound changed.');
+      const bytes = fs.readFileSync(input.file), after = fs.lstatSync(input.file);
+      if (stat.ino !== after.ino || stat.mtimeMs !== after.mtimeMs || bytes.length !== stat.size || sha(bytes) !== input.sha256) throw new Error('Fixture SHA mismatch.');
+      return { bytes: bytes.length, sha256: sha(bytes), ino: stat.ino, mtimeMs: stat.mtimeMs };
+    };
+    const before = fingerprint(); cache = createCache({ pluginRoot: path.join(repo, 'plugin') });
+    const initial = cache.inventory(); if (!initial.caches.some(item => item.sourceSha256 === input.sha256)) throw new Error('Existing complete fixture cache missing; no generation permitted.');
+    const guarded = { ...cache, begin(options) {
+      const tx = cache.begin(options);
+      return { ...tx, async readComplete() { const value = await tx.readComplete(); if (!value) throw new Error('Reuse-only validation cache miss; generation prohibited.'); return value; } };
+    } };
+    const media = require('../plugin/media.cjs').createMedia({ tools: { ffmpeg: config.ffmpeg, ffprobe: config.ffprobe }, cache: guarded });
+    const at = process.hrtime.bigint(); handle = await media.prepare({ id: 't2-known-h264-fixture', filePath: input.file, name: 'T2既有H264合成输入', ext: 'mp4' });
+    assert.strictEqual(handle.metrics.reused, true); let bytes = 0, assets = 0;
+    for (const item of [...handle.frames, ...(handle.audio ? [handle.audio] : [])]) {
+      const read = await cache.readAsset(handle, item.file); assert.strictEqual(sha(read), item.sha256); bytes += read.length; assets++;
+    }
+    cache.release(handle); handle = null; assert.deepStrictEqual(fingerprint(), before);
+    const final = cache.inventory(); assert.strictEqual(initial.caches.length, final.caches.length); assert.strictEqual(final.leases.length, initial.leases.length);
+    const saved = store.save('cache', { protocol: 't2-local-reuse-integration-v1', at: new Date().toISOString(), sourceHashes,
+      passed: true, source: before, fixtureKey: input.key, assets, assetBytes: bytes, totalMs: Number(process.hrtime.bigint() - at) / 1e6,
+      cacheCountBefore: initial.caches.length, cacheCountAfter: final.caches.length, noGeneration: true, recencyMetadataUpdated: true,
+      limitation: 'Local Node runtime, existing FFprobe and real cache; not Eagle window/Canvas/audio/performance acceptance.' });
+    console.log(JSON.stringify(saved));
+  } catch (error) {
+    console.log(JSON.stringify(store.save('cache', { protocol: 't2-local-reuse-integration-v1', at: new Date().toISOString(), sourceHashes,
+      passed: false, error: String(error.stack).slice(0, 8192) }))); throw error;
+  } finally { try { if (handle) cache.release(handle); } finally { store.close(); } }
+}
+if (require.main === module) {
+  const command = process.argv[2];
+  Promise.resolve().then(() => command === 'filesystem' ? filesystem() : command === 'checks' ? checks() : command === 'reuse' ? reuseIntegration() :
+    command === 'worker' || command === 'worker-child' ? worker(path.resolve(process.argv[3]), command === 'worker-child') :
+      Promise.reject(new Error('Use explicit filesystem, reuse or checks command.'))).catch(error => { console.error(error.stack); process.exitCode = 1; });
+}
