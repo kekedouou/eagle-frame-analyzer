@@ -1,0 +1,88 @@
+'use strict';
+// Materialize only a bounded, locally owned test entry. Never loads Eagle,
+// copies product JS, prepares media, changes caches or deletes historical data.
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const { pathToFileURL } = require('url');
+const SCHEMA = 'eva-t1-host-entry-v1', LIMIT = 256 * 1024;
+const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
+const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
+  ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs'].map(n => 'plugin/' + n),
+  'scripts/prepare-t1-host.cjs', 'tests/host/t1/bootstrap.js', 'tests/support/t1-launch.cjs', 'tests/support/t1-host.cjs',
+  'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t1-evidence.cjs'];
+const sha = data => crypto.createHash('sha256').update(data).digest('hex');
+function same(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
+function directory(dir, io) {
+  const stat = io.lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !same(io.realpathSync(dir), dir)) throw new Error('Test entry directory must be canonical and without links.');
+}
+function read(file, io) {
+  const a = io.lstatSync(file);
+  if (!a.isFile() || a.isSymbolicLink() || a.nlink !== 1 || a.size > 1024 ** 2 || !same(io.realpathSync(file), file))
+    throw new Error('Test input must be a bounded canonical single-link file.');
+  const data = io.readFileSync(file), b = io.lstatSync(file);
+  if (a.ino !== b.ino || a.dev !== b.dev || a.size !== b.size || a.mtimeMs !== b.mtimeMs || data.length !== a.size)
+    throw new Error('Test input changed while reading.');
+  return data;
+}
+function paths(repo, io) {
+  const root = path.resolve(repo), plugin = path.join(root, 'plugin'), host = path.join(root, 'tests/host/t1');
+  for (const dir of [root, plugin, path.join(root, 'tests'), path.join(root, 'tests/host'), host]) directory(dir, io);
+  if (/^c:/i.test(root)) throw new Error('The test entry must remain on the non-C project disk.');
+  return { root, plugin, host };
+}
+function sourceHashes(root, io) { return Object.fromEntries(SOURCES.map(name => [name, sha(read(path.join(root, name), io))])); }
+function render(html, plugin, hashes) {
+  let out = html;
+  for (const name of ['styles.css', 'player.js', 'ui.js', 'app.js']) {
+    const attribute = name.endsWith('.css') ? 'href' : 'src', token = attribute + '="' + name + '"';
+    if (out.split(token).length !== 2) throw new Error('Product HTML entry changed: ' + name);
+    const url = pathToFileURL(path.join(plugin, name)).href + '?t1=' + hashes['plugin/' + name];
+    out = out.replace(token, attribute + '="' + url.replace(/&/g, '&amp;') + '"');
+  }
+  const app = '<script src="' + (pathToFileURL(path.join(plugin, 'app.js')).href + '?t1=' + hashes['plugin/app.js']).replace(/&/g, '&amp;') + '"></script>';
+  out = out.replace(app, '<script src="bootstrap.js?t1=' + hashes['tests/host/t1/bootstrap.js'] + '"></script>\n  ' + app);
+  return out.replace('<title>视频分析</title>', '<title>T1 自动测量 · 视频分析</title>');
+}
+function generated(root, io) {
+  const p = paths(root, io), hashes = sourceHashes(p.root, io);
+  const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
+  if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
+  const manifest = { ...original, id: 'EVAT1AUTO20261012', name: '视频分析 T1：自动测量', logo: '/logo.local.png',
+    keywords: ['视频', 'T1', '自动测量'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
+  const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes)),
+    'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
+  const marker = { schema: SCHEMA, hostRoot: p.host, pluginRoot: p.plugin, sourceHashes: hashes,
+    files: Object.fromEntries(OUTPUTS.map(n => [n, sha(files[n])])) };
+  files['prepared.local.json'] = Buffer.from(JSON.stringify(marker, null, 2));
+  const bytes = Object.values(files).reduce((n, data) => n + data.length, 0);
+  if (bytes > LIMIT) throw new Error('Generated test entry exceeds 256KiB.');
+  return { ...p, files, marker, bytes };
+}
+function verify(repo, io = fs, verifySources = true) {
+  const p = paths(repo, io), marker = JSON.parse(read(path.join(p.host, 'prepared.local.json'), io));
+  if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
+      JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
+      JSON.stringify(Object.keys(marker.sourceHashes).sort()) !== JSON.stringify(SOURCES.slice().sort())) throw new Error('Unknown test entry ownership or file list.');
+  let bytes = read(path.join(p.host, 'prepared.local.json'), io).length;
+  for (const name of OUTPUTS) { const data = read(path.join(p.host, name), io); bytes += data.length;
+    if (sha(data) !== marker.files[name]) throw new Error('Generated test entry changed: ' + name); }
+  if (bytes > LIMIT) throw new Error('Prepared test entry exceeds 256KiB.');
+  if (verifySources && JSON.stringify(sourceHashes(p.root, io)) !== JSON.stringify(marker.sourceHashes))
+    throw new Error('正式代码或测试驱动已变化，请由Codex重新准备验证入口。');
+  return { ...p, marker, bytes };
+}
+function prepare(repo, io = fs) {
+  const value = generated(repo, io), names = [...OUTPUTS, 'prepared.local.json'];
+  if (names.some(n => io.existsSync(path.join(value.host, n)))) verify(repo, io, false);
+  for (const name of names) {
+    const file = path.join(value.host, name);
+    io.writeFileSync(file, value.files[name], io.existsSync(file) ? {} : { flag: 'wx' });
+  }
+  return verify(repo, io);
+}
+if (require.main === module) {
+  try { const value = prepare(path.resolve(__dirname, '..')); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
+    manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
+}
+module.exports = { prepare, verify, render, sourceHashes, SOURCES, OUTPUTS, SCHEMA, LIMIT };

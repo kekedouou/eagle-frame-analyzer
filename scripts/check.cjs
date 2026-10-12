@@ -67,4 +67,8 @@ if (fs.existsSync(productManifest)) {
   console.log('Product manifest/assets checked; real Eagle not executed');
 }
 checkDocs();
+if (fs.existsSync(path.join(root, 'tests/host/t1/prepared.local.json'))) {
+  const prepared = require('./prepare-t1-host.cjs').verify(root);
+  console.log('T1 automatic entry ownership/source hashes checked: ' + prepared.bytes + ' bytes; Eagle not executed');
+}
 console.log('default check passed (no media generation, no historical rerun, no Eagle/library writes)');

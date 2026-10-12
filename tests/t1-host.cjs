@@ -70,7 +70,7 @@ test('terminal errors, duplicates and unfinished requests remain failures', () =
   assert.strictEqual(s.integrity.duplicateTerminals, 1); assert.strictEqual(s.valid, false); assert.strictEqual(c.settled(), false);
 });
 test('invalid setup is rejected before any store, DOM or host operation', () => {
-  assert.throws(() => run(), /开发者控制台/);
+  assert.throws(() => run(), /宿主验证需要/);
   assert.throws(() => run({ bridge: { snapshot: () => ({ state: 'preparing' }), subscribe() {} },
     document: {}, window: { PointerEvent() {} }, pluginRoot: 'D:/unused' }), /首帧暂停/);
 });
@@ -111,7 +111,8 @@ function lifecycleHarness(settings = {}) {
     save(kind, value) {
       assert.strictEqual(kind, 'host'); saveAttempts.push(value.type);
       if (settings.failSave === value.type) throw Object.assign(new Error('controlled persistent save failure'), { code: 'ENOSPC' });
-      saved.push(value); return { file: 'memory-' + saved.length, bytes: 1, sha256: 'memory' };
+      saved.push(value); if (settings.onSave) settings.onSave(value, saved.length);
+      return { file: 'memory-' + saved.length, bytes: 1, sha256: 'memory' };
     },
     close() { this.closed = true; } };
   function eventTarget() {
@@ -124,7 +125,7 @@ function lifecycleHarness(settings = {}) {
   timeline.getBoundingClientRect = () => ({ left: 10, top: 20, width: 100, height: 20 });
   doc.visibilityState = 'visible'; doc.hasFocus = () => true; doc.getElementById = id => id === 'timeline' ? timeline : id === 'timeHint' ? hint : null;
   const value = { ...frozen, pluginRoot, state: 'paused', duration: .3, source: { id: '中文', name: 'memory' },
-    loadMetrics: { entryAt: 0, readyAt: 1, totalMs: 1, reused: false, trigger: 'plugin-create' },
+    loadMetrics: { entryAt: 0, readyAt: 1, totalMs: settings.loadMs || 1, reused: !!settings.reused, trigger: 'plugin-create' },
     playback: { frameId: 0, frameOrdinal: 0, time: 0, activeImageTasks: 0, pendingTargets: 0, cacheBytes: 1 } };
   const emit = event => { for (const observer of observers) observer({ type: 'player', value: { binding, event } }); };
   const setTimer = (callback, ms) => setImmediate(() => { clock += ms; for (const cb of intervals.values()) cb(); callback(); });
@@ -172,6 +173,27 @@ async function lifecycle() {
   assert.strictEqual(result.complete, true); assert.strictEqual(h.saved.length, 7); assert.strictEqual(h.saved[6].rounds.length, 6);
   assert(h.store.closed); assert.strictEqual(h.observers.size, 0); assert.strictEqual(h.intervals.size, 0); assert.strictEqual(h.activePointer(), false);
   count++; console.log('ok T1 host lifecycle: six bounded rounds save and release observers/timer/gesture in memory');
+  const reuse = lifecycleHarness({ reused: true, loadMs: 10000 });
+  reuse.options.launchContext = { kind: 'real-Eagle-formal-code-independent-entry', mappedFormalRoot: reuse.options.pluginRoot };
+  reuse.options.verifyLaunch = () => {};
+  const reused = await reuse.driver.run(reuse.options).done;
+  assert.strictEqual(reused.p03.withinTarget, null); assert.strictEqual(reused.p03.totalMs, 10000);
+  for (const receipt of reuse.saved) { assert.strictEqual(receipt.origin, 'automatic-real-Eagle-independent-entry-formal-code');
+    assert.strictEqual(receipt.launchContext.mappedFormalRoot, reuse.options.pluginRoot); }
+  count++; console.log('ok T1 host lifecycle: independent-entry provenance is retained and reuse never fabricates a first-load gate');
+  const changedEntry = lifecycleHarness();
+  changedEntry.options.launchContext = { kind: 'real-Eagle-formal-code-independent-entry', mappedFormalRoot: changedEntry.options.pluginRoot };
+  changedEntry.options.verifyLaunch = () => { throw new Error('controlled entry change'); };
+  const changed = await changedEntry.driver.run(changedEntry.options).done;
+  assert.strictEqual(changed.complete, false); assert.strictEqual(changed.error.code, 'HOST_ENTRY_CHANGED');
+  assert.strictEqual(changedEntry.saved[6].launchSourcesVerifiedAtEnd, false);
+  count++; console.log('ok T1 host lifecycle: changed entry sources cannot retain a passing saved summary');
+  let lastTask;
+  const lastSave = lifecycleHarness({ onSave(value, length) { if (value.type === 'round' && length === 6) lastTask.cancel(); } });
+  lastTask = lastSave.driver.run(lastSave.options); const lateCancelled = await lastTask.done;
+  assert.strictEqual(lateCancelled.complete, false); assert.strictEqual(lateCancelled.error.code, 'HOST_USER_CANCELLED');
+  assert.strictEqual(lastSave.saved[6].complete, false); assert(lastSave.store.closed);
+  count++; console.log('ok T1 host lifecycle: cancellation during the final round save remains a failed summary');
   const subscription = lifecycleHarness({ rejectSubscribe: true }); assert.throws(() => subscription.driver.run(subscription.options), /subscribe failure/);
   assert(subscription.store.closed); count++; console.log('ok T1 host lifecycle: setup failure releases evidence lock');
   const resource = lifecycleHarness({ rss: 1.5 * 1024 ** 3 }); const stopped = await resource.driver.run(resource.options).done;

@@ -1,6 +1,6 @@
 'use strict';
 
-// Explicitly required from the real product's developer console. This driver
+// Started by the independent real-Eagle verification entry. This driver
 // observes the product and dispatches ordinary DOM gestures; it is never loaded
 // by the product and never resets media caches or writes Eagle metadata.
 const fs = require('fs'), path = require('path'), crypto = require('crypto'), os = require('os');
@@ -149,7 +149,13 @@ function createCapture(frames, frozen) {
 function run(options = {}) {
   const { bridge, document: doc, window: win, pluginRoot } = options;
   if (!bridge || typeof bridge.snapshot !== 'function' || typeof bridge.subscribe !== 'function' || !doc || !win || typeof win.PointerEvent !== 'function')
-    throw new Error('请从正式插件开发者控制台提供只读诊断桥、document、window和插件目录。');
+    throw new Error('宿主验证需要只读诊断桥、document、window和实际插件目录。');
+  const launchContext = options.launchContext === undefined ? null : JSON.parse(JSON.stringify(options.launchContext));
+  if (launchContext && (Buffer.byteLength(JSON.stringify(launchContext)) > 16384 ||
+      launchContext.kind !== 'real-Eagle-formal-code-independent-entry' || !samePath(launchContext.mappedFormalRoot, pluginRoot) ||
+      typeof options.verifyLaunch !== 'function'))
+    throw new Error('独立宿主入口来源无效或超过16KiB。');
+  const origin = launchContext ? 'automatic-real-Eagle-independent-entry-formal-code' : 'user-started-real-Eagle-formal-window';
   const first = bridge.snapshot();
   if (!first || first.state !== 'paused' || !first.playback || !first.loadMetrics) throw new Error('请先等待正式视频首帧暂停就绪，再启动验证。');
   if (typeof first.pluginRoot !== 'string' || !path.isAbsolute(first.pluginRoot) || typeof pluginRoot !== 'string' || !samePath(first.pluginRoot, pluginRoot))
@@ -224,7 +230,7 @@ function run(options = {}) {
   }
   async function saveRound(summary) {
     const trace = await round.capture.pack();
-    pendingRoundPayload = { schema: VERSION, origin: 'user-started-real-Eagle-formal-window', type: 'round',
+    pendingRoundPayload = { schema: VERSION, origin, launchContext, type: 'round',
       source: first.sourceIdentity, protocol: protocol.PROTOCOL, summary, trace };
     const receipt = save(pendingRoundPayload, 'round');
     receipts.push(receipt); rounds.push(summary); round = null; pendingRoundPayload = null;
@@ -232,8 +238,7 @@ function run(options = {}) {
   async function execute() {
     let failedCapture = null, result = null;
     try {
-      // A console command can temporarily own focus. Give the user time to
-      // return to the actual product; measured windows never include this wait.
+      // Eagle can initially own focus. Measured rounds exclude the foreground wait.
       const focusStart = now();
       while (doc.visibilityState !== 'visible' || typeof doc.hasFocus === 'function' && !doc.hasFocus()) {
         if (issue) throw issue;
@@ -285,6 +290,7 @@ function run(options = {}) {
         summary.roundGateMet = summary.valid && releases.length === protocol.PROTOCOL.randomTargets && summary.releaseToDraw.n > 0 && summary.releaseToDraw.p95Ms <= protocol.PROTOCOL.p95Ms && summary.final.correct;
         await saveRound(summary);
       }
+      guard(); // Cancellation/focus changes during the last async trace save cannot become a pass.
       result = { complete: true, earlyRegressionPassed: rounds.length === 6 && rounds.every(value => value.roundGateMet) };
     } catch (error) {
       fail(error.message, error.code);
@@ -312,15 +318,22 @@ function run(options = {}) {
     try {
       const sources = fingerprints(pluginRoot), fingerprintsUnchanged = JSON.stringify(sources) === JSON.stringify(initialFingerprints);
       if (!fingerprintsUnchanged) result = { complete: false, earlyRegressionPassed: false, error: { code: 'HOST_SOURCE_CHANGED', message: '测量期间正式源码发生变化。' } };
+      let launchSourceError = null;
+      if (launchContext) { try { options.verifyLaunch(); } catch (error) {
+        launchSourceError = String(error.message || error).slice(0, 1024);
+        result = { complete: false, earlyRegressionPassed: false, error: { code: 'HOST_ENTRY_CHANGED', message: launchSourceError } };
+      } }
       const current = snapshot(), p03 = first.loadMetrics;
-      const summary = { schema: VERSION, origin: 'user-started-real-Eagle-formal-window', type: 'summary', ...result,
+      const summary = { schema: VERSION, origin, launchContext, type: 'summary', ...result,
+        launchSourcesVerifiedAtEnd: launchContext ? !launchSourceError : null,
         pluginRoot: first.pluginRoot,
         source: first.sourceIdentity, sourceMetadata: info.source, duration: info.duration, frames: info.frames.length, manifestSha256, manifestBytes,
         cleanup, sourceFingerprintsUnchanged: fingerprintsUnchanged, initialSourceFingerprints: initialFingerprints,
         environment: { versions: process.versions, pid: process.pid, cpu: os.cpus()[0] && os.cpus()[0].model, totalRamBytes: os.totalmem(),
           width: win.innerWidth, height: win.innerHeight, dpr: win.devicePixelRatio, visibility: doc.visibilityState }, sourceFingerprints: sources,
         initialSnapshot: first, finalSnapshot: current, existingP03: { ...p03, singleRecordedLoad: true,
-          withinTarget: p03.totalMs <= Math.max(5, info.duration) * 1000, note: 'Existing formal app/session entry through audio/index/first-frame ready and synchronous UI notification; not three fresh generations.' },
+          withinTarget: p03.reused ? null : p03.totalMs <= Math.max(5, info.duration) * 1000,
+          note: 'App/session entry through audio/index/first-frame ready and synchronous UI notification; one load only. Reuse has no numeric readiness gate; independent entry provenance, when present, is recorded separately.' },
         rounds, receipts, reservation, interruptedTrace: failedCapture, resourceStop: { requested: closeForRss, thresholdBytes: RSS_STOP,
           closeRequestedAfterReceipt: closeForRss, independentlyObservedReleased: false },
         limitations: ['T1 early formal-UI regression only, not T0 full 18-round repetition or T4 full acceptance.',
@@ -328,7 +341,7 @@ function run(options = {}) {
           'Synthetic DOM pointers exercise formal UI/session/player; physical mouse feel and OS pointer capture still require user observation.',
           'Draw submissions are measured, not monitor scanout. Completed-draw P95 excludes superseded/reused requests; their counts and gaps remain.',
           'Renderer RSS is sampled at ~100ms; other Eagle/GPU processes and missed peaks are not inferred.',
-          'P03 is one existing real load with full boundary; three-first/three-reuse protocol remains separate.',
+          'P03 is one existing load starting at app initialize; independent entry maps SDK create.path. Not the original manifest startup. Three-first/three-reuse protocol remains separate.',
           'Disk source hashes are checked at driver start/end. The user must freshly load this candidate before attaching; hashes do not prove an older open window loaded these disk bytes.'],
         userObservations: { smoothness: 'not-recorded', audioSync: 'not-recorded', layout: 'not-recorded' } };
       if (persistenceFailure) {
