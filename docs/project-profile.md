@@ -2,13 +2,13 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。2026-10-12用户确认T1阶段体验通过后再次恢复开发，体验节点`phase4-t1-experience-approved`保持；当前先补免命令宿主测量入口，T2待技术关卡，见[恢复记录](progress.md#阶段-4-t1免命令宿主测量入口)。
+- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1用户体验与真实Eagle六轮早期技术关卡通过，保留体验节点并固定`phase4-t1-early-verified`；当前推进T2，见[技术收尾](progress.md#阶段-4-t1真实测量核对与技术收尾)。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
 - T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json为独立宿主测试入口。[T0计划](experiments/T0/plan.md)固定输入、预算与验证边界。正式入口已获用户T1阶段体验认可，尚非完整MVP或全项技术验收版本。
 - T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
-- A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）。T0修正版完整复验18轮已核对，正常79～81次提交/秒、最长约49ms、P95约9ms；首次3轮约22秒，102点独立源JPEG指纹匹配、1490帧PTS一致。六次首备/复用含选中读取，实验重置单记，不包含插件创建；旧超时/取消记录保留。压力仍有约1秒停顿，不推广到全编码、正式UI或长期稳定。T1分层入口已获用户整体体验认可，正式宿主量化未补齐，不能以T0数据代替。[T0收尾证据与边界](experiments/T0/report.md#完整复验核对与独立源帧收尾)。
+- A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）。T0修正版完整复验18轮已核对，正常79～81次提交/秒、最长约49ms、P95约9ms；首次3轮约22秒，102点独立源JPEG指纹匹配、1490帧PTS一致。六次首备/复用含选中读取，实验重置单记，不包含插件创建；旧超时/取消记录保留。压力仍有约1秒停顿，不推广到全编码或长期稳定。T1分层入口用户体验及正式代码六轮真实宿主早期回归已通过，快拖67～73次提交/秒、最长67.3ms、随机P95约10～11ms；T4全矩阵/长期资源仍待验，不能以T0数据代替。[T0收尾证据与边界](experiments/T0/report.md#完整复验核对与独立源帧收尾)。
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 
@@ -63,6 +63,7 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 - `poc-b-performance-verified`：becf389，原位置下 B 的单视频性能验收版本，准确性和长期内存限制仍成立。
 - `phase3c-approved`：2026-10-11 用户验收后的工程文档节点；覆盖产品/架构交接、测试协议、MVP 文件组织与迁移计划，不表示阶段 4 实现或性能通过。指向以 Git 标签核对为准。
 - `phase4-t1-experience-approved`：2026-10-12用户整体确认T1阶段体验通过后的收尾节点，代码沿用`14d7f44`。只固定体验认可与文档交接，不表示正式宿主P-01～P-03量化、T2或MVP总验收通过。
+- `phase4-t1-early-verified`：2026-10-12核对`c1a5fa0`候选的六轮真实Eagle原始事件后固定的限定早期关卡；正常3×30秒、随机3×200及单次复用就绪/资源绑定。不是T4全矩阵、首次/复用三轮、长期资源或MVP总验收；播放器未改动。
 - 标签用于固定代码快照；原始窗口会话、回执与评估 JSON 单独保存在 evidence，不由标签替代。
 - 迁移前版本使用旧路径，标签可以查看代码但不能保证在新目录直接运行。若需复跑应另获范围并适配路径，不能通过切换标签覆盖当前文件或证据。
 - 不自动创建远程、推送、发布或生成正式安装包。
