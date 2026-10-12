@@ -44,8 +44,7 @@ function jsonBytes(value) {
   if (data.length > LIMITS.metadataBytes) fail('缓存元数据超过容量限制。');
   return data;
 }
-function readJSON(file) {
-  const before = regular(file);
+function readJSON(file, before = regular(file)) {
   if (before.size > LIMITS.metadataBytes) fail('缓存元数据超过容量限制。');
   const fd = fs.openSync(file, 'r');
   try {
@@ -97,12 +96,15 @@ function createCache(options = {}) {
   const ownerValue = (kind, extra) => ({ schema: 1, owner: OWNER, recipe: RECIPE, root, kind, ...extra });
   function verifyRoot() {
     const pluginStat = directory(plugin), rootStat = directory(root);
-    if (rootStat.dev !== pluginStat.dev || path.parse(root).root.toLowerCase() !== path.parse(plugin).root.toLowerCase() || /^c:/i.test(fs.realpathSync(root)))
+    // directory(root) already established that its real path equals root.
+    if (rootStat.dev !== pluginStat.dev || path.parse(root).root.toLowerCase() !== path.parse(plugin).root.toLowerCase() || /^c:/i.test(root))
       fail('缓存实际位置必须与插件同盘且不在C盘。');
-    return verifyOwner(root, 'root');
+    return verifyOwner(root, 'root', rootStat);
   }
-  function verifyOwner(dir, kind) {
-    directory(dir); const value = readJSON(path.join(dir, 'owner.json'));
+  function verifyOwner(dir, kind, checkedDirectory) {
+    // Only callers in the same synchronous segment pass a checked directory.
+    if (!checkedDirectory) directory(dir);
+    const value = readJSON(path.join(dir, 'owner.json'));
     if (value.schema !== 1 || value.owner !== OWNER || value.recipe !== RECIPE || value.root !== root || value.kind !== kind)
       fail('缓存所有权不明；不读取或清理。');
     return value;
@@ -122,7 +124,7 @@ function createCache(options = {}) {
     verifyRoot();
     const file = path.join(root, 'writer.lock'), stat = regular(file);
     if (!sameFile(job.lockIdentity, stat)) fail('缓存写锁身份已改变。');
-    const value = readJSON(file);
+    const value = readJSON(file, stat);
     if (value.owner !== OWNER || value.recipe !== RECIPE || value.root !== root || value.kind !== 'writer' || value.token !== job.token || value.pid !== process.pid)
       fail('缓存写锁所有权已改变。');
   }
@@ -135,8 +137,15 @@ function createCache(options = {}) {
     const map = manifestAssets(info, expectedSha), expected = new Set(['owner.json', 'manifest.json', ...map.keys()]);
     const actual = fs.readdirSync(dir);
     if (actual.length !== expected.size || actual.some(name => !expected.has(name))) fail('缓存包含未登记文件；拒绝使用。');
-    for (const [file, item] of map) if (regular(path.join(dir, file)).size !== item.bytes) fail('缓存资产长度已改变。');
-    return { info, map, names: actual };
+    let totalBytes = 0;
+    for (const file of actual) {
+      const stat = regular(path.join(dir, file)), item = map.get(file);
+      if (item && stat.size !== item.bytes) fail('缓存资产长度已改变。');
+      if (!Number.isSafeInteger(stat.size) || stat.size < 0 || !Number.isSafeInteger(totalBytes + stat.size) || totalBytes + stat.size > diskBytes)
+        fail('缓存现有容量超过预算。');
+      totalBytes += stat.size;
+    }
+    return { info, map, names: actual, totalBytes };
   }
   function usage(job) {
     verifyRoot(); let bytes = 0;
@@ -147,7 +156,9 @@ function createCache(options = {}) {
         const match = /^media-([0-9a-f]{64})-([0-9a-f]{12})$/.exec(name);
         if (!match || match[2] !== recipeId) fail('检测到未知或未完成缓存，已停止写入并保留文件。');
         const inspected = inspectDirectory(file, 'cache', match[1]);
-        for (const child of inspected.names) add(regular(path.join(file, child)).size);
+        // No await separates inspection from accounting: reuse its verified
+        // leaf sizes, including owner and manifest, rather than scan twice.
+        add(inspected.totalBytes);
       } else {
         regular(file);
         if (name === 'owner.json') verifyOwner(root, 'root');
@@ -280,9 +291,36 @@ function createCache(options = {}) {
       });
     }
     async function writeAsset(name, data, internal = false) {
-      const stream = openAsset(name, internal);
-      try { stream.append(data); } catch (error) { try { await stream.close(); } catch (closeError) { error.closeError = closeError.message; } throw error; }
-      return stream.close();
+      safeName(name);
+      if ((!internal && ['owner.json', 'manifest.json', 'writer.lock'].includes(name)) || job.files.has(name)) fail('缓存文件已登记或属于保留名称。');
+      if (!Buffer.isBuffer(data)) fail('缓存输出只接受Buffer。');
+      if (data.length > (internal ? LIMITS.metadataBytes : LIMITS.assetBytes)) fail('单个缓存资产超过上限。');
+      // Whole JPEG/metadata buffers need no streaming boundary. Verify the
+      // root, writer and partial once, then create/write/check/close without
+      // an await. Audio's streaming API retains its per-operation guards.
+      ensurePartial();
+      const file = path.join(job.partial, name), fileFd = fs.openSync(file, 'wx+');
+      const record = { file: name, bytes: 0, identity: null, closed: false, sha256: null };
+      job.files.set(name, record); job.streams.add(record); let primaryError = null;
+      try {
+        record.identity = fs.fstatSync(fileFd);
+        const openedPath = regular(file);
+        if (!sameFile(record.identity, openedPath) || openedPath.size !== 0 || record.identity.size !== 0) fail('缓存输出文件身份或长度已改变。');
+        charge(job, data.length);
+        writeAll(fileFd, data, 0, count => { record.bytes += count; });
+        const written = fs.fstatSync(fileFd), current = regular(file);
+        if (!sameFile(record.identity, written) || !sameFile(record.identity, current) || written.size !== record.bytes || current.size !== record.bytes)
+          fail('关闭时缓存输出身份已改变。');
+        cancelled(job.signal);
+        // This is the expected content hash. finish() still reads every actual
+        // asset from disk and checks the hash before it can publish the cache.
+        record.sha256 = sha(data);
+        return Object.freeze({ file: name, bytes: record.bytes, sha256: record.sha256 });
+      } catch (error) { primaryError = error; throw error; }
+      finally {
+        try { fs.closeSync(fileFd); record.closed = true; job.streams.delete(record); }
+        catch (error) { if (primaryError) primaryError.closeError = error.message; else throw error; }
+      }
     }
     async function readComplete() {
       assertWriter(job);
@@ -361,7 +399,7 @@ function createCache(options = {}) {
       const sizes = new Map();
       for (const name of names) {
         const stat = regular(path.join(job.partial, name)), record = job.files.get(name);
-        if (record && (!sameFile(record.identity, stat) || stat.size !== record.bytes)) fail('临时文件身份或长度已改变，未执行删除。');
+        if (record && (!record.identity || !sameFile(record.identity, stat) || stat.size !== record.bytes)) fail('临时文件身份或长度已改变，未执行删除。');
         sizes.set(name, stat.size);
       }
       // Validate every registered path before the first deletion; owner last.

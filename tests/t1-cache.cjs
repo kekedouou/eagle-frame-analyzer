@@ -14,7 +14,8 @@ const SOURCE_SHA = 'a'.repeat(64);
 let count = 0;
 function memoryFileSystem() {
   const nodes = new Map(), descriptors = new Map(), deleted = []; let inode = 10, fdNext = 100, tick = 1;
-  const state = { shortWrite: Infinity, shortRead: Infinity, zeroWrite: false, failRename: false };
+  const state = { shortWrite: Infinity, shortRead: Infinity, zeroWrite: false, failRename: false,
+    writesUntilError: Infinity, afterWrite: null, afterOpen: null, readOpens: [] };
   const normal = file => win.resolve(file);
   function error(code) { const value = new Error(code); value.code = code; throw value; }
   function nodeFor(file) { const value = nodes.get(normal(file)); if (!value) error('ENOENT'); return value; }
@@ -48,15 +49,21 @@ function memoryFileSystem() {
       else if (!value) error('ENOENT');
       if (value.kind !== 'file') error('EINVAL');
       if (flags === 'w') { value.data = Buffer.alloc(0); value.mtimeMs = ++tick; }
-      const id = ++fdNext; descriptors.set(id, { node: value, file: absolute }); return id;
+      if (flags === 'r') state.readOpens.push(absolute);
+      const id = ++fdNext; descriptors.set(id, { node: value, file: absolute });
+      if (state.afterOpen) state.afterOpen({ node: value, file: absolute, flags });
+      return id;
     },
     closeSync(fd) { if (!descriptors.delete(fd)) error('EBADF'); },
     fstatSync(fd) { return stat(descriptor(fd).node); },
     writeSync(fd, data, offset, length, position) {
       const value = descriptor(fd).node;
       if (state.zeroWrite) return 0;
+      if (state.writesUntilError-- <= 0) error('EIO');
       const n = Math.min(length, state.shortWrite), size = Math.max(value.data.length, position + n), next = Buffer.alloc(size);
-      value.data.copy(next); data.copy(next, position, offset, offset + n); value.data = next; value.mtimeMs = ++tick; return n;
+      value.data.copy(next); data.copy(next, position, offset, offset + n); value.data = next; value.mtimeMs = ++tick;
+      if (state.afterWrite) state.afterWrite({ node: value, file: descriptor(fd).file });
+      return n;
     },
     readSync(fd, data, offset, length, position) {
       const value = descriptor(fd).node, n = Math.max(0, Math.min(length, state.shortRead, value.data.length - position));
@@ -248,6 +255,109 @@ async function main() {
     const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA }); await tx.writeAsset('000000.jpg', Buffer.from('data'));
     const partial = [...h.nodes.keys()].find(file => win.basename(file).startsWith('partial-')), file = win.join(partial, '000000.jpg');
     h.nodes.get(file).ino += 100; const before = h.deleted.length; assert.throws(() => tx.abort(), /身份或长度/); assert.strictEqual(h.deleted.length, before); tx.close();
+  });
+  await test('one-shot short writes close before returning and commit independently reads disk', async () => {
+    const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA }); h.state.shortWrite = 2;
+    const asset = await tx.writeAsset('000000.jpg', Buffer.from('frame-data'));
+    assert.strictEqual(asset.bytes, 10); assert.strictEqual(asset.sha256, crypto.createHash('sha256').update('frame-data').digest('hex'));
+    assert.strictEqual(h.descriptors.size, 0);
+    assert.strictEqual(h.state.readOpens.filter(file => file.endsWith('.jpg')).length, 0);
+    const info = await tx.finish(manifest(asset), snapshot()); tx.close();
+    assert(h.state.readOpens.some(file => file.endsWith('.jpg')));
+    h.cache.release(info); assert.strictEqual(h.descriptors.size, 0);
+  });
+  await test('one-shot zero write and mid-buffer error leave exact partial safely abortable', async () => {
+    for (const partialFailure of [false, true]) {
+      const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA });
+      h.state.zeroWrite = !partialFailure; h.state.shortWrite = 2; h.state.writesUntilError = partialFailure ? 1 : Infinity;
+      await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('frame-data')), /写入未完整|EIO/);
+      h.state.zeroWrite = false; h.state.writesUntilError = Infinity;
+      assert.strictEqual(h.descriptors.size, 0); assert.strictEqual(tx.abort(), true); tx.close();
+      assert.deepStrictEqual([...h.nodes.keys()].filter(file => win.dirname(file) === h.root), [win.join(h.root, 'owner.json')]);
+    }
+  });
+  await test('one-shot capacity refusal closes its empty asset before any growth', async () => {
+    const h = harness({ diskBytes: 1600 }), tx = h.cache.begin({ sourceSha256: SOURCE_SHA });
+    await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.alloc(1600)), /容量不足/);
+    const jpeg = [...h.nodes].find(([file]) => file.endsWith('.jpg'));
+    assert(jpeg); assert.strictEqual(jpeg[1].data.length, 0); assert.strictEqual(h.descriptors.size, 0);
+    tx.abort(); tx.close();
+  });
+  await test('one-shot same-length disk corruption is rejected by commit rather than published', async () => {
+    const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA });
+    h.state.afterWrite = ({ node, file }) => { if (file.endsWith('.jpg')) node.data[0] ^= 1; };
+    const asset = await tx.writeAsset('000000.jpg', Buffer.from('frame-data')); h.state.afterWrite = null;
+    assert.strictEqual(asset.sha256, crypto.createHash('sha256').update('frame-data').digest('hex'));
+    await assert.rejects(() => tx.finish(manifest(asset), snapshot()), /提交前缓存资产发生变化/);
+    assert(![...h.nodes.keys()].some(file => /^media-/.test(win.basename(file))));
+    tx.abort(); tx.close(); assert.strictEqual(h.descriptors.size, 0);
+  });
+  await test('one-shot inode or hardlink mutation closes fd and refuses cleanup of unknown identity', async () => {
+    for (const mutation of ['inode', 'hardlink']) {
+      const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA });
+      h.state.afterWrite = ({ node, file }) => { if (file.endsWith('.jpg')) { if (mutation === 'inode') node.ino += 100; else node.nlink = 2; } };
+      await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('frame-data')), /输出身份|普通文件/);
+      h.state.afterWrite = null; assert.strictEqual(h.descriptors.size, 0); const deletedAt = h.deleted.length;
+      assert.throws(() => tx.abort(), /身份或长度|普通文件/); assert.strictEqual(h.deleted.length, deletedAt); tx.close();
+    }
+  });
+  await test('one-shot cancellation after writing closes fd and cleans only registered partial', async () => {
+    const h = harness(), controller = new AbortController(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA, signal: controller.signal });
+    h.state.afterWrite = ({ file }) => { if (file.endsWith('.jpg')) controller.abort(); };
+    await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('frame-data')), error => error.name === 'AbortError');
+    h.state.afterWrite = null; assert.strictEqual(h.descriptors.size, 0); tx.abort(); tx.close();
+    assert.deepStrictEqual([...h.nodes.keys()].filter(file => win.dirname(file) === h.root), [win.join(h.root, 'owner.json')]);
+  });
+  await test('one-shot rejects changed root, partial paths and writer token before next write', async () => {
+    for (const change of ['root', 'partial', 'lock-token', 'lock-inode']) {
+      const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA }); await tx.writeAsset('000000.jpg', Buffer.from('frame-data'));
+      const partial = [...h.nodes.keys()].find(file => win.basename(file).startsWith('partial-')), lock = h.nodes.get(win.join(h.root, 'writer.lock'));
+      const lockData = Buffer.from(lock.data), lockIno = lock.ino;
+      if (change === 'root') h.nodes.get(h.root).real = 'E:\\outside';
+      if (change === 'partial') h.nodes.get(partial).real = 'E:\\outside';
+      if (change === 'lock-token') { const value = JSON.parse(lock.data); value.token = 'unknown'; lock.data = Buffer.from(JSON.stringify(value)); }
+      if (change === 'lock-inode') lock.ino += 100;
+      const nodeCount = h.nodes.size; await assert.rejects(() => tx.writeAsset('000001.jpg', Buffer.from('late')), /链接|所有权|写锁身份/);
+      assert.strictEqual(h.nodes.size, nodeCount); assert.strictEqual(h.descriptors.size, 0);
+      delete h.nodes.get(h.root).real; delete h.nodes.get(partial).real; lock.data = lockData; lock.ino = lockIno;
+      tx.abort(); tx.close();
+    }
+  });
+  await test('usage includes actual owner and manifest bytes at the exact capacity boundary', async () => {
+    const h = harness(), info = await prepared(h); h.cache.release(info);
+    const observedBytes = [...h.nodes].filter(([file, node]) => file.startsWith(h.root + '\\') && node.kind === 'file').reduce((sum, [, node]) => sum + node.data.length, 0);
+    const probe = h.cache.begin({ sourceSha256: SOURCE_SHA }), writerBytes = h.nodes.get(win.join(h.root, 'writer.lock')).data.length; probe.close();
+    const exact = h.api.createCache({ pluginRoot: 'D:\\fixtures\\plugin', diskBytes: observedBytes + writerBytes });
+    const accepted = exact.begin({ sourceSha256: SOURCE_SHA }); accepted.close();
+    const short = h.api.createCache({ pluginRoot: 'D:\\fixtures\\plugin', diskBytes: observedBytes + writerBytes - 1 });
+    assert.throws(() => short.begin({ sourceSha256: SOURCE_SHA }), /预算|容量/);
+    assert(!h.nodes.has(win.join(h.root, 'writer.lock'))); assert(h.nodes.has(win.join(info.cacheDir, 'manifest.json'))); assert.strictEqual(h.descriptors.size, 0);
+  });
+  await test('reusing the prechecked lock stat still rejects an inode changed at open', async () => {
+    const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA }), lock = h.nodes.get(win.join(h.root, 'writer.lock')), originalIno = lock.ino;
+    h.state.afterOpen = ({ node, file, flags }) => { if (file.endsWith('writer.lock') && flags === 'r') node.ino += 100; };
+    await assert.rejects(() => tx.writeAsset('000000.jpg', Buffer.from('data')), /元数据身份已改变/);
+    h.state.afterOpen = null; lock.ino = originalIno; assert.strictEqual(h.descriptors.size, 0); tx.close();
+  });
+  await test('root and partial owner changes are not hidden by same-segment directory reuse', async () => {
+    for (const kind of ['root', 'partial']) {
+      const h = harness(), tx = h.cache.begin({ sourceSha256: SOURCE_SHA }); await tx.writeAsset('000000.jpg', Buffer.from('data'));
+      const partial = [...h.nodes.keys()].find(file => win.basename(file).startsWith('partial-'));
+      const marker = h.nodes.get(win.join(kind === 'root' ? h.root : partial, 'owner.json')), original = Buffer.from(marker.data), value = JSON.parse(marker.data);
+      if (kind === 'root') value.owner = 'foreign-owner'; else value.token = 'foreign-token';
+      marker.data = Buffer.from(JSON.stringify(value)); const sizeBefore = h.nodes.size;
+      await assert.rejects(() => tx.writeAsset('000001.jpg', Buffer.from('late')), /所有权|事务身份/);
+      assert.strictEqual(h.nodes.size, sizeBefore); marker.data = original; tx.abort(); tx.close(); assert.strictEqual(h.descriptors.size, 0);
+    }
+  });
+  await test('complete reuse retains its writer guard after each awaited asset hash', async () => {
+    const h = harness(), info = await prepared(h); h.cache.release(info);
+    const tx = h.cache.begin({ sourceSha256: SOURCE_SHA }), lock = h.nodes.get(win.join(h.root, 'writer.lock')), original = Buffer.from(lock.data);
+    h.state.afterOpen = ({ file, flags }) => {
+      if (flags === 'r' && file.endsWith('.jpg')) { const value = JSON.parse(lock.data); value.token = 'foreign-token'; lock.data = Buffer.from(JSON.stringify(value)); }
+    };
+    await assert.rejects(() => tx.readComplete(), /写锁所有权/);
+    h.state.afterOpen = null; lock.data = original; tx.close(); assert.strictEqual(h.descriptors.size, 0);
   });
   console.log('T1 cache: ' + count + ' in-memory safety tests passed; no real cache/media writes.');
 }

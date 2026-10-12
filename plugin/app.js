@@ -3,9 +3,26 @@
   'use strict';
   const path = require('path'), fs = require('fs');
   const ui = window.EVAUI.createUI();
-  let session = null, initializing = false, closed = false;
+  let session = null, diagnostics = null, initializing = false, closed = false;
   const now = () => performance.now();
   const startupError = error => ui.update({ state: 'error', source: null, duration: 0, playback: null, error: { message: String(error && error.message || error) } });
+  function cancelled() { const error = new Error('视频准备已取消。'); error.name = 'AbortError'; error.code = 'PREPARATION_CANCELLED'; return error; }
+  // SDK discovery itself cannot be cancelled. Only this session's wait ends;
+  // handlers still consume a late result/rejection without starting old work.
+  function waitTools(pending, signal) {
+    if (signal && signal.aborted) return Promise.reject(cancelled());
+    return new Promise((resolve, reject) => {
+      const finish = (callback, value) => { if (signal) signal.removeEventListener('abort', aborted); callback(value); };
+      const aborted = () => finish(reject, cancelled());
+      if (signal) signal.addEventListener('abort', aborted, { once: true });
+      pending.then(value => finish(resolve, value), error => finish(reject, error));
+    });
+  }
+  async function loadSelected(settings) {
+    const result = await session.loadSelected(settings);
+    if (diagnostics) diagnostics.publish('load-result', result);
+    return result;
+  }
   function initialize(plugin) {
     const entryAt = now();
     if (closed || initializing || session) return;
@@ -17,24 +34,36 @@
       const { createMedia } = require(path.join(root, 'media.cjs'));
       const { createEagleAdapter } = require(path.join(root, 'eagle.cjs'));
       const { createSession } = require(path.join(root, 'session.cjs'));
+      const { createDiagnostics } = require(path.join(root, 'diagnostics.cjs'));
       const frameIndex = require(path.join(root, 'frame-index.cjs'));
+      diagnostics = createDiagnostics({ snapshot: () => session ? { ...session.snapshot(), pluginRoot: root } : null });
+      Object.defineProperty(window, 'EVADiagnostics', { value: diagnostics.public, writable: false, configurable: false });
       const adapter = createEagleAdapter(eagle), cache = createCache({ pluginRoot: root });
       let preparedMedia = null, discovery = null;
       // Selection is captured by session immediately; tool discovery waits only
       // inside preparation, so it cannot silently change the clicked material.
       const media = { async prepare(snapshot, options) {
+        const signal = options && options.signal;
+        if (signal && signal.aborted) throw cancelled();
         if (!preparedMedia) {
           if (!discovery) discovery = Promise.resolve().then(() => adapter.discoverTools())
-            .then(tools => { preparedMedia = createMedia({ tools, cache, frameIndex }); })
             .finally(() => { discovery = null; });
-          await discovery;
+          const tools = await waitTools(discovery, signal);
+          if (signal && signal.aborted) throw cancelled();
+          if (!preparedMedia) preparedMedia = createMedia({ tools, cache, frameIndex });
         }
         return preparedMedia.prepare(snapshot, options);
       } };
       session = createSession({ eagleAdapter: adapter, media, cache, now,
-        createPlayer: options => new window.EVAPlayer.Player({ ...options, canvas: ui.canvas, frameIndex }), onChange: snapshot => ui.update(snapshot) });
+        createPlayer: options => {
+          const value = session.snapshot(), identity = value.sourceIdentity;
+          const binding = Object.freeze({ sessionEpoch: value.epoch, libraryEpoch: value.libraryEpoch,
+            itemId: identity && identity.itemId, sourceSha256: identity && identity.sha256 });
+          return new window.EVAPlayer.Player({ ...options, canvas: ui.canvas, frameIndex,
+            emit: event => diagnostics.publish('player', () => ({ binding, event })) });
+        }, onChange: snapshot => { ui.update(snapshot); diagnostics.publish('state', snapshot); } });
       ui.bindSession(session);
-      return session.loadSelected({ startedAt: entryAt, trigger: 'plugin-create' }).catch(() => {});
+      return loadSelected({ startedAt: entryAt, trigger: 'plugin-create' }).catch(() => {});
     } catch (error) { startupError(error); }
     finally { initializing = false; }
   }
@@ -46,7 +75,7 @@
   }
   if (typeof eagle !== 'undefined' && typeof eagle.onPluginCreate === 'function') {
     eagle.onPluginCreate(initialize);
-    if (typeof eagle.onPluginRun === 'function') eagle.onPluginRun(() => session && !closed ? session.loadSelected({ startedAt: now(), trigger: 'plugin-run' }).catch(() => {}) : undefined);
+    if (typeof eagle.onPluginRun === 'function') eagle.onPluginRun(() => session && !closed ? loadSelected({ startedAt: now(), trigger: 'plugin-run' }).catch(() => {}) : undefined);
     if (typeof eagle.onLibraryChanged === 'function') eagle.onLibraryChanged(() => session && !closed ? session.libraryChanged().catch(startupError) : undefined);
     if (typeof eagle.onPluginBeforeExit === 'function') eagle.onPluginBeforeExit(close);
     window.addEventListener('pagehide', close);

@@ -3,24 +3,31 @@ const assert = require('assert');
 const { createUI, pointerTime, formatTime, spaceAllowed } = require('../plugin/ui.js');
 let checks = 0;
 function test(name, fn) { fn(); checks++; console.log('ok ' + name); }
-function target() {
+function target(tagName = 'div', parent = null) {
   const handlers = new Map();
-  return { style: {}, attributes: {}, disabled: false, hidden: false, textContent: '', offsetWidth: 80,
+  return { style: {}, attributes: {}, tagName: tagName.toLowerCase(), parentElement: parent, disabled: false, hidden: false, textContent: '', offsetWidth: 80,
     addEventListener(type, fn) { if (!handlers.has(type)) handlers.set(type, new Set()); handlers.get(type).add(fn); },
     removeEventListener(type, fn) { if (handlers.has(type)) handlers.get(type).delete(fn); },
     fire(type, values = {}) { const e = { pointerId: 1, button: 0, buttons: 1, clientX: 100, preventDefault() { this.prevented = true; }, ...values }; for (const fn of handlers.get(type) || []) fn(e); return e; },
     setAttribute(name, value) { this.attributes[name] = value; },
     getBoundingClientRect() { return { left: 100, width: 200 }; },
     focus() {}, setPointerCapture(id) { this.capture = id; }, hasPointerCapture(id) { return this.capture === id; }, releasePointerCapture() { this.capture = null; },
-    closest() { return null; } };
+    closest(selector) {
+      const matches = selector.split(',').some(part => part[0] !== '[' ? part === this.tagName
+        : part === '[contenteditable]' ? Object.hasOwn(this.attributes, 'contenteditable')
+        : /^\[role="([^"]+)"\]$/.test(part) && this.attributes.role === part.match(/^\[role="([^"]+)"\]$/)[1]);
+      return matches ? this : this.parentElement ? this.parentElement.closest(selector) : null;
+    } };
 }
 function harness() {
   const elements = new Map(), win = target(), calls = [], doc = { getElementById(id) { if (!elements.has(id)) elements.set(id, target()); return elements.get(id); } };
   const ui = createUI({ document: doc, window: win, now: () => 123 });
+  doc.getElementById('timeline').setAttribute('role', 'slider');
+  doc.getElementById('timeline').focus = () => { doc.activeElement = doc.getElementById('timeline'); };
   const session = { seek(time, options) { calls.push(['seek', time, options]); return Promise.resolve(); }, toggle() { calls.push(['toggle']); }, step(delta) { calls.push(['step', delta]); }, retry() { calls.push(['retry']); } };
   const state = { epoch: 1, state: 'paused', duration: 10, source: { name: '中文 空格.mp4' }, playback: { time: 2, frameId: 120 } };
   ui.bindSession(session); ui.update(state);
-  return { ui, el: id => doc.getElementById(id), win, calls, state };
+  return { ui, el: id => doc.getElementById(id), win, calls, state, doc };
 }
 test('Time formatting rounds presentation only; pointer mapping clamps actual track bounds', () => {
   assert.strictEqual(formatTime(4.2509), '0:04.250'); assert.strictEqual(formatTime(61), '1:01.000');
@@ -32,6 +39,16 @@ test('Time formatting rounds presentation only; pointer mapping clamps actual tr
 test('Space ignores repeat, composition, modifiers, text and focused controls', () => {
   assert(spaceAllowed({ key: ' ', target: target() }));
   for (const value of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { shiftKey: true }, { target: { isContentEditable: true } }, { target: { closest: () => ({}) } }]) assert(!spaceAllowed({ key: ' ', ...value }));
+});
+test('Space toggles once after dragging leaves the custom timeline focused', () => {
+  const h = harness(); h.el('timeline').fire('pointerdown', { clientX: 240 }); h.win.fire('pointerup', { clientX: 240, buttons: 0 });
+  h.ui.update({ ...h.state, playback: { time: 7, frameId: 420 } });
+  assert.strictEqual(h.doc.activeElement, h.el('timeline'));
+  const before = h.calls.length;
+  const event = h.win.fire('keydown', { code: 'Space', key: ' ', target: h.doc.activeElement });
+  assert(event.prevented); assert.strictEqual(h.calls.length, before + 1); assert.deepStrictEqual(h.calls[before], ['toggle']);
+  h.win.fire('keydown', { code: 'Space', key: ' ', repeat: true, target: h.doc.activeElement });
+  assert.strictEqual(h.calls.length, before + 1); h.ui.destroy();
 });
 test('Gesture thumb follows pointer while time hint remains the actual submitted frame', () => {
   const h = harness(); h.el('timeline').fire('pointerdown', { clientX: 260 });
@@ -49,7 +66,7 @@ test('Capture loss does not freeze slider; release takes final physical coordina
   h.win.fire('pointerup', { clientX: 280, buttons: 0 });
   assert.strictEqual(h.calls[h.calls.length - 1][1], 9);
   assert.strictEqual(h.calls[h.calls.length - 1][2].kind, 'release');
-  assert(h.el('timeHint').hidden); h.ui.destroy();
+  assert(!h.el('timeHint').hidden); assert.strictEqual(h.el('timeHint').textContent, '0:02.000'); h.ui.destroy();
 });
 test('Epoch switch cancels gesture without issuing a release against the new video', () => {
   const h = harness(); h.el('timeline').fire('pointerdown', { clientX: 260 }); const count = h.calls.length;
@@ -74,5 +91,51 @@ test('Hint clamps to timeline edges, and UI renders material text without HTML i
   h.ui.update({ ...h.state, playback: { time: 10, frameId: 600 } }); assert.strictEqual(h.el('timeHint').style.left, '160px');
   h.ui.update({ ...h.state, source: { name: '<script>素材</script>' } }); assert.strictEqual(h.el('sourceName').textContent, '<script>素材</script>');
   h.ui.destroy();
+});
+test('Space protects native controls, editable descendants and other sliders', () => {
+  const h = harness(), timelineChild = target('span', h.el('timeline'));
+  assert(spaceAllowed({ code: 'Space', target: timelineChild }, h.el('timeline')));
+  const controls = ['button', 'input', 'textarea', 'select', 'a'].map(name => target(name));
+  const textbox = target(), otherSlider = target(), editable = target();
+  textbox.setAttribute('role', 'textbox'); otherSlider.setAttribute('role', 'slider'); editable.setAttribute('contenteditable', 'true');
+  controls.push(textbox, otherSlider, editable, target('span', editable));
+  const editableTimelineChild = target('span', h.el('timeline')); editableTimelineChild.setAttribute('contenteditable', 'true'); controls.push(editableTimelineChild);
+  for (const control of controls) {
+    const event = h.win.fire('keydown', { code: 'Space', key: ' ', target: control });
+    assert(!event.prevented); assert.strictEqual(h.calls.length, 0);
+  }
+  h.ui.destroy();
+});
+test('Space during a held drag or nonplayable states cannot queue playback', () => {
+  const h = harness(); h.el('timeline').fire('pointerdown', { clientX: 200 });
+  const before = h.calls.length;
+  h.win.fire('keydown', { code: 'Space', key: ' ', target: h.el('timeline') }); assert.strictEqual(h.calls.length, before);
+  h.win.fire('pointerup', { clientX: 200, buttons: 0 });
+  for (const state of ['empty', 'preparing', 'seeking', 'error', 'closed']) {
+    h.ui.update({ ...h.state, state }); const count = h.calls.length;
+    h.win.fire('keydown', { code: 'Space', key: ' ', target: h.el('timeline') }); assert.strictEqual(h.calls.length, count);
+  }
+  h.ui.update(h.state); assert.strictEqual(h.calls.filter(call => call[0] === 'toggle').length, 0); h.ui.destroy();
+});
+test('Release hint follows actual final frame, stays readable, and clears on a new operation or epoch', () => {
+  const h = harness(); h.el('timeline').fire('pointerdown', { clientX: 300 }); h.win.fire('pointerup', { clientX: 300, buttons: 0 });
+  assert.strictEqual(h.el('timeHint').textContent, '0:02.000');
+  h.ui.update({ ...h.state, state: 'seeking', playback: { time: 3, frameId: 180 } });
+  assert.strictEqual(h.el('timeHint').textContent, '0:03.000'); assert(!h.el('timeHint').hidden);
+  h.ui.update({ ...h.state, playback: { time: 9.966666, frameId: 599 } });
+  assert.strictEqual(h.el('timeHint').textContent, '0:09.966'); assert.strictEqual(h.el('currentTime').textContent, '0:09.966');
+  assert.strictEqual(h.el('thumb').style.left, '99.66666%'); assert.strictEqual(h.el('timeHint').style.left, '160px');
+  h.el('next').fire('click'); assert(h.el('timeHint').hidden);
+  h.el('timeline').fire('pointerdown'); h.win.fire('pointerup', { buttons: 0 });
+  h.ui.update({ ...h.state, epoch: 2 }); assert(h.el('timeHint').hidden);
+  h.el('timeline').fire('pointerdown'); h.win.fire('pointerup', { buttons: 0 });
+  h.ui.update({ ...h.state, epoch: 2, state: 'playing' }); assert(h.el('timeHint').hidden); h.ui.destroy();
+});
+test('Library-change empty state tells the user to call the plugin again', () => {
+  const h = harness(); h.el('timeline').fire('pointerdown');
+  h.ui.update({ state: 'empty', epoch: 2, duration: 0, source: null, playback: null, progress: { stage: 'library-changed', message: '素材库已变化，请重新调用插件。' } });
+  assert.strictEqual(h.el('status').textContent, '素材库已变化，请重新调用插件。');
+  assert.strictEqual(h.el('notice').textContent, '素材库已变化，请重新调用插件。');
+  assert(!h.el('notice').hidden); assert(h.el('timeHint').hidden); assert(h.el('play').disabled); h.ui.destroy();
 });
 console.log('T1 UI: ' + checks + ' in-memory checks passed; real layout/input experience not tested.');

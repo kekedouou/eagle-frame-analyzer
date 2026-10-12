@@ -1,6 +1,6 @@
 # Eagle 视频分析
 
-一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B、3C 已结束，工程文档节点为 phase3c-approved。2026-10-11 用户另行整体授权阶段 4；T0本轮技术关卡已通过，T1正式入口已建立开发中版本，尚未完成统一检查及真实Eagle验收。现按用户要求保存并暂停，恢复位置及已知问题见[暂停交接](docs/progress.md#阶段-4-t1暂停交接)。
+一个与 Eagle 素材库关联的 Window 视频分析插件项目。阶段 2、3A、3B、3C 已结束，工程文档节点为 phase3c-approved。用户已整体授权阶段 4，并于2026-10-12恢复开发；T0本轮技术关卡已通过。T1正式入口的已知交接问题已修复，本地媒体回归通过，尚未完成真实Eagle验收，见[恢复记录](docs/progress.md#阶段-4-t1恢复开发)。
 
 T0完整复验及独立源帧参考已核对，本轮技术关卡通过，正按阶段4授权进入T1正式入口。4K H.264正常三轮约79～81次画布提交/秒、最长49ms、已提交请求P95约9ms；首次准备三轮约22秒，低于24.85秒媒体时长。保持720p、512MiB内最多64MiB压缩JPEG池、仅rAF提交。人为慢处理压力仍有约1秒停顿，不宣称全部素材/正式UI/长期性能通过；真实窗口操作来源为用户。[结果与限制](docs/experiments/T0/report.md#完整复验核对与独立源帧收尾)。T0入口保留为 `tests/host/t0/manifest.json`，无需重跑。
 
@@ -20,12 +20,17 @@ S1 原型入口为 `prototypes/playback-clock/manifest.json`，可显式读取 E
 - [技术架构](docs/architecture.md)：已批准方案、模块/数据流、风险，以及保留的原型说明。
 - [当前进度](docs/progress.md)：当前状态、验收限制及下一步边界。
 - [测试与验收协议](docs/verification.md)：R/P 追踪、样本、性能测量和异常安全验证。
-- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；T1开发中，当前由用户要求暂停。
+- [阶段 4 开发计划](docs/development-plan.md)：T0～T4、正式文件职责、PoC 迁移及每阶段关卡；T1本地链路已验证，等待必要宿主关卡。
+- [T1 正式窗口报告](docs/experiments/T1/report.md)：本地真实媒体结果、环境与测量限制，以及待执行的 Eagle 人工步骤。
 - 实验 A：[说明](docs/experiments/A/plan.md) / [报告](docs/experiments/A/report.md)。
 - 实验 B：[说明](docs/experiments/B/plan.md) / [报告](docs/experiments/B/report.md)。
 - [目录迁移与简要复盘](docs/progress/2026-10-10-repository-reorganization.md)：旧位置映射、验证结果、正确流程与修正原因。
 
-## 打开原型
+## 打开正式开发入口
+
+本轮 T1 入口是 `plugin/manifest.json`，在 Eagle 中以本地开发项目加载；当前尚待真实宿主验收。单选 MP4 后打开插件会自动准备，首帧就绪暂停；改选另一素材后再次调用插件入口切换。界面没有性能测试按钮，取证步骤见 [T1 报告](docs/experiments/T1/report.md#真实-eagle-关卡待执行)。T2 自动清理、T3 标注尚未实现，不将此开发候选视为完整 MVP。
+
+## 打开历史原型
 
 Eagle 本地开发项目入口是 `prototypes/window-player/manifest.json`，不是仓库根目录。2026-10-10 用户在本对话确认新路径下插件能够正常加载和运行；该项记录为用户人工验收，不是 Codex 执行的窗口测试，也不代表重新完成 A/B 全项测试。
 

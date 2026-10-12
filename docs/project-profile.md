@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11 用户整体授权阶段 4。T0本轮技术关卡已通过，T1正式入口开发中，现按用户要求保存并暂停；恢复入口与未修问题见[暂停交接](progress.md#阶段-4-t1暂停交接)。
+- 项目：Eagle Window 视频分析插件。产品规格 v1 及补充、架构 v1、3C 工程文档已批准；2026-10-11用户整体授权阶段4，2026-10-12恢复开发。T0本轮技术关卡已通过，T1正式入口实施及验证中；恢复入口与遗留问题见[恢复记录](progress.md#阶段-4-t1恢复开发)。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - Eagle 入口：prototypes/window-player/manifest.json，main.url 为同目录 index.html。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -22,7 +22,7 @@
 | 测试与验收协议 | docs/verification.md | R/P 追踪、样本及统一测量；批准的协议不记成运行通过 |
 | 正式开发计划 | docs/development-plan.md | T0～T4 的依赖、关卡、版本节点和迁移；不在此处提前实施 |
 | 当前进度 | docs/progress.md | 当前事实、限制、下一步授权边界 |
-| 各实验说明与报告 | docs/experiments/A、B、S1 | 分别保存范围和验收 |
+| 各实验与开发关卡报告 | docs/experiments/A、B、S1、T0、T1 | 分别保存范围、真实结果与验收边界 |
 | 日期记录与旧过程 | docs/progress/ | 历史记录保留上下文 |
 | 实验实现 | prototypes/window-player/、playback-clock/ | A/B 与 S1 分开，遵守局部 AGENTS.md |
 | 原始证据、本机配置、合成输入 | 原型内 evidence/、tools-b.json、b-test-fixtures/ | 本机忽略，迁移保留，原始证据不覆写 |
@@ -32,6 +32,8 @@
 3C 已完成 Git Diff、相对链接/锚点、R/P 与 T0～T4 对应、批准数值和受保护文件核对，并获用户最终验收；收尾仅更新状态、复核规范和固定本地版本，不运行历史实验。阶段 4 的实际检查按获批任务执行。
 
 阶段 4 建立 `node scripts/check.cjs`：默认检查新代码语法、模块依赖、纯模块/模拟集成及文档链接，不生成媒体、不清共享缓存、不启动 Eagle、不写库。显式 `node scripts/prepare-t0.cjs` 保留本地配置中登记的四个历史输入；T0 窗口默认读取 Eagle 当前单选 MP4（≤30秒），不再自动载入旧基线，也不在窗口样本菜单保留它。点击载入或重新调用读取一次快照；重新载入保持当前成功视频，空状态时重新读取。自动性能/准备协议固定当前已载入输入的身份和 SHA，每轮核对；不同输入单列结果，不能替代旧基线或4K/60fps覆盖。写入限于 T0 隔离缓存/证据，不扫描库。已执行结果与宿主失败、修复及待重测项以 T0 记录为准。
+
+T1 正式入口为 `plugin/manifest.json`；加载与真实窗口操作由用户执行。`node scripts/verify-t1.cjs record-checks` 执行默认检查并写 T1 回执；`media` 对四登记输入调用正式准备并逐资产读回，缺缓存时会生成；`cancel` 只在专用 H.264 尚无完整缓存时执行一次取消，已有则跳过；`profile` / `profile-final baseline|h264-cfr` 是保留既有完整缓存的有界临时生成诊断，前者至提交入口停止，后者执行最终内容校验后因已有目标拒绝覆盖，均清理自己 partial，不能充当完整首备。后三类属于有副作用的显式验证，不在默认检查中运行。详细证据、环境差异及宿主取证见 [T1 报告](experiments/T1/report.md)。
 
 ### 历史原型命令及副作用
 
