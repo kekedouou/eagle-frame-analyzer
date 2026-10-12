@@ -89,16 +89,19 @@ function fileTests() {
 }
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function launchModel(settings = {}) {
-  const listeners = new Map(), timers = new Map(), saved = [], nodes = { status: { hidden: false }, error: { hidden: true } };
+  const listeners = new Map(), timers = new Map(), saved = [], observers = new Set(), nodes = { status: { hidden: false }, error: { hidden: true } };
   const host = path.resolve('虚拟项目 有空格/tests/host/t1'), plugin = path.resolve(host, '../../../plugin');
   let sdkCallback, verificationCalls = 0, preparedCalls = 0, driverCalls = 0, stopCalls = 0, closes = 0, clock = 10, timerId = 0, storeCloses = 0;
-  const jobDone = deferred();
+  const jobDone = deferred(), mediaReady = deferred();
   const win = { performance: { now: () => clock },
     addEventListener(type, cb) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(cb); },
     removeEventListener(type, cb) { if (listeners.has(type)) listeners.get(type).delete(cb); },
     setTimeout(cb, ms) { timers.set(++timerId, { cb, ms }); return timerId; }, clearTimeout(id) { timers.delete(id); }, close() { closes++; },
-    EVADiagnostics: { snapshot: () => settings.snapshot || { state: 'paused', loadMetrics: { entryAt: 12, readyAt: 112, totalMs: 100, reused: true } } } };
-  const register = callback => { sdkCallback = callback; }, eagle = { onPluginCreate: register };
+    EVADiagnostics: { snapshot: () => settings.snapshot || { state: 'paused', loadMetrics: { entryAt: 12, readyAt: 112, totalMs: 100, reused: true } },
+      subscribe(callback) { observers.add(callback); return () => observers.delete(callback); } } };
+  let runCallback;
+  const register = callback => { sdkCallback = callback; }, eagle = { onPluginCreate: register,
+    onPluginRun(callback) { runCallback = callback; }, onLibraryChanged() {}, onPluginBeforeExit() {} };
   const doc = { title: '', getElementById: id => nodes[id] || null };
   const options = { window: win, document: doc, eagle, hostRoot: host,
     verify() { verificationCalls++; clock += 2; if (settings.invalidEntry) throw new Error('Entry source changed');
@@ -116,20 +119,85 @@ function launchModel(settings = {}) {
       require(name) { return name.endsWith('t1-launch.cjs') ? { install: input => install({ ...options, ...input }) } : require(name); } });
     controller = win.EVAT1Automatic; assert(controller);
   } else controller = install(options);
-  eagle.onPluginCreate(async value => { preparedCalls++; assert.strictEqual(value.path, plugin); assert.strictEqual(value.extra, 'unchanged');
+  if (settings.formal) {
+    const ui = { canvas: {}, bindSession() {}, update() {}, destroy() {} };
+    win.EVAUI = { createUI: () => ui };
+    win.EVAPlayer = { Player: function () { return { async load() {},
+      snapshot: () => ({ state: 'paused', frameId: 0, frameOrdinal: 0, time: 0 }),
+      async dispose() {}, async play() {}, async pause() {}, async seek() {}, async step() {} }; } };
+    const modules = {
+      'cache.cjs': { createCache: () => ({ readAsset() {}, release() {} }) },
+      'eagle.cjs': { createEagleAdapter: () => ({ captureSelected: () => ({ id: 'selected', filePath: path.join(plugin, '中文 视频.mp4') }),
+        discoverTools: () => ({ ffmpeg: 'memory-only' }) }) },
+      'media.cjs': { createMedia: () => ({ async prepare(value) { await mediaReady.promise; clock += 100;
+        return { source: { ...value, sha256: 'a'.repeat(64) }, duration: 3, frames: [{ id: 0 }], metrics: { reused: true } }; } }) },
+      'session.cjs': require('../plugin/session.cjs'), 'diagnostics.cjs': require('../plugin/diagnostics.cjs'), 'frame-index.cjs': {}
+    };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugin/app.js'), 'utf8'), {
+      window: win, eagle, performance: win.performance, Promise, setTimeout: win.setTimeout,
+      require(name) { if (name === 'path') return path; if (name === 'fs') return { realpathSync: value => value };
+        assert.strictEqual(path.dirname(name), plugin); return modules[path.basename(name)]; }
+    });
+  } else eagle.onPluginCreate(async value => { preparedCalls++; assert.strictEqual(value.path, plugin); assert.strictEqual(value.extra, 'unchanged');
     if (settings.prepare) await settings.prepare.promise; clock += 100; });
   assert.strictEqual(eagle.onPluginCreate, register);
-  return { win, doc, nodes, options, controller, timers, saved, host, plugin, jobDone,
+  return { win, doc, nodes, options, controller, timers, saved, host, plugin, jobDone, mediaReady,
+    runSDK: () => runCallback(),
+    publish(value) { settings.snapshot = value; for (const callback of [...observers]) callback({ type: 'load-result' }); },
     launch: () => sdkCallback({ path: settings.wrongSdkPath ? path.resolve('unrelated') : host, extra: 'unchanged' }),
     fire(ms) { const found = [...timers].find(([, t]) => t.ms === ms); assert(found, 'expected timer ' + ms);
       timers.delete(found[0]); found[1].cb(); },
     unload() { const event = { returnValue: undefined, preventDefault() { this.prevented = true; } };
       for (const cb of [...(listeners.get('beforeunload') || [])]) cb(event); return event; },
     counts: () => ({ verificationCalls, preparedCalls, driverCalls, stopCalls, closes, storeCloses,
-      unloadListeners: (listeners.get('beforeunload') || new Set()).size }) };
+      unloadListeners: (listeners.get('beforeunload') || new Set()).size, observers: observers.size }) };
 }
 const tick = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 async function launchTests() {
+  const hostSequence = launchModel({ formal: true }), hostDone = hostSequence.launch();
+  // Installed Eagle dispatches create then run without awaiting either callback.
+  const runDone = hostSequence.runSDK(); await tick(); await tick();
+  assert.strictEqual(hostSequence.controller.snapshot().state, 'preparing', 'Superseded create is not a readiness failure');
+  assert.strictEqual(hostSequence.counts().driverCalls, 0);
+  hostSequence.mediaReady.resolve(); await runDone; await tick(); await tick();
+  assert.strictEqual(hostSequence.counts().driverCalls, 1, 'Wait for the actual formal app/session current run to become ready');
+  assert.strictEqual(hostSequence.options.lastDriver.bridge.snapshot().epoch, 2);
+  assert.strictEqual(hostSequence.options.lastDriver.bridge.snapshot().loadMetrics.trigger, 'plugin-run');
+  assert.strictEqual(hostSequence.options.lastDriver.launchContext.initialCreateResult, 'superseded');
+  assert.strictEqual(hostSequence.options.lastDriver.launchContext.readyEpoch, 2);
+  assert.strictEqual(hostSequence.options.lastDriver.launchContext.readyTrigger, 'plugin-run');
+  hostSequence.jobDone.resolve({ complete: true, earlyRegressionPassed: true, p03: { withinTarget: null } }); await hostDone;
+  assert.strictEqual(hostSequence.saved.length, 0); assert.strictEqual(hostSequence.timers.size, 0);
+  ok('nonawaiting SDK create/run with actual formal app/session waits for current epoch readiness exactly once');
+  const waiting = launchModel({ snapshot: { state: 'preparing', epoch: 2 } }), waitingDone = waiting.launch(); await tick(); await tick();
+  waiting.publish({ state: 'paused', epoch: 2 }); await tick();
+  assert.strictEqual(waiting.counts().driverCalls, 0, 'Paused notification without readiness timing is not ready');
+  waiting.publish({ state: 'paused', epoch: 2, loadMetrics: { readyAt: 112, totalMs: 100, trigger: 'plugin-run' } }); await tick();
+  assert.strictEqual(waiting.counts().driverCalls, 1); assert.strictEqual(waiting.counts().observers, 0);
+  waiting.jobDone.resolve({ complete: true, earlyRegressionPassed: true, p03: { withinTarget: null } }); await waitingDone;
+  ok('waits through paused notification until metrics exist and removes readiness observer before measuring');
+  for (const terminal of ['error', 'closed', 'empty']) {
+    const failure = launchModel({ snapshot: { state: 'preparing', epoch: 2 } }), failureDone = failure.launch(); await tick(); await tick();
+    failure.publish({ state: terminal, epoch: 2, error: terminal === 'error' ? { message: 'controlled media failure' } : null });
+    await failureDone; assert.strictEqual(failure.counts().driverCalls, 0); assert.strictEqual(failure.saved.length, 1);
+    assert.strictEqual(failure.saved[0].value.context.lastPreparation.state, terminal);
+    assert.strictEqual(failure.counts().observers, 0); assert.strictEqual(failure.timers.size, 0);
+  }
+  ok('actual preparation failure/close/library clear stop waiting and retain diagnostic state without measuring');
+  for (const action of ['timeout', 'cancel', 'close']) {
+    const pending = launchModel({ snapshot: { state: 'preparing', epoch: 2 } }), pendingDone = pending.launch(); await tick(); await tick();
+    if (action === 'timeout') pending.fire(PREPARE_MS);
+    else if (action === 'cancel') pending.controller.cancel(); else pending.unload();
+    await pendingDone;
+    assert.strictEqual(pending.counts().driverCalls, 0); assert.strictEqual(pending.counts().observers, 0);
+    assert.strictEqual(pending.timers.size, 0); assert.strictEqual(pending.saved.length, 1);
+    pending.publish({ state: 'paused', loadMetrics: { readyAt: 112, totalMs: 100 } }); await tick();
+    assert.strictEqual(pending.counts().driverCalls, 0, 'Late ready cannot revive a cancelled measurement');
+  }
+  ok('readiness deadline/cancel/close clean up observers and late ready cannot restart measurement');
+  const never = launchModel({ prepare: deferred() }), neverDone = never.launch(); never.fire(PREPARE_MS); await neverDone;
+  assert.strictEqual(never.counts().driverCalls, 0); assert.strictEqual(never.saved.length, 1); assert.strictEqual(never.timers.size, 0);
+  ok('preparation deadline settles even when the initial SDK callback never resolves');
   const m = launchModel({ bootstrap: true }), done = m.launch(); await tick();
   assert.strictEqual(m.counts().driverCalls, 1); assert.strictEqual(m.controller.snapshot().state, 'measuring');
   const args = m.options.lastDriver;

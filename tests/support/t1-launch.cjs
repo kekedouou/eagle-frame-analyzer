@@ -13,6 +13,7 @@ function install(options) {
   const verify = options.verify || entry.verify, start = options.run || driver.run, storeFactory = options.createStore || createStore;
   let state = 'waiting', job = null, stopping = false, closeRequested = false, allowUnload = false, completed = false;
   let timer = null, done = Promise.resolve(), receipts = [], failureSaved = false, safeToRecord = false, closeScheduled = false;
+  let cancelPreparation = null;
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
     doc.title = 'T1 自动测量 · ' + text;
@@ -30,7 +31,38 @@ function install(options) {
     } catch (saving) { message('验证失败且回执未保存：' + String(saving.message).slice(0, 512), true); }
     finally { if (store) { try { store.close(); } catch (_) {} } }
   }
-  function stop() { if (completed) return; stopping = true; if (job) job.cancel(); }
+  function stop() { if (completed) return; stopping = true;
+    if (cancelPreparation) cancelPreparation(new Error('准备阶段已取消，未执行测量。'));
+    if (job) job.cancel(); }
+  function observe(bridge, context) {
+    const value = bridge && bridge.snapshot();
+    if (context) context.lastPreparation = value ? { state: value.state, epoch: value.epoch, libraryEpoch: value.libraryEpoch,
+      itemId: value.sourceIdentity && value.sourceIdentity.itemId, progress: value.progress, error: value.error,
+      loadMetrics: value.loadMetrics } : null;
+    return value;
+  }
+  async function waitReady(bridge, context, aborted) {
+    if (!bridge || typeof bridge.snapshot !== 'function') throw new Error('正式播放器诊断接口未初始化，未执行测量。');
+    let unsubscribe;
+    try {
+      return await Promise.race([new Promise((resolve, reject) => {
+        function check() {
+          try {
+            const value = observe(bridge, context);
+            if (value && value.state === 'paused' && value.loadMetrics) resolve(value);
+            else if (!value || value.state !== 'preparing' && value.state !== 'paused')
+              reject(new Error(value && value.error ? value.error.message : '视频准备已结束但未就绪，未执行测量。'));
+            else if (typeof bridge.subscribe !== 'function') reject(new Error('无法观察视频就绪，未执行测量。'));
+          } catch (error) { reject(error); }
+        }
+        // Subscribe before checking, so the final load-result cannot be missed.
+        // Paused state is published before loadMetrics; only the later snapshot
+        // containing both is ready. A superseded create may still be preparing.
+        if (typeof bridge.subscribe === 'function') unsubscribe = bridge.subscribe(check);
+        check();
+      }), aborted]);
+    } finally { if (unsubscribe) unsubscribe(); }
+  }
   function beforeUnload(event) {
     closeRequested = true; stop();
     if (allowUnload || !job || completed) return;
@@ -59,17 +91,25 @@ function install(options) {
         mappedFormalRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
         boundary: 'Real SDK/media/cache/UI/player; test entry maps create.path only. Not the formal manifest startup.', sdkCallbackAt: callbackAt };
       state = 'preparing';
-      timer = win.setTimeout(() => { stopping = true; message('准备超过120秒，未开始测量；正在请求正常关闭。', true); win.close(); }, PREPARE_MS);
-      await callback({ ...plugin, path: prepared.plugin }); clearTimer();
+      const aborted = new Promise((_, reject) => { cancelPreparation = reject; });
+      // Consume a cancellation even if a synchronous callback throws first.
+      aborted.catch(() => {});
+      timer = win.setTimeout(() => { stopping = true;
+        cancelPreparation(new Error('准备超过120秒，未执行测量。'));
+        message('准备超过120秒，未开始测量；正在请求正常关闭。', true); win.close(); }, PREPARE_MS);
+      const initial = await Promise.race([callback({ ...plugin, path: prepared.plugin }), aborted]);
+      context.initialCreateResult = initial && initial.status || 'unspecified';
+      if (stopping) throw new Error('准备阶段已取消，未执行测量。');
+      const bridge = win.EVADiagnostics, snapshot = await waitReady(bridge, context, aborted);
+      clearTimer(); cancelPreparation = null;
       if (stopping) throw new Error('准备阶段已取消，未执行测量。');
       verify(repo);
-      const bridge = win.EVADiagnostics, snapshot = bridge && bridge.snapshot();
-      if (!snapshot || snapshot.state !== 'paused' || !snapshot.loadMetrics)
-        throw new Error(snapshot && snapshot.error ? snapshot.error.message : '正式播放器没有首帧暂停就绪，未执行测量。');
       context.callbackToReadyMs = snapshot.loadMetrics.readyAt - callbackAt;
       if (!Number.isFinite(context.callbackToReadyMs) || context.callbackToReadyMs < 0)
         throw new Error('就绪时钟与SDK回调时钟不一致，不能记录启动耗时。');
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
+      context.readyEpoch = snapshot.epoch;
+      context.readyTrigger = snapshot.loadMetrics.trigger;
       state = 'measuring'; doc.title = 'T1 自动测量 · 请保持前台，约2分钟';
       job = start({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
         verifyLaunch: () => verify(repo) });
@@ -81,11 +121,12 @@ function install(options) {
         '测量已保存，存在未通过项；请告知Codex核对。', !passed);
       return result;
     } catch (error) {
+      try { observe(win.EVADiagnostics, context); } catch (_) { /* Preserve original failure. */ }
       clearTimer(); message('自动验证未通过：' + String(error.message || error).slice(0, 1024), true);
       if (!job) saveFailure(error, context); // The driver owns persistence once started; never retry its failed save.
       state = 'failed'; return { complete: false, earlyRegressionPassed: false, error: String(error.message || error), receipts };
     } finally {
-      clearTimer(); completed = true;
+      clearTimer(); cancelPreparation = null; completed = true;
       if (!closeRequested) win.removeEventListener('beforeunload', beforeUnload);
     }
   }
