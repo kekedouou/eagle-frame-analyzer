@@ -71,7 +71,8 @@ function audit(runId) {
   }
   if (referenced.size !== records.length - 1) throw new Error('Resource chunks missing from summary.');
   const result = evaluate(summary, rows), hashes = summary.launchContext && summary.launchContext.sourceHashes;
-  if (!hashes || Object.keys(hashes).sort().join('\n') !== entry.SOURCES.slice().sort().join('\n')) throw new Error('Resource launch source list invalid.');
+  const lists = [entry.SOURCES, entry.SOURCES.filter(name => name !== 'tests/support/window-annotations.cjs')];
+  if (!hashes || !lists.some(list => Object.keys(hashes).sort().join('\n') === list.slice().sort().join('\n'))) throw new Error('Resource launch source list invalid.');
   const currentSourceMatches = Object.fromEntries(Object.entries(hashes).map(([name, expected]) => [name, sha(fs.readFileSync(path.join(repo, name))) === expected]));
   return { runId, ...result, summarySha256: summaryRecord.sha256, currentSourceMatches, sources: summary.samples,
     cleanup: summary.cleanup, limitation: 'Saved renderer samples and formal close callback only. Native window destruction, other Eagle/GPU processes, source pixel accuracy and forced host exit are not proven.' };

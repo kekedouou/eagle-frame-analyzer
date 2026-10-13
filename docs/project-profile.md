@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：第二轮真实资源长测完整且单轮复算通过；两轮各60分钟＋5分钟静置、各60次换片，无错误、退出后零lease/无writer。第二轮受管峰值509.74MiB、renderer峰值763.52MiB、中位数最大增长17.56MiB。合并审计发现素材组不同，原same-set合并门槛为false：第一轮H.264《10月11日》＋4K UE，第二轮另一份1080p UE＋《10月11日》。已保存接受“两组素材独立长测”的验收调整提案待用户确认，不改原门槛/回执、不要求立即第三次长测；T2未整体验收。
+- 项目：Eagle Window 视频分析插件。2026-10-13：用户接受两组不同素材的独立长时资源验证，并批准优先继续T3标注开发；保留同组重复性未验证、原严格合并false及T2整体验收未完成。720p/512MiB预算不变，剩余宿主/进程覆盖缺口在最终验收前核查。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -23,7 +23,7 @@
 | 测试与验收协议 | docs/verification.md | R/P 追踪、样本及统一测量；批准的协议不记成运行通过 |
 | 正式开发计划 | docs/development-plan.md | T0～T4 的依赖、关卡、版本节点和迁移；不在此处提前实施 |
 | 当前进度 | docs/progress.md | 当前事实、限制、下一步授权边界 |
-| 各实验与开发关卡报告 | docs/experiments/A、B、S1、T0、T1、T2 | 分别保存范围、真实结果与验收边界 |
+| 各实验与开发关卡报告 | docs/experiments/A、B、S1、T0、T1、T2、T3 | 分别保存范围、真实结果与验收边界 |
 | 日期记录与旧过程 | docs/progress/ | 历史记录保留上下文 |
 | 实验实现 | prototypes/window-player/、playback-clock/ | A/B 与 S1 分开，遵守局部 AGENTS.md |
 | 原始证据、本机配置、合成输入 | 原型内 evidence/、tools-b.json、b-test-fixtures/ | 本机忽略，迁移保留，原始证据不覆写 |
@@ -96,3 +96,10 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 T2本地命令及副作用：`node scripts/verify-t2-cache.cjs checks`跑统一检查并有界保存T2回执；`filesystem`仅在2MiB自有scratch用≤512KiB小缓存及本轮Node自然退出验证文件/进程恢复，成功轮按预存清单定点清理，旧失败保留；`filesystem --retry-retained`在同一额度内新建attempt，不清旧失败；`reuse`仅对已登记H.264完整缓存调用正式media/cache及现有FFprobe，禁止生成，逐资产读回及源校验，更新本次最近使用字段后释放占用。默认检查不执行上述文件/媒体副作用。具体输入、配额、失败和真实宿主停点见[T2报告](experiments/T2/report.md#维护事务恢复和文件管理候选)；节点间连续开发，必要宿主操作仍由用户打开插件完成，不要求调试命令。
 
 T2回归补充：`node scripts/verify-t2-cache.cjs audit-host <明确T1运行ID>`只读原回执及其选中源/缓存清单，解包复算、核对SHA后有界保存T2审计，不把保存失败改成通过。既有`verify-t1-browser.cjs --before-t2-fix`仅将捕获的Player/session替为`2d0cfb4`代码，当前代码由无参数命令捕获；两次仍使用原UE固定源、既有缓存、原64MiB scratch/90秒/T1证据配额，清自己的成功轮产物，不操作Eagle。它与`--baseline`互斥，保留旧`1afcaa4`诊断身份；不把本机对照记为真实宿主回归。
+
+
+## T3当前验收入口
+
+T3标注实现与本地证据见[记录](experiments/T3/report.md)，实际写入范围见[提案](experiments/T3/plan.md#一次专用素材写入提案待批准尚未执行)。`node scripts/prepare-window-host.cjs --annotations`只更新中性目录`tests/host/window/`的既有四份本机文件，名称/标题明确T3，ID不变；不加载Eagle，不执行T2长测，不写素材。当前writeApproval=null，测试接线阻止写入，正式plugin无此限制。用户具体批准后由Codex在准备记录中转录精确库/素材/帧/时间/文字和是否允许回退，再由用户打开操作；不需要用户输入调试命令。
+
+新证据独立`verification-runs/t3-*`，16MiB总额/2MiB单份，每轮宿主观察≤1MiB/64事件/20分钟；复用有界存储实现但保持T2原件与配额。关闭时独立验证源SHA及获准的新标注回退；任何未知结果保留、报告，不重复添加/删除。普通`node scripts/check.cjs`不触发该宿主流程。当前T3尚未实际Eagle验收，无通过标签；未知提案跨重启不持久化、旧原生即时刷新不保证、受影响性能待T4核对。

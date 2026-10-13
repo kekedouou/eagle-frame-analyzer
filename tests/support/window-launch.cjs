@@ -22,7 +22,7 @@ function install(options) {
   }
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
-    doc.title = 'T2 自动测量 · ' + text;
+    doc.title = (activeMode === 'annotations' ? 'T3 标注验收' : 'T2 自动测量') + ' · ' + text;
     const node = doc.getElementById(failed ? 'error' : 'status');
     if (node) { node.textContent = text; node.hidden = false; }
   }
@@ -30,8 +30,8 @@ function install(options) {
     if (failureSaved || !safeToRecord) return; failureSaved = true;
     let store;
     try {
-      store = storeFactory(repo); store.start({ reserveBytes: 64 * 1024 });
-      receipts.push(store.save('host', { schema: 'window-automatic-entry-failure-v1', stage: 'T2', origin: 'real-Eagle-independent-test-entry',
+      store = storeFactory(repo, { stage: activeMode === 'annotations' ? 'T3' : 'T2' }); store.start({ reserveBytes: 64 * 1024 });
+      receipts.push(store.save('host', { schema: 'window-automatic-entry-failure-v1', stage: activeMode === 'annotations' ? 'T3' : 'T2', origin: 'real-Eagle-independent-test-entry',
         complete: false, earlyRegressionPassed: false, at: new Date().toISOString(), state, context,
         error: { message: String(error && error.message || error).slice(0, 2048) } }));
     } catch (saving) { message('验证失败且回执未保存：' + String(saving.message).slice(0, 512), true); }
@@ -93,6 +93,7 @@ function install(options) {
         throw new Error('SDK提供的验证插件目录与准备记录不符。');
       safeToRecord = true;
       context = { kind: 'real-Eagle-formal-code-independent-entry', sdkPluginRoot: prepared.host,
+        annotationApproval: activeMode === 'annotations' ? prepared.marker.writeApproval || null : null,
         entryScheme: options.entryScheme || 'unspecified',
         mappedFormalRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
         boundary: 'Real SDK/media/cache/UI/player; test entry maps create.path only. Not the formal manifest startup.', sdkCallbackAt: callbackAt };
@@ -116,17 +117,17 @@ function install(options) {
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
       context.readyEpoch = snapshot.epoch;
       context.readyTrigger = snapshot.loadMetrics.trigger;
-      state = 'measuring'; doc.title = activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : 'T2 自动测量 · 请保持前台，约2分钟';
-      const runner = activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
+      state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : 'T2 自动测量 · 请保持前台，约2分钟';
+      const runner = activeMode === 'annotations' && !options.run ? require('./window-annotations.cjs').run : activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
       job = runner({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
         verifyLaunch: () => verify(repo), eagle,
         reloadSelected: () => { if (!runCallback) throw new Error('正式重复调用回调缺失。'); return runCallback(); },
         closeSession: () => { if (!exitCallback) throw new Error('正式退出回调缺失。'); return exitCallback(); } });
-      timer = win.setTimeout(() => { stopping = true; job.cancel(); }, activeMode === 'resource' ? RESOURCE_MS : WORK_MS);
+      timer = win.setTimeout(() => { stopping = true; job.cancel('timeout'); }, activeMode === 'annotations' ? 20 * 60000 : activeMode === 'resource' ? RESOURCE_MS : WORK_MS);
       const result = await job.done; clearTimer(); receipts = result.receipts || [];
       state = result.complete ? 'saved' : 'failed';
-      const passed = activeMode === 'resource' ? result.complete && result.resourceGatePassed : result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
-      message(passed ? (activeMode === 'resource' ? '本轮资源记录已保存；两轮齐备后由Codex核对。' : '测量已保存，早期门槛通过；请告知Codex核对。') :
+      const passed = activeMode === 'annotations' ? result.complete && result.observationSaved : activeMode === 'resource' ? result.complete && result.resourceGatePassed : result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
+      message(passed ? (activeMode === 'annotations' ? '标注观察已保存，由Codex核对；不代表T3整体验收通过。' : activeMode === 'resource' ? '本轮资源记录已保存；两轮齐备后由Codex核对。' : '测量已保存，早期门槛通过；请告知Codex核对。') :
         '测量已保存，存在未通过项；请告知Codex核对。', !passed);
       if (activeMode === 'resource' && result.complete && result.resourceGatePassed && result.cleanupVerified) win.setTimeout(() => win.close(), 0);
       return result;

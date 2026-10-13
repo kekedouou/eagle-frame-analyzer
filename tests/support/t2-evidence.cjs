@@ -26,10 +26,17 @@ function budget(used, delta) {
     throw new Error('T2 evidence exceeds 16MiB; original records retained.');
 }
 function createStore(repo, options = {}) {
+  // T3 reuses the append-only storage safeguards, with an independent namespace
+  // and quota. Historical T2 bytes/schema/owner remain unchanged.
+  if (options.stage !== undefined && !['T2', 'T3'].includes(options.stage)) throw new Error('Unknown evidence stage.');
+  const stage = options.stage || 'T2', prefix = stage.toLowerCase();
+  const ownerName = stage === 'T2' ? OWNER : 'eagle-video-analysis-T3-evidence-v1';
+  const schemaName = prefix + '-evidence-v1';
+  const pattern = stage === 'T2' ? runPattern : /^t3-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{20}$/;
   const io = options.fs || fs, token = options.token || crypto.randomBytes(10).toString('hex');
-  const root = path.join(path.resolve(repo), 'verification-runs'), lock = path.join(root, 't2-writer.lock');
-  const id = 't2-' + (options.timestamp || new Date().toISOString()).replace(/[:.]/g, '-') + '-' + token;
-  if (!runPattern.test(id)) throw new Error('Invalid T2 run identity.');
+  const root = path.join(path.resolve(repo), 'verification-runs'), lock = path.join(root, prefix + '-writer.lock');
+  const id = prefix + '-' + (options.timestamp || new Date().toISOString()).replace(/[:.]/g, '-') + '-' + token;
+  if (!pattern.test(id)) throw new Error('Invalid evidence run identity.');
   const run = path.join(root, id); let started = false, identity, lockData, reserve = 0, savedBytes = 0, sequence = 0;
   function node(file, dir = false) {
     const stat = io.lstatSync(file), real = io.realpathSync(file), absolute = path.resolve(file);
@@ -54,12 +61,12 @@ function createStore(repo, options = {}) {
   function scan() {
     node(root, true); let used = 0; const receipts = [];
     for (const name of io.readdirSync(root)) {
-      if (name === 't2-writer.lock') { ownLock(); used += node(lock).size; continue; }
-      if (!name.startsWith('t2-')) continue;
-      if (!runPattern.test(name)) throw new Error('Unknown T2 evidence path; retained.');
+      if (name === prefix + '-writer.lock') { ownLock(); used += node(lock).size; continue; }
+      if (!name.startsWith(prefix + '-')) continue;
+      if (!pattern.test(name)) throw new Error('Unknown evidence path; retained.');
       const dir = path.join(root, name); node(dir, true);
       const owner = read(path.join(dir, 'owner.json')).value;
-      if (owner.schema !== 1 || owner.owner !== OWNER || owner.kind !== 'evidence' || owner.root !== root || owner.runId !== name)
+      if (owner.schema !== 1 || owner.owner !== ownerName || owner.kind !== 'evidence' || owner.root !== root || owner.runId !== name)
         throw new Error('Unknown T2 evidence owner; retained.');
       for (const leaf of io.readdirSync(dir)) {
         if (leaf !== 'owner.json' && leaf !== 'checks.json' && !/^(?:checks|cache|host|lifecycle|cleanup|audit)-[0-9a-f]{20}-\d{1,4}\.json$/.test(leaf))
@@ -67,7 +74,7 @@ function createStore(repo, options = {}) {
         const file = path.join(dir, leaf), item = read(file); used += item.bytes.length; budget(used, 0);
         if (leaf === 'owner.json' || leaf === 'checks.json') continue; // Sealed first inventory receipt.
         const value = item.value;
-        if (value.schema !== 't2-evidence-v1' || !kinds.includes(value.kind) || !leaf.startsWith(value.kind + '-') ||
+        if (value.schema !== schemaName || !kinds.includes(value.kind) || !leaf.startsWith(value.kind + '-') ||
           value.key !== sha(Buffer.from(canonical(value.payload)))) throw new Error('T2 receipt fingerprint is invalid; retained.');
         receipts.push({ file, ...item });
       }
@@ -79,10 +86,10 @@ function createStore(repo, options = {}) {
     if (started || !Number.isSafeInteger(reserveBytes) || reserveBytes < 0 || reserveBytes > LIMITS.totalBytes) throw new Error('Invalid T2 evidence reservation.');
     node(path.resolve(repo), true); if (/^c:/i.test(root)) throw new Error('T2 evidence cannot be on C.');
     if (!io.existsSync(root)) io.mkdirSync(root); node(root, true);
-    lockData = encode({ schema: 1, owner: OWNER, kind: 'writer', root, token, pid: process.pid });
+    lockData = encode({ schema: 1, owner: ownerName, kind: 'writer', root, token, pid: process.pid });
     io.writeFileSync(lock, lockData, { flag: 'wx' }); identity = node(lock); started = true;
     try {
-      const marker = encode({ schema: 1, owner: OWNER, kind: 'evidence', root, runId: id });
+      const marker = encode({ schema: 1, owner: ownerName, kind: 'evidence', root, runId: id });
       budget(scan().used, marker.length + reserveBytes); reserve = reserveBytes;
       return { runId: id, limits: LIMITS, reserveBytes };
     } catch (error) { try { close(); } catch (cleanup) { error.cleanupError = cleanup.message; } throw error; }
@@ -92,9 +99,9 @@ function createStore(repo, options = {}) {
     ownLock(); const normalized = JSON.parse(canonical(payload)), key = sha(Buffer.from(canonical(normalized))), current = scan();
     const prior = current.receipts.find(item => item.value.kind === kind && item.value.key === key);
     if (prior) return { file: prior.file, bytes: prior.bytes.length, sha256: sha(prior.bytes), reused: true, totalBytes: current.used };
-    const bytes = encode({ schema: 't2-evidence-v1', kind, key, payload: normalized });
+    const bytes = encode({ schema: schemaName, kind, key, payload: normalized });
     if (savedBytes + bytes.length > reserve) throw new Error('T2 run exceeds reserved receipt bytes.');
-    const marker = encode({ schema: 1, owner: OWNER, kind: 'evidence', root, runId: id });
+    const marker = encode({ schema: 1, owner: ownerName, kind: 'evidence', root, runId: id });
     budget(current.used, bytes.length + (sequence ? 0 : marker.length));
     if (!sequence) { if (io.existsSync(run)) throw new Error('T2 run already exists; retained.'); io.mkdirSync(run); node(run, true); io.writeFileSync(path.join(run, 'owner.json'), marker, { flag: 'wx' }); }
     const file = path.join(run, kind + '-' + token + '-' + sequence + '.json');

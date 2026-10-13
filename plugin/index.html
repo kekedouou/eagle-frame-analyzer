@@ -21,6 +21,7 @@
             <span id="thumb" class="thumb"></span>
             <output id="timeHint" class="time-hint" hidden>0:00.000</output>
           </div>
+          <div id="commentMarkers" class="comment-markers" aria-label="时间点标注"></div>
         </div>
         <div class="controls">
           <button id="play" type="button" title="播放 / 暂停（空格）" disabled>播放</button>
@@ -38,6 +39,17 @@
       <p id="status" class="status" role="status">等待素材</p>
       <p id="error" class="error" role="alert" hidden></p>
       <button id="retry" type="button" hidden>重试</button>
+      <section class="comments" aria-label="视频标注">
+        <div class="comment-heading"><h2>标注</h2><button id="commentAdd" type="button" disabled>添加</button></div>
+        <p id="commentStatus" class="muted" role="status"></p>
+        <div id="commentEditor" hidden>
+          <p id="commentTime" class="muted"></p>
+          <label for="commentText" class="muted">文字</label>
+          <textarea id="commentText" rows="3" placeholder="记录当前画面的观察"></textarea>
+          <div class="comment-actions"><button id="commentSave" type="button">保存</button><button id="commentCancel" type="button">取消</button></div>
+        </div>
+        <div id="commentList" class="comment-list"></div>
+      </section>
     </aside>
   </main>
   <script src="player.js"></script>

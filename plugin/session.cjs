@@ -12,6 +12,10 @@ function createSession(options) {
   const onChange = options.onChange || (() => {});
   let epoch = 0, libraryEpoch = 0, closed = false, tail = Promise.resolve(), controller = null, owner = null;
   let state = 'empty', source = null, duration = 0, playback = null, error = null, progress = null, loadMetrics = null;
+  const emptyComments = () => Object.freeze({ status: 'idle', items: Object.freeze([]), libraryPath: null, message: '', draft: null });
+  let comments = emptyComments(), draftSequence = 0;
+  const writes = new Map(), annotationReceipts = [];
+  function commentChange(value) { comments = Object.freeze({ ...comments, ...value }); notify(); }
   function snapshot() {
     // Background image tasks finish without a UI state notification. Observe
     // the current ready owner directly so diagnostics do not hold an old task
@@ -22,7 +26,7 @@ function createSession(options) {
       sourceIdentity: source ? Object.freeze({ libraryEpoch, itemId: source.id, filePath: source.filePath, sha256: source.sha256 || null }) : null,
       playback: observed ? { ...observed, frame: observed.frameId, time: observed.time } : null,
       error: error ? { ...error } : null, progress: progress ? { ...progress } : null,
-      loadMetrics: loadMetrics ? { ...loadMetrics } : null });
+      loadMetrics: loadMetrics ? { ...loadMetrics } : null, comments });
   }
   function memorySnapshot() {
     if (closed || !owner || owner.epoch !== epoch || !owner.player) return null;
@@ -81,6 +85,7 @@ function createSession(options) {
       const selected = captured.value;
       source = Object.freeze({ ...selected }); progress = { stage: 'media-prepare', message: '正在准备视频预览' }; notify();
       if (!current(request)) return { status: 'superseded' };
+      loadComments(request, selected); // Independent read; never add API work to the frame loop.
       owned = { epoch: request.epoch, info: null, player: null, dispose: null, released: false, ready: false }; owner = owned;
       const info = await media.prepare(selected, { signal: request.controller.signal, onProgress: value => {
         if (current(request) && owner === owned) { progress = typeof value === 'object' && value ? { ...value } : { stage: 'media-prepare', message: String(value) }; notify(); }
@@ -113,6 +118,7 @@ function createSession(options) {
       if (ready.state !== 'paused' || ready.frameId !== info.frames[0].id || ready.frameOrdinal !== 0)
         throw issue('FIRST_FRAME_NOT_READY', '首帧尚未准确显示并暂停，未开放播放操作。');
       owned.ready = true; playback = { ...ready }; state = 'paused'; progress = null; error = null;
+      if (request.restoredWrite) restoreWrite(request.restoredWrite);
       // UI enables ready controls synchronously inside this notification. Count
       // that initialization in P03, then expose metrics without redrawing UI.
       notify(); if (!current(request)) return { status: 'superseded' };
@@ -138,11 +144,13 @@ function createSession(options) {
     request.captured = Promise.resolve(response).then(value => ({ value }), failure => ({ error: failure }));
     if (!current(request)) return Promise.resolve({ status: 'superseded' });
     state = 'preparing'; source = null; duration = 0; playback = null; error = null; loadMetrics = null;
+    comments = emptyComments();
     progress = { stage: 'selection', message: '正在读取 Eagle 选中的视频' }; notify();
     return enqueue(() => runLoad(request));
   }
   function control(method, args, allowed) {
     const owned = owner, token = epoch;
+    if (comments.draft) return Promise.reject(issue('COMMENT_FRAME_FIXED', '标注时间已固定，请先保存或取消标注。'));
     if (closed || !owned || !owned.ready || owned.epoch !== token || !allowed.includes(state))
       return Promise.reject(issue('SESSION_NOT_READY', '视频尚未就绪或正在定位，请等待当前操作完成。'));
     let result; try { result = owned.player[method](...args); } catch (failure) { result = Promise.reject(failure); }
@@ -157,22 +165,141 @@ function createSession(options) {
     const token = invalidate();
     if (kind === 'closed' || token === epoch) {
       state = kind === 'closed' ? 'closed' : 'empty'; source = null; duration = 0; playback = null; error = null; loadMetrics = null;
+      comments = emptyComments();
       progress = kind === 'closed' ? null : { stage: 'library-changed', message: '素材库已变化，请重新调用插件。' }; notify();
     }
     return enqueue(async () => {
       if (!closed && token !== epoch) return { status: 'superseded' };
-      try { await releaseOwner(); return { status: kind === 'closed' ? 'closed' : 'empty' }; }
+      try {
+        await releaseOwner();
+        // Dispatched writes cannot be cancelled with the player. They finish
+        // read-back against their own identity, without updating another item.
+        if (kind === 'closed') await Promise.all([...writes.values()].map(value => value.promise).filter(Boolean));
+        return { status: kind === 'closed' ? 'closed' : 'empty' };
+      }
       catch (failure) {
         if (!closed && token !== epoch) return { status: 'superseded' };
         if (kind !== 'closed') state = 'error'; error = describe(failure, 'SESSION_RELEASE_FAILED'); notify(); return { status: 'error', error: { ...error } };
       }
     });
   }
+  function writeKey(value) { return value.libraryPath + '\0' + value.source.id + '\0' + value.source.filePath; }
+  async function loadComments(request, selected) {
+    commentChange({ status: 'loading', message: '正在读取标注' });
+    try {
+      if (!current(request)) return;
+      if (typeof eagleAdapter.readComments !== 'function') throw issue('COMMENTS_API_UNAVAILABLE', '当前环境没有标注读取接口。');
+      const data = await eagleAdapter.readComments(selected);
+      if (!current(request)) return;
+      const old = writes.get(writeKey({ libraryPath: data.libraryPath, source: selected }));
+      request.restoredWrite = old || null;
+      commentChange({ status: 'ready', items: data.items, libraryPath: data.libraryPath, message: '', draft: old ? old.draft : null });
+    } catch (failure) {
+      if (current(request)) commentChange({ status: 'error', message: '读取标注失败：' + failure.message });
+    }
+  }
+  function liveDraft(id, token) { return !closed && token === epoch && comments.draft && comments.draft.id === id; }
+  function restoreWrite(record) {
+    const result = record.result;
+    if (result && result.status === 'saved') comments = Object.freeze({ ...comments, items: result.items, draft: null, message: result.message });
+    else comments = Object.freeze({ ...comments, draft: result && result.status === 'failed'
+      ? Object.freeze({ ...record.draft, status: 'obsolete', message: '原提案未发送，视频已切换。文字已保留，请复制后取消，再固定新画面。' }) : record.draft });
+  }
+  async function beginComment() {
+    const owned = owner, token = epoch;
+    if (closed || !owned || !owned.ready || comments.status !== 'ready' || comments.draft || !['paused', 'playing'].includes(state))
+      return { status: 'ignored' };
+    let draft = Object.freeze({ id: ++draftSequence, status: 'pausing', source, libraryPath: comments.libraryPath,
+      libraryEpoch, frameId: null, time: null, text: '', message: '正在固定画面…', attempt: null });
+    commentChange({ draft });
+    try {
+      await owned.player.pause();
+      if (!liveDraft(draft.id, token)) return { status: 'superseded' };
+      const actual = owned.player.snapshot();
+      const frame = owned.info.frames[actual.frameOrdinal];
+      if (actual.state !== 'paused' || actual.pendingTargets > 0 || !Number.isSafeInteger(actual.frameId) || !Number.isFinite(actual.time) ||
+        !frame || !Number.isFinite(frame.time) || frame.id !== actual.frameId || Math.abs(frame.time - actual.time) > .000001)
+        throw issue('COMMENT_FRAME_NOT_READY', '画面尚未定位完成，请完成定位后再添加标注。');
+      draft = Object.freeze({ ...draft, frameId: actual.frameId, time: actual.time, status: 'editing', message: '' });
+      commentChange({ draft }); return { status: 'editing', draft };
+    } catch (failure) {
+      if (liveDraft(draft.id, token)) commentChange({ draft: null, message: failure.message });
+      return { status: 'failed', message: failure.message };
+    }
+  }
+  function setCommentText(text) {
+    const draft = comments.draft;
+    if (!draft || !['editing', 'failed'].includes(draft.status) || typeof text !== 'string') return { status: 'ignored' };
+    commentChange({ draft: Object.freeze({ ...draft, text, status: 'editing', message: '' }) }); return { status: 'editing' };
+  }
+  function cancelComment() {
+    const draft = comments.draft;
+    if (!draft || ['pausing', 'editing', 'failed', 'obsolete'].includes(draft.status)) { commentChange({ draft: null, message: '' }); return { status: 'cancelled' }; }
+    // An uncertain write must stay available for explicit read-only checking.
+    return { status: 'ignored', message: '这次保存已发出，请先核对结果。' };
+  }
+  function saveComment() {
+    const draft = comments.draft, token = epoch;
+    if (!draft || !['editing', 'failed'].includes(draft.status)) return Promise.resolve({ status: 'ignored' });
+    if (!draft.text.trim()) { commentChange({ draft: Object.freeze({ ...draft, message: '请填写标注文字。' }) }); return Promise.resolve({ status: 'failed' }); }
+    if (typeof eagleAdapter.saveComment !== 'function' || writes.size >= 32) {
+      commentChange({ draft: Object.freeze({ ...draft, status: 'failed', message: '保存接口不可用或待核对记录已达上限，请先在Eagle核对。' }) });
+      return Promise.resolve({ status: 'failed' });
+    }
+    const key = writeKey(draft);
+    if (writes.has(key)) return Promise.resolve({ status: 'ignored' });
+    const record = { draft: Object.freeze({ ...draft, status: 'saving', message: '正在保存并核对…' }), promise: null };
+    writes.set(key, record); commentChange({ draft: record.draft });
+    const active = () => liveDraft(draft.id, token) && libraryEpoch === draft.libraryEpoch;
+    // Attach the promise before any adapter callback can trigger a close.
+    record.promise = Promise.resolve().then(() => eagleAdapter.saveComment(draft, { isCurrent: active,
+      onIssued(attempt) { record.draft = Object.freeze({ ...record.draft, attempt }); if (active()) commentChange({ draft: record.draft }); }
+    })).catch(failure => ({ status: record.draft.attempt ? 'unknown' : 'failed', attempt: record.draft.attempt, message: failure.message }))
+      .then(result => finishComment(record, key, result, draft.id, token));
+    return record.promise;
+  }
+  function finishComment(record, key, result, id, token) {
+    record.result = result;
+    record.draft = Object.freeze({ ...record.draft, status: result.status, attempt: result.status === 'failed' ? null : result.attempt || record.draft.attempt, message: result.message });
+    annotationReceipts.push(Object.freeze({ source: record.draft.source, libraryPath: record.draft.libraryPath,
+      frameId: record.draft.frameId, time: record.draft.time, text: record.draft.text, status: result.status,
+      commentId: result.commentId || null, message: result.message }));
+    if (annotationReceipts.length > 32) annotationReceipts.shift();
+    if (result.status !== 'unknown') writes.delete(key);
+    // Restored attempts may belong to an earlier epoch. Match the proposal ID
+    // and library path as well as the source, never just a reused content hash.
+    const sameDraft = !closed && comments.draft && comments.draft.id === id && comments.libraryPath === record.draft.libraryPath &&
+      source && source.id === record.draft.source.id && source.filePath === record.draft.source.filePath && source.sha256 === record.draft.source.sha256;
+    if (liveDraft(id, token) || sameDraft) {
+      if (result.status === 'saved') commentChange({ items: result.items, draft: null, message: result.message });
+      else if (token !== epoch && result.status === 'failed') { restoreWrite(record); notify(); }
+      else commentChange({ draft: record.draft });
+    }
+    return result;
+  }
+  function checkComment() {
+    const draft = comments.draft, token = epoch;
+    if (!draft || draft.status !== 'unknown' || !draft.attempt || typeof eagleAdapter.verifyComment !== 'function') return Promise.resolve({ status: 'ignored' });
+    const key = writeKey(draft), record = writes.get(key);
+    if (!record) return Promise.resolve({ status: 'ignored' });
+    record.draft = Object.freeze({ ...draft, status: 'checking', message: '正在核对原保存结果，不会再次添加…' });
+    commentChange({ draft: record.draft });
+    record.promise = Promise.resolve().then(() => eagleAdapter.verifyComment(draft.attempt))
+      .catch(failure => ({ status: 'unknown', attempt: draft.attempt, message: failure.message }))
+      .then(result => finishComment(record, key, result, draft.id, token));
+    return record.promise;
+  }
   return Object.freeze({ loadSelected, retry: settings => loadSelected({ ...settings, trigger: 'retry' }),
     play: () => control('play', [], ['paused']), pause: () => control('pause', [], ['paused', 'playing', 'seeking']),
     toggle: () => state === 'playing' ? control('pause', [], ['playing']) : control('play', [], ['paused']),
     seek: (time, settings = {}) => control('seek', [time, { ...settings, inputAt: settings.inputAt === undefined ? now() : settings.inputAt }], ['paused', 'playing', 'seeking']),
     step: delta => control('step', [delta], ['paused', 'playing', 'seeking']),
+    beginComment, setCommentText, saveComment, cancelComment, checkComment,
+    seekComment: id => {
+      const item = comments.items.find(value => value.id === id);
+      return item && item.time <= duration ? control('seek', [item.time, { kind: 'annotation', final: true, inputAt: now() }], ['paused', 'playing', 'seeking']) : Promise.resolve({ status: 'ignored' });
+    },
+    annotationHistory: () => Object.freeze(annotationReceipts.slice()),
     libraryChanged: () => clear('library-changed'), close: () => clear('closed'), snapshot, memorySnapshot });
 }
 module.exports = { createSession };

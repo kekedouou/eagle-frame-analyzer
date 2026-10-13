@@ -53,6 +53,13 @@ function fileTests() {
   assert.strictEqual(entry.verify(m.root, m.io).marker.mode, 'resource');
   assert.strictEqual(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).id, id);
   entry.prepare(m.root, m.io, 'performance');
+  entry.prepare(m.root, m.io, 'annotations');
+  const annotationEntry = entry.verify(m.root, m.io);
+  assert.strictEqual(annotationEntry.marker.mode, 'annotations'); assert.strictEqual(annotationEntry.marker.writeApproval, null);
+  assert.match(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).name, /T3/);
+  assert.match(m.files.get(path.join(m.host, 'index.local.html')).toString(), /<title>T3 标注验收/);
+  assert.strictEqual(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).id, id);
+  entry.prepare(m.root, m.io, 'performance');
   ok('bounded idempotent entry retains formal body and uses escaped file URLs for Chinese/space paths');
   const source = path.join(m.root, 'plugin/app.js'); m.files.set(source, Buffer.from('changed source'));
   assert.throws(() => entry.verify(m.root, m.io), /重新准备/);
@@ -275,6 +282,12 @@ async function launchTests() {
   gate.jobDone.resolve({ complete: true, earlyRegressionPassed: true, p03: { withinTarget: false } }); await gateDone;
   assert.strictEqual(gate.nodes.error.hidden, false); assert(/未通过/.test(gate.nodes.error.textContent));
   ok('failed readiness gate remains visible even when all six pointer rounds complete');
+  const annotations = launchModel({ mode: 'annotations' }), annotationsDone = annotations.launch(); await tick();
+  assert.match(annotations.doc.title, /T3 标注验收/); assert(annotations.timers.size && [...annotations.timers.values()].some(t => t.ms === 20 * 60000));
+  assert.strictEqual(annotations.options.lastDriver.launchContext.annotationApproval, null);
+  annotations.jobDone.resolve({ complete: true, observationSaved: true, overallT3Accepted: false, receipts: ['T3-model'] }); await annotationsDone;
+  assert.match(annotations.nodes.status.textContent, /不代表T3整体验收通过/); assert.strictEqual(annotations.counts().closes, 0);
+  ok('T3 uses one neutral entry with explicit read-only mode, short observation deadline and no automatic long workload/close');
 }
 (async () => { fileTests(); await launchTests(); console.log('Window automatic entry: ' + count + ' pure checks passed; no Eagle, media or evidence writes.'); })()
   .catch(error => { console.error(error.stack); process.exitCode = 1; });

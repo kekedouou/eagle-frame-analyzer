@@ -37,7 +37,8 @@
       const { createSession } = require(path.join(root, 'session.cjs'));
       const { createDiagnostics } = require(path.join(root, 'diagnostics.cjs'));
       const frameIndex = require(path.join(root, 'frame-index.cjs'));
-      diagnostics = createDiagnostics({ snapshot: () => session ? { ...session.snapshot(), pluginRoot: root } : null });
+      diagnostics = createDiagnostics({ snapshot: () => session ? { ...session.snapshot(),
+        annotationReceipts: session.annotationHistory ? session.annotationHistory() : [], pluginRoot: root } : null });
       Object.defineProperty(window, 'EVADiagnostics', { value: diagnostics.public, writable: false, configurable: false });
       const adapter = createEagleAdapter(eagle), cache = createCache({ pluginRoot: root });
       let preparedMedia = null, discovery = null;

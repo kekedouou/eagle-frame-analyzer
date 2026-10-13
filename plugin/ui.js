@@ -26,7 +26,8 @@
   }
   function createUI(options = {}) {
     const doc = options.document || document, win = options.window || window, now = options.now || (() => performance.now());
-    const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'memoryUsage', 'status', 'error', 'retry'];
+    const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'memoryUsage', 'status', 'error', 'retry',
+      'commentMarkers', 'commentList', 'commentStatus', 'commentAdd', 'commentEditor', 'commentTime', 'commentText', 'commentSave', 'commentCancel'];
     const el = Object.fromEntries(ids.map(id => [id, doc.getElementById(id)]));
     if (ids.some(id => !el[id])) throw new Error('播放器界面缺少必要元素。');
     let session = null, state = { state: 'empty', duration: 0 }, gesture = null, hintEpoch = null, hintGeometry = null, lastRequestedTime = 0;
@@ -44,7 +45,7 @@
     }
     const listeners = [];
     const on = (target, type, handler) => { target.addEventListener(type, handler); listeners.push([target, type, handler]); };
-    const interactive = () => !!session && ['paused', 'playing', 'seeking'].includes(state.state);
+    const interactive = () => !!session && !state.comments?.draft && ['paused', 'playing', 'seeking'].includes(state.state);
     const invoke = fn => {
       try { Promise.resolve(fn()).catch(() => {}); } catch (_) { /* session publishes operation errors */ }
     };
@@ -110,18 +111,71 @@
     on(el.retry, 'click', () => { if (session) invoke(() => session.retry()); });
     on(win, 'keydown', event => {
       if (!spaceAllowed(event, el.timeline)) return;
-      event.preventDefault(); if (session && !gesture && ['paused', 'playing'].includes(state.state)) { clearHint(); invoke(() => session.toggle()); }
+      event.preventDefault(); if (interactive() && !gesture && ['paused', 'playing'].includes(state.state)) { clearHint(); invoke(() => session.toggle()); }
     });
     on(el.timeline, 'keydown', event => {
       if (!interactive() || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); clearHint(); invoke(() => session.step(event.key === 'ArrowLeft' ? -1 : 1)); }
     });
+    let renderedItems = null, renderedDuration = null, renderedComments = null, renderedInteractive = null, editorId = null;
+    const commentButtons = [], markerButtons = [];
+    function seekComment(event) {
+      const button = event.target && event.target.closest && event.target.closest('button[data-comment-id]');
+      if (button && interactive()) { clearHint(); invoke(() => session.seekComment(button.dataset.commentId)); }
+    }
+    on(el.commentMarkers, 'click', seekComment); on(el.commentList, 'click', seekComment);
+    on(el.commentAdd, 'click', () => { if (interactive() && !gesture) invoke(() => session.beginComment()); });
+    on(el.commentText, 'input', () => { if (session) invoke(() => session.setCommentText(el.commentText.value)); });
+    on(el.commentSave, 'click', () => { if (session) invoke(() => state.comments?.draft?.status === 'unknown' ? session.checkComment() : session.saveComment()); });
+    on(el.commentCancel, 'click', () => { if (session) invoke(() => session.cancelComment()); });
+    function updateComments() {
+      const value = state.comments, draft = value && value.draft, ready = interactive();
+      const items = value && value.items;
+      let rebuilt = false;
+      // The immutable list changes only on loading/read-back, never per frame.
+      if (items && (items !== renderedItems || renderedDuration !== state.duration)) {
+        renderedItems = items; renderedDuration = state.duration;
+        rebuilt = true;
+        el.commentList.replaceChildren(); el.commentMarkers.replaceChildren(); commentButtons.length = 0; markerButtons.length = 0;
+        for (const item of items) {
+          const inRange = item.time <= state.duration;
+          const button = doc.createElement('button'); button.type = 'button'; button.dataset.commentId = item.id;
+          button.className = 'comment-item'; button.textContent = formatTime(item.time) + '  ' + item.text;
+          button.title = inRange ? '定位到此标注' : '此标注超出当前视频时长，不能可靠定位';
+          el.commentList.appendChild(button); commentButtons.push({ button, inRange });
+          if (inRange && state.duration > 0) {
+            const marker = doc.createElement('button'); marker.type = 'button'; marker.dataset.commentId = item.id;
+            marker.className = 'comment-marker'; marker.style.left = clamp(item.time / state.duration) * 100 + '%';
+            marker.title = formatTime(item.time) + '  ' + item.text; marker.setAttribute('aria-label', marker.title);
+            el.commentMarkers.appendChild(marker); markerButtons.push(marker);
+          }
+        }
+      }
+      if (rebuilt || renderedInteractive !== ready) {
+        for (const entry of commentButtons) set(entry.button, 'disabled', !ready || !entry.inRange);
+        for (const button of markerButtons) set(button, 'disabled', !ready);
+        renderedInteractive = ready;
+      }
+      set(el.commentAdd, 'disabled', !ready || !value || value.status !== 'ready' || state.state === 'seeking');
+      if (value === renderedComments) return;
+      renderedComments = value;
+      set(el.commentStatus, 'textContent', draft?.message || value?.message || (value?.status === 'ready' && !items.length ? '暂无标注' : ''));
+      set(el.commentEditor, 'hidden', !draft);
+      if (!draft) { editorId = null; set(el.commentText, 'value', ''); return; }
+      const editable = ['editing', 'failed'].includes(draft.status);
+      set(el.commentTime, 'textContent', Number.isFinite(draft.time) ? (editable ? '固定时间 ' : '原保存时间 ') + formatTime(draft.time) : '正在固定画面…');
+      set(el.commentText, 'disabled', draft.status === 'pausing'); set(el.commentText, 'readOnly', !editable); set(el.commentText, 'value', draft.text);
+      set(el.commentSave, 'textContent', draft.status === 'unknown' ? '核对保存结果' : '保存');
+      set(el.commentSave, 'disabled', !editable && draft.status !== 'unknown');
+      set(el.commentCancel, 'disabled', !['editing', 'failed', 'pausing', 'obsolete'].includes(draft.status));
+      if (editable && editorId !== draft.id) { editorId = draft.id; el.commentText.focus(); }
+    }
     function update(snapshot) {
       state = snapshot;
       if (gesture && (gesture.epoch !== state.epoch || !interactive())) clearGesture();
       if (hintEpoch !== null && (hintEpoch !== state.epoch || !interactive() || state.state === 'playing')) clearHint();
       const ready = interactive(), time = state.playback && Number.isFinite(state.playback.time) ? state.playback.time : 0;
-      set(el.play, 'disabled', !session || !['paused', 'playing'].includes(state.state));
+      set(el.play, 'disabled', !ready || !['paused', 'playing'].includes(state.state));
       set(el.previous, 'disabled', !ready); set(el.next, 'disabled', !ready);
       set(el.play, 'textContent', state.state === 'playing' ? '暂停' : '播放');
       attribute('aria-disabled', String(!ready)); attribute('aria-valuemax', String(state.duration || 0));
@@ -138,6 +192,7 @@
       set(el.notice, 'textContent', emptyMessage || (state.state === 'preparing' ? '正在准备视频…' : state.state === 'error' ? '视频未就绪' : '在 Eagle 中单选 MP4 后打开插件'));
       if (!gesture) thumb(time);
       if (hintEpoch !== null) hint(time); // Includes final release settlement; only actual submitted frame time.
+      updateComments();
     }
     return { canvas: el.picture, bindSession(value) {
       session = value; update(state); refreshMemory();

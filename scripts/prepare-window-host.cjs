@@ -8,7 +8,7 @@ const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
 const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
   ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs'].map(n => 'plugin/' + n),
   'scripts/prepare-window-host.cjs', 'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs',
-  'tests/support/window-resource.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs'];
+  'tests/support/window-resource.cjs', 'tests/support/window-annotations.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs'];
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 function same(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
 function directory(dir, io) {
@@ -31,7 +31,7 @@ function paths(repo, io) {
   return { root, plugin, host };
 }
 function sourceHashes(root, io) { return Object.fromEntries(SOURCES.map(name => [name, sha(read(path.join(root, name), io))])); }
-function render(html, plugin, hashes) {
+function render(html, plugin, hashes, mode = 'performance') {
   let out = html;
   for (const name of ['styles.css', 'player.js', 'ui.js', 'app.js']) {
     const attribute = name.endsWith('.css') ? 'href' : 'src', token = attribute + '="' + name + '"';
@@ -41,19 +41,28 @@ function render(html, plugin, hashes) {
   }
   const app = '<script src="' + (pathToFileURL(path.join(plugin, 'app.js')).href + '?verify=' + hashes['plugin/app.js']).replace(/&/g, '&amp;') + '"></script>';
   out = out.replace(app, '<script src="bootstrap.js?verify=' + hashes['tests/host/window/bootstrap.js'] + '"></script>\n  ' + app);
-  return out.replace('<title>视频分析</title>', '<title>T2 自动测量 · 视频分析</title>');
+  return out.replace('<title>视频分析</title>', '<title>' + (mode === 'annotations' ? 'T3 标注验收' : 'T2 自动测量') + ' · 视频分析</title>');
 }
-function generated(root, io, mode = 'performance') {
-  if (!['performance', 'resource'].includes(mode)) throw new Error('Unknown measurement protocol.');
+function validApproval(value) {
+  if (value == null) return true;
+  return value.schema === 'T3-one-comment-approval-v1' && typeof value.itemId === 'string' && value.itemId &&
+    typeof value.libraryPath === 'string' && path.isAbsolute(value.libraryPath) && !value.libraryPath.includes('\0') && Number.isSafeInteger(value.frameId) && value.frameId >= 0 &&
+    typeof value.text === 'string' && value.text.trim() && Number.isFinite(value.time) && value.time >= 0 &&
+    typeof value.userQuote === 'string' && value.userQuote.trim() && value.addOnce === true && typeof value.allowDelete === 'boolean';
+}
+function generated(root, io, mode = 'performance', writeApproval = null) {
+  if (!['performance', 'resource', 'annotations'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
+    throw new Error('Unknown measurement protocol or annotation approval.');
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
   if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
-  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: '视频分析 · T2 自动测量', logo: '/logo.local.png',
-    keywords: ['视频', 'T2', '自动测量'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
-  const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes)),
+  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: mode === 'annotations' ? '视频分析 · T3 标注验收' : '视频分析 · T2 自动测量', logo: '/logo.local.png',
+    keywords: ['视频', mode === 'annotations' ? 'T3' : 'T2', '验证'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
+  const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes, mode)),
     'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
   const marker = { schema: SCHEMA, mode, hostRoot: p.host, pluginRoot: p.plugin, sourceHashes: hashes,
     files: Object.fromEntries(OUTPUTS.map(n => [n, sha(files[n])])) };
+  if (mode === 'annotations') marker.writeApproval = writeApproval;
   files['prepared.local.json'] = Buffer.from(JSON.stringify(marker, null, 2));
   const bytes = Object.values(files).reduce((n, data) => n + data.length, 0);
   if (bytes > LIMIT) throw new Error('Generated test entry exceeds 256KiB.');
@@ -66,8 +75,9 @@ function verify(repo, io = fs, verifySources = true) {
   // Only preparation can migrate the immediately preceding, fully owned
   // source list. Actual launch verification always requires the complete list.
   const preceding = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-resource.cjs').sort());
-  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding);
-  if (marker.mode !== undefined && !['performance', 'resource'].includes(marker.mode)) throw new Error('Unknown measurement protocol.');
+  const beforeAnnotations = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-annotations.cjs').sort());
+  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations);
+  if (marker.mode !== undefined && !['performance', 'resource', 'annotations'].includes(marker.mode) || !validApproval(marker.writeApproval)) throw new Error('Unknown measurement protocol.');
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
       !knownSourceList || Object.values(marker.sourceHashes).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Unknown test entry ownership or file list.');
@@ -79,8 +89,8 @@ function verify(repo, io = fs, verifySources = true) {
     throw new Error('正式代码或测试驱动已变化，请由Codex重新准备验证入口。');
   return { ...p, marker, bytes };
 }
-function prepare(repo, io = fs, mode = 'performance') {
-  const value = generated(repo, io, mode), names = [...OUTPUTS, 'prepared.local.json'];
+function prepare(repo, io = fs, mode = 'performance', writeApproval = null) {
+  const value = generated(repo, io, mode, writeApproval), names = [...OUTPUTS, 'prepared.local.json'];
   if (names.some(n => io.existsSync(path.join(value.host, n)))) verify(repo, io, false);
   for (const name of names) {
     const file = path.join(value.host, name);
@@ -89,7 +99,7 @@ function prepare(repo, io = fs, mode = 'performance') {
   return verify(repo, io);
 }
 if (require.main === module) {
-  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--resource') ? 'resource' : 'performance'); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
+  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance'); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }
