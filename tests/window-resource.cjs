@@ -14,7 +14,7 @@ function model(settings = {}) {
     playback: { budget: { used: 100 * MIB }, pendingTargets: 0, activeImageTasks: 0 } });
   function emit(event) { for (const observer of observers) observer({ type: 'player', value: { event } }); }
   const win = { performance: { now: () => clock }, PointerEvent: class { constructor(type, value) { this.type = type; Object.assign(this, value); } },
-    dispatchEvent(event) { if (closed) return; if (event.type === 'pointerup') state = 'paused'; if (!settings.noDraws) emit({ type: 'draw' }); },
+    dispatchEvent(event) { if (closed) return; if (settings.playbackError && event.type === 'pointermove') emit({ type: 'error', error: 'test decoder failure', code: 'TEST_DECODE', phase: 'background-image' }); if (event.type === 'pointerup') state = 'paused'; if (!settings.noDraws) emit({ type: 'draw' }); },
     setTimeout(callback, ms) {
       const id = ++next; timers.set(id, true);
       setImmediate(() => {
@@ -116,6 +116,13 @@ async function main() {
   await test('suspended background drawing cannot be reported as completed resource workload', async () => {
     const f = model({ hidden: true, noDraws: true }); const result = await api.execute(f.options, MODEL).done;
     assert(!result.complete); assert.match(f.saved.find(v => v.type === 'resource-summary').error, /实际画面提交/);
+  });
+  await test('player failure preserves its original code/message/phase before the session is released', async () => {
+    const f = model({ playbackError: true }); const result = await api.execute(f.options, MODEL).done;
+    assert(!result.complete); const summary = f.saved.find(v => v.type === 'resource-summary');
+    assert.match(summary.error, /test decoder failure/);
+    assert.strictEqual(summary.playerFailures[0].code, 'TEST_DECODE');
+    assert.strictEqual(summary.playerFailures[0].eventPhase, 'background-image');
   });
   await test('a previous video disposal event cannot stand in for the final current-video release', async () => {
     const f = model({ missingFinalEvent: true }); await api.execute(f.options, MODEL).done;

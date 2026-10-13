@@ -128,7 +128,7 @@ function install(options) {
       const passed = activeMode === 'resource' ? result.complete && result.resourceGatePassed : result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
       message(passed ? (activeMode === 'resource' ? '本轮资源记录已保存；两轮齐备后由Codex核对。' : '测量已保存，早期门槛通过；请告知Codex核对。') :
         '测量已保存，存在未通过项；请告知Codex核对。', !passed);
-      if (activeMode === 'resource' && result.cleanupVerified) win.setTimeout(() => win.close(), 0);
+      if (activeMode === 'resource' && result.complete && result.resourceGatePassed && result.cleanupVerified) win.setTimeout(() => win.close(), 0);
       return result;
     } catch (error) {
       try { observe(win.EVADiagnostics, context); } catch (_) { /* Preserve original failure. */ }

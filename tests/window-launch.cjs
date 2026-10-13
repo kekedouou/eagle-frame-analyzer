@@ -181,9 +181,9 @@ async function launchTests() {
   assert(resource.doc.title.includes('65') || resource.doc.title.includes('60分钟'));
   resource.fire(require('./support/window-launch.cjs').RESOURCE_MS);
   assert.strictEqual(resource.counts().stopCalls, 1);
-  resource.jobDone.resolve({ complete: false, resourceGatePassed: false, cleanupVerified: false, receipts: [] });
+  resource.jobDone.resolve({ complete: false, resourceGatePassed: false, cleanupVerified: true, receipts: [] });
   await resourceDone; assert.strictEqual(resource.counts().closes, 0);
-  ok('resource mode uses its independent long-run deadline and never closes before cleanup is confirmed');
+  ok('resource mode uses its independent long-run deadline and preserves a failed resource window even after cleanup is confirmed');
   const hostSequence = launchModel({ formal: true }), hostDone = hostSequence.launch();
   // Installed Eagle dispatches create then run without awaiting either callback.
   const runDone = hostSequence.runSDK(); await tick(); await tick();

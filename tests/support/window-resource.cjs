@@ -105,6 +105,7 @@ function execute(options, protocol) {
   let expectedEpoch = first.epoch, closeJob = null, workElapsedMs = null, idleElapsedMs = null;
   const timeline = doc.getElementById('timeline');
   let pointerId = 732, sampleFault = null;
+  const playerFailures = [];
   function requestClose() {
     if (!closeJob) { disposedBudget = null; try { closeJob = Promise.resolve(options.closeSession()); } catch (error) { closeJob = Promise.reject(error); } closeJob.catch(() => {}); }
     return closeJob;
@@ -177,7 +178,18 @@ function execute(options, protocol) {
     if (message.type !== 'player') return;
     const event = message.value.event;
     if (event.type === 'draw') measuredFrames++;
-    if (event.type === 'error') { eventErrors++; fail('播放器报告错误，本轮停止。'); }
+    if (event.type === 'error') {
+      eventErrors++;
+      if (playerFailures.length < 8) {
+        const value = bridge.snapshot(), p = value && value.playback;
+        playerFailures.push({ at: now(), phase, sample: sampleIndex, code: event.code || null,
+          eventPhase: event.phase || null, message: String(event.error || '播放器错误').slice(0, 2048),
+          sessionEpoch: value && value.epoch, playerState: p && p.state, frameId: p && p.frameId,
+          pendingTargets: p && p.pendingTargets, activeImageTasks: p && p.activeImageTasks,
+          visible: doc.visibilityState === 'visible', focused: typeof doc.hasFocus === 'function' && doc.hasFocus() });
+      }
+      fail('播放器报告错误，本轮停止：' + String(event.error || event.code || '未知错误').slice(0, 1024));
+    }
     if (event.phase === 'disposed') disposedBudget = event.budgetBytes;
   }); } catch (error) { store.close(); throw error; }
   async function executeRound() {
@@ -255,7 +267,7 @@ function execute(options, protocol) {
         protocol, modelRun: protocol !== PROTOCOL, workElapsedMs, idleElapsedMs, launchContext: options.launchContext, error: failure || issue && issue.message,
         samples: selection ? selection.samples : [], sourceSelection: 'test-only fixed snapshots from real SDK; Eagle selection itself is unchanged',
         chunks, loads, trend, cleanup, totalSamples, maxSampleGapMs, peakRendererRssBytes: peakRss, peakManagedBytes: peakManaged,
-        totalDrawSubmissions: measuredFrames, playerErrors: eventErrors, cpu: { start: startCPU, endMicros: lastCPU, scope: 'current renderer process, one logical core = 100%; interval deltas retained in chunks' },
+        totalDrawSubmissions: measuredFrames, playerErrors: eventErrors, playerFailures, cpu: { start: startCPU, endMicros: lastCPU, scope: 'current renderer process, one logical core = 100%; interval deltas retained in chunks' },
         sourceHashesVerifiedAtEnd: complete, limitations: ['Not native window destruction or forced Eagle exit verification.',
           'Renderer RSS sampling may miss peaks; other Eagle/GPU/shared process resources are not measured.',
           'No FFmpeg generation expected: existing complete caches only; auxiliary process resource usage not measured.',
