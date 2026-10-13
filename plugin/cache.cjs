@@ -618,20 +618,25 @@ function createCache(options = {}) {
     if (activeRoots.has(root)) fail('同一缓存已有准备事务。');
     ensureRoot();
     recoverOrphans();
+    // Process discovery can block or fail. Do it before creating a lock so
+    // interruption there cannot strand an empty file without ownership data.
+    const token = nonce();
+    const writer = ownerValue('writer', { token, pid: process.pid, sourceSha256, processIdentity: processIdentity.self(), children: [] });
+    const lockData = jsonBytes(writer);
+    cancelled(signal);
+    const job = { token, signal, closed: false, partial: null, published: false, disk: 0, initializing: true,
+      target: path.join(root, 'media-' + sourceSha256 + '-' + recipeId),
+      files: new Map(), streams: new Set(), closingStreams: new Set(), lockIdentity: null, lockSha: sha(lockData) };
     const lockPath = path.join(root, 'writer.lock'); let fd;
     try { fd = fs.openSync(lockPath, 'wx'); }
     catch (error) {
       if (error.code === 'EEXIST') { error.message = '缓存已有占用记录，无法开始准备；未确认的写锁会保留。'; error.code = 'CACHE_BUSY'; }
       throw error;
     }
-    const job = { token: nonce(), signal, closed: false, partial: null, published: false, disk: 0, initializing: true,
-      target: path.join(root, 'media-' + sourceSha256 + '-' + recipeId),
-      files: new Map(), streams: new Set(), closingStreams: new Set(), lockIdentity: fs.fstatSync(fd) };
-    activeRoots.add(root);
-    const writer = ownerValue('writer', { token: job.token, pid: process.pid, sourceSha256, processIdentity: processIdentity.self(), children: [] });
-    const lockData = jsonBytes(writer); job.lockSha = sha(lockData);
     let lockWritten = 0;
     try {
+      job.lockIdentity = fs.fstatSync(fd);
+      activeRoots.add(root);
       job.disk = usage(job); charge(job, lockData.length);
       writeAll(fd, lockData, 0, count => { lockWritten += count; }); fs.closeSync(fd);
       assertWriter(job);
@@ -641,7 +646,7 @@ function createCache(options = {}) {
       try { fs.closeSync(fd); } catch (_) { /* Already closed. */ }
       try {
         verifyRoot(); const current = regular(lockPath);
-        if (!sameFile(job.lockIdentity, current) || current.size !== lockWritten || !fs.readFileSync(lockPath).equals(lockData.subarray(0, lockWritten)))
+        if (!job.lockIdentity || !sameFile(job.lockIdentity, current) || current.size !== lockWritten || !fs.readFileSync(lockPath).equals(lockData.subarray(0, lockWritten)))
           fail('未完整建立的写锁身份未知，保留原件。');
         fs.unlinkSync(lockPath); activeRoots.delete(root); job.closed = true;
       } catch (cleanupError) { error.cleanupError = cleanupError.message; }

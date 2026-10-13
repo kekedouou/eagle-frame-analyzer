@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：T2首轮真实长时测试约8分43秒后失败。用户最小化窗口，记录显示visible=0后画面提交停止，播放器报错后测试工具主动正常关闭；4885条采样、8次换片及失败原件已保存，零受管账本/closed回执核对通过，但未完成60分钟。原工具未保存具体播放器错误，不能断言唯一原因。已修复失败后自动关窗及错误细节丢失，16组资源模型、22组入口检查通过；当前仅建议其它应用覆盖窗口，暂不最小化。不改播放器/画质/预算，T2未验收，T3/T4未开始。
+- 项目：Eagle Window 视频分析插件。2026-10-13：T2重开被CACHE_BUSY阻止，现存plugin/cache/writer.lock为0字节、无身份信息，独占只读探测当时可打开。已修复先建空锁后查进程身份的中断窗口，12组恢复模型通过；既有空锁仍保留，已准备单文件隔离提案待用户具体批准，不自动删除未知锁。完整缓存/原视频未改。长时两轮未完成，最小化绘制缺口仍未修复；T2未验收，T3/T4未开始。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。

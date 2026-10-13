@@ -12,6 +12,32 @@ function rootFiles(h) { return JSON.stringify([...h.nodes].filter(([file]) => fi
 let count = 0;
 async function test(name, body) { await body(); count++; console.log('ok T2 recovery: ' + name); }
 async function main() {
+  await test('process identity is captured before creating an empty writer lock', () => {
+    let h;
+    h = harness({ processIdentity: { self() {
+      assert(!h.nodes.has(path.join(h.root, 'writer.lock')), 'identity lookup must not run while an empty lock is held');
+      assert.strictEqual(h.descriptors.size, 0);
+      return newParent;
+    }, inspect: () => ({ safe: false }) } });
+    const tx = h.cache.begin({ sourceSha256: hash(1) }); tx.close(); assert.strictEqual(h.descriptors.size, 0);
+  });
+  await test('identity exception or cancellation during lookup leaves no writer lock or descriptor', () => {
+    for (const mode of ['throw', 'abort']) {
+      const controller = new AbortController();
+      const h = harness({ processIdentity: { self() {
+        if (mode === 'throw') throw new Error('identity unavailable');
+        controller.abort(); return newParent;
+      }, inspect: () => ({ safe: false }) } });
+      assert.throws(() => h.cache.begin({ sourceSha256: hash(1), signal: controller.signal }));
+      assert(!h.nodes.has(path.join(h.root, 'writer.lock'))); assert.strictEqual(h.descriptors.size, 0);
+    }
+  });
+  await test('an existing empty unowned writer is retained rather than automatically unlocked', () => {
+    const h = harness(), tx = h.cache.begin({ sourceSha256: hash(1) }); tx.close();
+    const file = path.join(h.root, 'writer.lock'); h.make(file, 'file', '');
+    const before = rootFiles(h); assert.throws(() => h.cache.begin({ sourceSha256: hash(1) }), error => error.code === 'CACHE_BUSY');
+    assert.strictEqual(rootFiles(h), before); assert(h.nodes.has(file));
+  });
   await test('dead registered parent and completed output ledger recover only incomplete owned files', async () => {
     const h = harness(), complete = await publish(h, 1); h.cache.release(complete);
     const tx = h.cache.begin({ sourceSha256: hash(2) }); await tx.writeAsset('000000.jpg', Buffer.from('partial'));
