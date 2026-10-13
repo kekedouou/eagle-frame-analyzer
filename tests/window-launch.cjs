@@ -45,6 +45,7 @@ function fileTests() {
   assert(html.includes(pathToFileURL(path.join(result.plugin, 'app.js')).href + '?verify='));
   assert(html.indexOf('bootstrap.js?verify=') < html.indexOf('plugin/app.js'));
   assert.notStrictEqual(manifest.id, JSON.parse(fs.readFileSync(path.join(__dirname, '../plugin/manifest.json'))).id);
+  assert.notStrictEqual(manifest.id, 'EVAT1AUTO20261012', 'new entry must not collide with retained legacy registration');
   assert.strictEqual(manifest.main.multiple, false); assert.strictEqual(manifest.main.runAfterInstall, false);
   entry.prepare(m.root, m.io); assert.strictEqual(m.writes.length, 8);
   ok('bounded idempotent entry retains formal body and uses escaped file URLs for Chinese/space paths');
@@ -77,7 +78,7 @@ function fileTests() {
     require(name) { return name.endsWith('window-launch.cjs') ? { install(options) { installed = options; return {}; } } : require(name); } });
   assert.strictEqual(installed.hostRoot, m.host); assert(win.EVAWindowAutomatic);
   installed = null;
-  const eagleUrl = pathToFileURL(path.join(m.host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAT1AUTO20261012/') + '?theme=DARK&locale=zh_CN#test';
+  const eagleUrl = pathToFileURL(path.join(m.host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAWINDOWVERIFY20261013/') + '?theme=DARK&locale=zh_CN#test';
   const eagleWin = { location: { href: eagleUrl } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: eagleWin, document: {}, eagle: {},
     require(name) { return name.endsWith('window-launch.cjs') ? { install(options) { installed = options; return {}; } } : require(name); } });
@@ -130,7 +131,7 @@ function launchModel(settings = {}) {
   };
   let controller;
   if (settings.bootstrap) {
-    win.location = { href: pathToFileURL(path.join(host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAT1AUTO20261012/') + '?theme=DARK&locale=zh_CN' };
+    win.location = { href: pathToFileURL(path.join(host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAWINDOWVERIFY20261013/') + '?theme=DARK&locale=zh_CN' };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: win, document: doc, eagle,
       require(name) { return name.endsWith('window-launch.cjs') ? { install: input => install({ ...options, ...input }) } : require(name); } });
     controller = win.EVAWindowAutomatic; assert(controller);

@@ -1,5 +1,11 @@
 # T2：资源与生命周期执行记录
 
+## 新入口添加无反应：注册身份修正
+
+用户反馈选择新入口添加无反应，尚无新的性能回执。只读检查本机Eagle resources/app.asar 内 app/js/plugin/index.js：localPlugin.load接收文件夹，loadPlugin在其下读取manifest.json；refreshInstalledPlugins按manifest.id覆盖登记。因此旧T1和新window共用EVAT1AUTO20261012确实存在身份冲突，但尚未取得宿主日志证明它是无反应的唯一原因。此前保留旧ID的迁移选择撤销。
+
+新入口改为EVAWINDOWVERIFY20261013，不删除旧入口、不修改Eagle配置/安装文件。新增旧ID不得复用断言，旧代码失败后修复。明确用户从“载入本地插件”选择整个tests/host/window文件夹；runAfterInstall为false，添加后从插件列表打开“视频分析 · T2 自动测量”，不是添加即自动启动。本轮仅修入口，播放器性能代码及最后一次测试约束不变；真实Eagle加载尚待确认。统一检查通过，入口6407B；本轮检查回执SHA256为0755488d10116170cb0def3cd5cd26edeb2b9ebac6d10a50566b526dc67665db（verification-runs/t2-2026-10-13T01-52-41-406Z-e1e0fb21fbd51fe96788），不作为宿主实测通过。
+
 ## 最后一次预算内修复与测量入口统一
 
 2026-10-13用户批准当前预算下最后一次性能修复；失败后停止该预算内继续调优，进入RAM扩大方案讨论。并非已证明RAM是唯一瓶颈，1080p/2K仍不在当前720p范围。本轮未执行新的Eagle测量，T2未验收。

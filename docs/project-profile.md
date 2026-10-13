@@ -36,7 +36,7 @@
 
 T1 正式入口为 `plugin/manifest.json`；加载与真实窗口操作由用户执行。`node scripts/verify-t1.cjs record-checks` 执行默认检查并写 T1 回执；`media` 对四登记输入调用正式准备并逐资产读回，缺缓存时会生成；`cancel` 只在专用 H.264 尚无完整缓存时执行一次取消，已有则跳过；`profile` / `profile-final baseline|h264-cfr` 是保留既有完整缓存的有界临时生成诊断，前者至提交入口停止，后者执行最终内容校验后因已有目标拒绝覆盖，均清理自己 partial，不能充当完整首备。后三类属于有副作用的显式验证，不在默认检查中运行。详细证据、环境差异及宿主取证见 [T1 报告](experiments/T1/report.md)。
 
-当前免命令宿主入口：Codex执行 `node scripts/prepare-window-host.cjs`，仅生成 `tests/host/window/` 四份有归属本机文件（≤256KiB）。用户在Eagle加载该目录的manifest，显示“视频分析 · T2 自动测量”。通用目录与脚本不再绑定T1；保留旧插件ID以延续身份，Eagle已有注册路径需用户重新指定。旧tests/host/t1入口只提示迁移，历史原件不删除。自动六轮沿用既定协议，证据新存T2的16MiB额度，不代表完整T2长期验收。`node scripts/verify-t2-cache.cjs audit-host <runId>`兼容旧T1原件和新T2封装，核对内容摘要、源码及统计。
+当前免命令宿主入口：Codex执行 `node scripts/prepare-window-host.cjs`，仅生成 `tests/host/window/` 四份有归属本机文件（≤256KiB）。用户在Eagle加载该目录的manifest，显示“视频分析 · T2 自动测量”。通用目录与脚本不再绑定T1；新入口独立ID为EVAWINDOWVERIFY20261013，避免与旧T1注册冲突。使用Eagle“载入本地插件”选择整个tests/host/window目录，不选择manifest文件；不会自动启动，添加后打开“视频分析 · T2 自动测量”。旧tests/host/t1入口只提示迁移，历史原件不删除。自动六轮沿用既定协议，证据新存T2的16MiB额度，不代表完整T2长期验收。`node scripts/verify-t2-cache.cjs audit-host <runId>`兼容旧T1原件和新T2封装，核对内容摘要、源码及统计。
 
 用户关窗失败修复后的显式 `node scripts/verify-t1-close.cjs` 用登记H.264与正式cache验证首帧/最终校验前取消和完整缓存关闭；生成自己的partial、取消并清理，保留旧完整缓存，回执仍计T1预算。Eagle窗口/DOM/Player为模型，媒体/缓存真实，不能记成实际宿主关窗通过。正常退出靠beforeunload同步门禁等待异步清理，不能只返回退出通知Promise。详见[T1关闭记录](experiments/T1/report.md#用户关闭失败与修复)。
 

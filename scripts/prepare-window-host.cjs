@@ -47,7 +47,7 @@ function generated(root, io) {
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
   if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
-  const manifest = { ...original, id: 'EVAT1AUTO20261012', name: '视频分析 · T2 自动测量', logo: '/logo.local.png',
+  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: '视频分析 · T2 自动测量', logo: '/logo.local.png',
     keywords: ['视频', 'T2', '自动测量'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
   const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes)),
     'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
