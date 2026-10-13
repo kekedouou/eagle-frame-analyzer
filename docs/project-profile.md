@@ -100,6 +100,6 @@ T2回归补充：`node scripts/verify-t2-cache.cjs audit-host <明确T1运行ID>
 
 ## T3当前验收入口
 
-T3标注实现与本地证据见[记录](experiments/T3/report.md)，实际写入范围见[提案](experiments/T3/plan.md#一次专用素材写入提案待批准尚未执行)。`node scripts/prepare-window-host.cjs --annotations`只更新中性目录`tests/host/window/`的既有四份本机文件，名称/标题明确T3，ID不变；不加载Eagle，不执行T2长测，不写素材。当前writeApproval=null，测试接线阻止写入，正式plugin无此限制。用户具体批准后由Codex在准备记录中转录精确库/素材/帧/时间/文字和是否允许回退，再由用户打开操作；不需要用户输入调试命令。
+T3标注实现与本地证据见[记录](experiments/T3/report.md)，实际写入范围见[提案](experiments/T3/plan.md#一次专用素材写入提案待批准尚未执行)。`node scripts/prepare-window-host.cjs --annotations`只更新中性目录`tests/host/window/`的既有四份本机文件，名称/标题明确T3，ID不变；不加载Eagle，不执行T2长测，不写素材。用户现已具体批准原提案一次添加/测试后删除，Codex已将精确库/素材/首帧0秒/文字/回退范围转录至writeApproval；本机5条标注（含用户原生新增）必须保护，按新ID回退。普通CLI准备仍默认只读，不自动续期已消费授权；当前已启用配置由Codex程序化准备。测试接线门禁不进入正式plugin，用户只需打开操作，不输入调试命令。
 
 新证据独立`verification-runs/t3-*`，16MiB总额/2MiB单份，每轮宿主观察≤1MiB/64事件/20分钟；复用有界存储实现但保持T2原件与配额。关闭时独立验证源SHA及获准的新标注回退；任何未知结果保留、报告，不重复添加/删除。普通`node scripts/check.cjs`不触发该宿主流程。当前T3尚未实际Eagle验收，无通过标签；未知提案跨重启不持久化、旧原生即时刷新不保证、受影响性能待T4核对。

@@ -2,7 +2,7 @@
 const assert=require('assert'),path=require('path');
 const {memoryFS}=require('./t1-evidence.cjs');
 const {createStore}=require('./support/t2-evidence.cjs');
-const {run,_test:{canWrite,sameOriginals}}=require('./support/window-annotations.cjs');
+const {run,_test:{canWrite,sameOriginals,approvalScope}}=require('./support/window-annotations.cjs');
 const flush=()=>new Promise(r=>setImmediate(r));let count=0;
 const test=async(name,fn)=>{await fn();count++;console.log('ok T3 host '+name);};
 const approval={schema:'T3-one-comment-approval-v1',itemId:'test',libraryPath:path.resolve('test.library'),frameId:0,time:0,text:'精确 文字',addOnce:true,userQuote:'model-only approval',allowDelete:true};
@@ -13,7 +13,9 @@ function harness(settings={}){
  const bridge={snapshot:()=>{if(h.snapshotError)throw Error('snapshot failed');return h.state;},subscribe:f=>{h.callbacks.push(f);return ()=>{h.callbacks=h.callbacks.filter(x=>x!==f);};}};
  const doc={title:'',getElementById:()=>({}),addEventListener:(t,f)=>h.handlers.set(t,f),removeEventListener:t=>h.handlers.delete(t)};
  const eagle={library:{get path(){return h.library;}},item:{async getById(){h.gets++;return {...source,get comments(){return h.raw;},async removeComment(id){h.removed.push(id);h.raw=h.raw.filter(x=>x.id!==id);if(settings.removeReject)throw Error('response lost');return true;}};}}};
- const factory=()=>({start(){},save(kind,payload){h.records.push(payload);return {file:'memory/'+h.records.length,bytes:JSON.stringify(payload).length,sha256:'b'.repeat(64)};},close(){}});
+ const claims=settings.claims||new Set();
+ const factory=()=>({start(){},save(kind,payload){h.records.push(payload);return {file:'memory/'+h.records.length,bytes:JSON.stringify(payload).length,sha256:'b'.repeat(64)};},
+  consumeOnce(key,payload){if(claims.has(key))return {allowed:false,file:'memory/prior-claim'};claims.add(key);return {allowed:true,receipt:this.save('host',{...payload,scopeKey:key})};},close(){}});
  h.job=run({bridge,document:doc,window:{},pluginRoot:root,eagle,launchContext:{annotationApproval:settings.approval||null},createStore:factory,hashSource:async()=>source.sha256,verifyLaunch(){},async closeSession(){h.state={...h.state,state:'closed',source:null,comments:{status:'idle',items:[],draft:null}};return {status:settings.closeFailure?'error':'closed'};}});
  h.click=()=>{const event={target:{closest:()=>({id:'commentSave'})},preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;}};h.handlers.get('click')(event);return event;};
  h.edit=()=>{h.state={...h.state,comments:{...h.state.comments,draft:{id:1,status:'editing',source,libraryPath:h.library,time:0,text:'精确 文字',frameId:0}}};};
@@ -34,5 +36,9 @@ function harness(settings={}){
  await test('library switch after save prevents deletion in another library',async()=>{const h=harness({approval});await flush();await flush();h.edit();h.click();h.saved();await flush();h.library=path.resolve('other.library');await h.job.cancel();assert.equal((await h.job.done).observationSaved,false);assert.equal(h.removed.length,0);});
  await test('unconfirmed formal close cannot pass or authorize rollback',async()=>{const h=harness({approval,closeFailure:true});await flush();await flush();h.edit();h.click();h.saved();await flush();await h.job.cancel();assert.equal((await h.job.done).complete,false);assert.equal(h.removed.length,0);assert.equal(h.raw.length,2);});
  await test('diagnostic failure blocks the Save event instead of falling through to the formal handler',async()=>{const h=harness({approval});await flush();await flush();h.edit();h.snapshotError=true;const event=h.click();assert(event.prevented&&event.stopped);h.snapshotError=false;await h.job.cancel();assert.equal((await h.job.done).observationSaved,false);assert.equal(h.removed.length,0);});
+ await test('durable claim is exclusive and remains consumed across store recreation',()=>{const mem=memoryFS(),repo=path.resolve(__dirname,'..'),opts={stage:'T3',fs:mem.io,timestamp:'2026-10-13T08:01:00.000Z'};
+ const a=createStore(repo,{...opts,token:'c'.repeat(20)}),b=createStore(repo,{...opts,token:'d'.repeat(20)});a.start({reserveBytes:4096});assert(a.consumeOnce(approvalScope(approval),{approval}).allowed);assert.throws(()=>b.start(),/EEXIST/);a.close();b.start({reserveBytes:4096});assert.equal(b.consumeOnce(approvalScope({...approval,userQuote:'same scope after reopening'}),{approval}).allowed,false);b.close();});
+ await test('reopening the verification window does not renew one-use write authorization',async()=>{const claims=new Set(),first=harness({approval,claims});await flush();await flush();first.edit();assert(!first.click().prevented);await first.job.cancel();const second=harness({approval,claims});await flush();await flush();second.edit();assert(second.click().prevented);assert.equal(second.raw.length,1);await second.job.cancel();});
+ await test('native same-text/time annotation in the baseline survives plugin test rollback',async()=>{const h=harness({approval});h.raw.push({id:'native-new',duration:0,annotation:'精确 文字'});await flush();await flush();h.edit();assert(!h.click().prevented);h.saved();await flush();await h.job.cancel();assert.equal((await h.job.done).observationSaved,true);assert.deepEqual(h.removed,['new']);assert(h.raw.some(x=>x.id==='native-new'));assert.equal(h.raw.length,2);});
  console.log('T3 host/evidence checks: '+count+'; all SDK/files replaced, no live host/data mutations');
 })().catch(e=>{console.error(e);process.exitCode=1;});

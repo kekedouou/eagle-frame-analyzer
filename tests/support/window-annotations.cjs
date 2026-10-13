@@ -22,6 +22,8 @@ function sameOriginals(before,after,addedId){
  const normalized=items=>items.slice().sort((a,b)=>a.id.localeCompare(b.id));
  return canonical(normalized(before))===canonical(normalized(after.filter(x=>x.id!==addedId)));
 }
+function approvalScope(approval){return crypto.createHash('sha256').update(canonical({libraryPath:approval.libraryPath,
+ itemId:approval.itemId,frameId:approval.frameId,time:approval.time,text:approval.text})).digest('hex');}
 function run(options){
  const {bridge,document:doc,window:win,pluginRoot,eagle,launchContext:context}=options;
  const repo=path.resolve(pluginRoot,'..'),approval=context.annotationApproval||null,storeFactory=options.createStore||createStore;
@@ -73,7 +75,19 @@ function run(options){
     try{persist('save-blocked',{approved:!!approval,spent,baselineReady,itemId:snapshot.sourceIdentity&&snapshot.sourceIdentity.itemId});}catch(e){error=e.message;}
     return;
    }
-   spent=true;try{persist('approved-save-click',{approval,draft});}catch(e){error=e.message;event.preventDefault();event.stopImmediatePropagation();}
+   spent=true;
+   let store;
+   try{
+    store=storeFactory(repo,{stage:'T3'});store.start({reserveBytes:256*1024});
+    const claim=store.consumeOnce(approvalScope(approval),{approval,groupId,at:new Date().toISOString(),source:baseline.source,
+     sourceSha256:baseline.sha256,beforeIds:baseline.comments.map(x=>x.id)});
+    if(!claim.allowed){event.preventDefault();event.stopImmediatePropagation();const node=doc.getElementById('commentStatus');
+     if(node)node.textContent='本次授权已有一次保存尝试，请先交由Codex核对；不会重复添加。';return;}
+    bytes+=claim.receipt.bytes;receipts.push(claim.receipt);
+   }catch(e){error=e.message;event.preventDefault();event.stopImmediatePropagation();return;}
+   finally{if(store){try{store.close();}catch(e){error=e.message;event.preventDefault();event.stopImmediatePropagation();}}}
+   if(event.defaultPrevented||error)return;
+   try{persist('approved-save-click',{approval,draft});}catch(e){error=e.message;event.preventDefault();event.stopImmediatePropagation();}
   }
   if(button.dataset&&button.dataset.commentId){
    const s=bridge.snapshot(),target=s.comments.items.find(x=>x.id===button.dataset.commentId);
@@ -125,4 +139,4 @@ function run(options){
  }
  return {done,cancel:finish,unsavedEvidence:()=>error?JSON.stringify({groupId,error,receipts}):null};
 }
-module.exports={run,_test:{canWrite,sameOriginals}};
+module.exports={run,_test:{canWrite,sameOriginals,approvalScope}};

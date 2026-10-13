@@ -110,6 +110,17 @@ function createStore(repo, options = {}) {
     sequence++; savedBytes += bytes.length;
     return { file, bytes: bytes.length, sha256: sha(bytes), reused: false, totalBytes: scan().used };
   }
-  return Object.freeze({ start, save, close });
+  function consumeOnce(scopeKey, payload) {
+    if (stage !== 'T3' || !/^[0-9a-f]{64}$/.test(scopeKey)) throw new Error('Invalid T3 one-attempt scope.');
+    ownLock();
+    const prior = scan().receipts.find(item => item.value.kind === 'host' &&
+      item.value.payload.schema === 't3-annotation-claim-v1' && item.value.payload.scopeKey === scopeKey);
+    if (prior) return { allowed: false, file: prior.file };
+    // Same exclusive evidence lock covers checking and persisting the claim.
+    // A crash/failed API after this point cannot silently renew authorization.
+    const receipt = save('host', { ...payload, schema: 't3-annotation-claim-v1', scopeKey });
+    return { allowed: true, receipt };
+  }
+  return Object.freeze({ start, save, close, consumeOnce });
 }
 module.exports = { createStore, OWNER, LIMITS, _test: { canonical, encode, budget, runPattern } };
