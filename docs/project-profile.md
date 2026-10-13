@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：用户仅授权当前512MiB预算下最后一次性能修复；已限制拖动预测只用压缩RAM，保留真实目标磁盘读取。右栏永久显示当前视频受管RAM。当前测量入口统一为 tests/host/window，显示“视频分析 · T2 自动测量”，新回执计入T2额度；旧证据保留。自动模型通过不代表Eagle性能通过，最后一次真实测量待执行；若仍失败停止预算内调优，转入RAM调整决策。T2未验收，T3/T4未开始。
+- 项目：Eagle Window 视频分析插件。2026-10-13：新window入口已实际运行，当前512MiB预算下最后一次同UE六轮性能回归全部通过，独立复算及13份正式源码指纹一致。快拖75.50/80.03/80.33次提交每秒，最长76.3/48.5/48.7ms，P95为8.9/8.5/8.6ms；随机释放P95为16.1/16.1/17.8ms。单次复用仍22.760秒，当前素材无声，T2长期资源/完整生命周期及T4全矩阵未验收。用户正在核对RAM显示与淘汰语义，本轮不改缓存分配、不增加RAM。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
