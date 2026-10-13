@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：T2第一轮真实长时资源回执完整，独立复算及22份当前源码指纹一致，通过本轮renderer子范围关卡。负载3600048ms＋静置300042.3ms、38004条采样、60次换片；受管峰值510.81MiB、renderer RSS采样峰值760.68MiB、同负载中位数最大增长6.40MiB。用户观察自动关窗，最终closed/零受管账本、当前零lease/无writer核对通过。尚需第二轮独立启动，整体T2及进程集合/GPU/强退等未整体验收；暂不最小化，T3/T4未开始。
+- 项目：Eagle Window 视频分析插件。2026-10-13：第二轮真实资源长测完整且单轮复算通过；两轮各60分钟＋5分钟静置、各60次换片，无错误、退出后零lease/无writer。第二轮受管峰值509.74MiB、renderer峰值763.52MiB、中位数最大增长17.56MiB。合并审计发现素材组不同，原same-set合并门槛为false：第一轮H.264《10月11日》＋4K UE，第二轮另一份1080p UE＋《10月11日》。已保存接受“两组素材独立长测”的验收调整提案待用户确认，不改原门槛/回执、不要求立即第三次长测；T2未整体验收。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
