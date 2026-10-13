@@ -6,10 +6,12 @@ const { createCache } = require('../plugin/cache.cjs');
 const { createStore } = require('../tests/support/t1-evidence.cjs');
 const repo = path.resolve(__dirname, '..'), root = path.join(repo, 'plugin');
 const code = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-const config = JSON.parse(fs.readFileSync(path.join(repo, 'tests/host/t0/config.local.json'), 'utf8'));
-const input = config.sources.find(value => value.key === 'h264-cfr');
+function defaults() {
+  const config = JSON.parse(fs.readFileSync(path.join(repo, 'tests/host/t0/config.local.json'), 'utf8'));
+  return { config, input: config.sources.find(value => value.key === 'h264-cfr') };
+}
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-function source() { const before = fs.statSync(input.file), data = fs.readFileSync(input.file), after = fs.statSync(input.file);
+function source(selected = defaults().input) { const before = fs.statSync(selected.file), data = fs.readFileSync(selected.file), after = fs.statSync(selected.file);
   assert.strictEqual(before.size, after.size); assert.strictEqual(before.mtimeMs, after.mtimeMs);
   return { sha256: sha(data), size: after.size, mtimeMs: after.mtimeMs, ino: after.ino, dev: after.dev }; }
 function snapshot() {
@@ -22,21 +24,24 @@ function snapshot() {
       ownerSha256: sha(fs.readFileSync(path.join(p, 'owner.json'))) };
   }) };
 }
-async function bounded(pending) {
-  let timer; try { return await Promise.race([pending, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Close regression exceeded 30s; not passed.')), 30000); })]); }
+async function bounded(pending, milliseconds = 30000) {
+  let timer; try { return await Promise.race([pending, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Close regression exceeded ' + milliseconds + 'ms; not passed.')), milliseconds); })]); }
   finally { clearTimeout(timer); }
 }
-async function run(mode, result) {
+async function run(mode, result, selected = defaults().input, settings = {}) {
+  const { config } = defaults(), started = performance.now();
   const cache = createCache({ pluginRoot: root }), hooks = {}, states = [], blocks = [];
   let currentSession, closeTriggered = false, destroyed = false, attempts = 0, resolveClosed, releaseDispose, loadFrame;
   let nativeCloseBusy = false, mergedCloseAttempts = 0;
   const closed = new Promise(resolve => { resolveClosed = resolve; });
   const dispose = new Promise(resolve => { releaseDispose = resolve; });
-  Object.assign(result, { mode, sourceBefore: source(), before: snapshot(), startedAt: new Date().toISOString() });
-  assert.strictEqual(result.sourceBefore.sha256, input.sha256); assert.strictEqual(result.before.transient.length, 0);
-  const capability = { ...cache, async begin(settings) {
-    const tx = await cache.begin(settings);
-    return mode.startsWith('complete-') ? tx : { ...tx, readComplete: () => null };
+  Object.assign(result, { mode, sourceBefore: source(selected), before: snapshot(), startedAt: new Date().toISOString() });
+  assert.strictEqual(result.sourceBefore.sha256, selected.sha256); assert.strictEqual(result.before.transient.length, 0);
+  const capability = { ...cache, async begin(transactionSettings) {
+    const tx = await cache.begin(transactionSettings);
+    const scoped = settings.wrapTransaction ? settings.wrapTransaction(tx) : tx;
+    result.transactionWrapped = scoped !== tx;
+    return mode.startsWith('complete-') ? scoped : { ...scoped, readComplete: () => null };
   } };
   function nativeClose() {
     attempts++;
@@ -51,11 +56,13 @@ async function run(mode, result) {
     setTimeout(() => { nativeCloseBusy = false; }, 0);
   }
   const ui = { canvas: {}, bindSession(value) { currentSession = value; }, destroy() {}, update(value) {
-    states.push({ state: value.state, stage: value.progress && value.progress.stage, frames: value.progress && value.progress.frames });
+    if (states.length < 512) states.push({ atMs: performance.now() - started, state: value.state,
+      stage: value.progress && value.progress.stage, frames: value.progress && value.progress.frames });
+    else result.progressTruncated = true;
     if (closeTriggered || value.state !== 'preparing') return;
     if (mode === 'first-written-frame' && value.progress && value.progress.stage === 'decode' && value.progress.frames >= 1 ||
         mode === 'before-final-validation' && value.progress && value.progress.stage === 'verify') {
-      closeTriggered = true; result.closeAtProgress = { ...value.progress }; nativeClose();
+      closeTriggered = true; result.closeAtProgress = { ...value.progress }; result.closeRequestedAtMs = performance.now() - started; nativeClose();
     }
   } };
   const eagle = Object.fromEntries(['onPluginCreate', 'onPluginRun', 'onPluginBeforeExit', 'onLibraryChanged'].map(name => [name, fn => { hooks[name] = fn; }]));
@@ -68,7 +75,7 @@ async function run(mode, result) {
   vm.runInNewContext(code, { window: win, eagle, performance, Promise, setTimeout, require(name) {
     if (name === path.join(root, 'cache.cjs')) return { createCache: () => capability };
     if (name === path.join(root, 'eagle.cjs')) return { createEagleAdapter: () => ({
-      captureSelected: async () => ({ id: 'registered-h264-cfr', itemId: 'registered-h264-cfr', name: 'registered H.264', ext: 'mp4', filePath: input.file }),
+      captureSelected: async () => ({ id: selected.itemId || 'registered-h264-cfr', itemId: selected.itemId || 'registered-h264-cfr', name: selected.name || 'registered H.264', ext: 'mp4', filePath: selected.file }),
       discoverTools: async () => ({ ffmpeg: config.ffmpeg, ffprobe: config.ffprobe })
     }) };
     return require(name);
@@ -84,10 +91,10 @@ async function run(mode, result) {
         releaseDispose();
       }
     }
-    await bounded(closed); await bounded(loading);
+    await bounded(closed, settings.waitForCloseMs || 30000); await bounded(loading);
     assert.deepStrictEqual(blocks, [true, false]); assert.strictEqual(attempts, 2);
     assert.strictEqual(mergedCloseAttempts, 0);
-    result.after = snapshot(); result.sourceAfter = source(); result.states = states;
+    result.after = snapshot(); result.sourceAfter = source(selected); result.states = states;
     assert.deepStrictEqual(result.after, result.before); assert.deepStrictEqual(result.sourceAfter, result.sourceBefore);
     assert.strictEqual(currentSession.snapshot().state, 'closed'); result.passed = true;
     result.nativeCloseAttempts = attempts; result.closeBlocks = blocks; result.mergedCloseAttempts = mergedCloseAttempts;
@@ -95,7 +102,9 @@ async function run(mode, result) {
   } catch (error) { result.passed = false; result.error = error.message; throw error; }
   finally {
     releaseDispose(); if (currentSession) await currentSession.close();
-    result.afterCleanup = snapshot(); result.sourceAfterCleanup = source();
+    result.afterCleanup = snapshot(); result.sourceAfterCleanup = source(selected);
+    result.states = states; result.closeTriggered = closeTriggered;
+    result.elapsedMs = performance.now() - started;
   }
 }
 async function main() {
@@ -114,4 +123,5 @@ async function main() {
   finally { report.finishedAt = new Date().toISOString(); try { console.log('Evidence: ' + JSON.stringify(store.save('cancel', report))); } finally { store.close(); } }
   if (error) throw error;
 }
-main().catch(error => { console.error(error.stack); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });
+module.exports = { run, snapshot, source };

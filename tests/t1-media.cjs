@@ -219,6 +219,20 @@ async function main() {
     assert.throws(() => h.api.createMedia({ tools, cache: {} }));
     assert.strictEqual(Object.keys(h.media).join(','), 'prepare');
   });
+  await test('HEVC input parallelism does not alter output recipe or other codecs', async () => {
+    const base = Array.from(pure.ffmpegArgs(sourcePath, true, 'h264'));
+    assert.deepStrictEqual(Array.from(pure.ffmpegArgs(sourcePath, true, 'vp9')), base);
+    for (const audio of [true, false]) {
+      const expected = Array.from(pure.ffmpegArgs(sourcePath, audio));
+      expected[expected.indexOf('-threads') + 1] = '8';
+      assert.deepStrictEqual(Array.from(pure.ffmpegArgs(sourcePath, audio, 'hevc')), expected);
+    }
+    const p = probe(true); p.streams[0].codec_name = 'hevc';
+    const h = harness({ audio: true, probe: p }); await h.media.prepare(h.snapshot);
+    const args = h.processes.find(value => value.kind === 'decode').args;
+    assert.strictEqual(args[args.indexOf('-threads') + 1], '8');
+    assert.strictEqual(args[args.lastIndexOf('-threads') + 1], '2');
+  });
   await test('T1 source snapshot is captured before async preparation and content identity stays separate', async () => {
     const h = harness(), promise = h.media.prepare(h.snapshot); h.snapshot.id = 'LATER'; h.snapshot.filePath = path.resolve('later.mp4');
     const info = await promise;
