@@ -5,7 +5,7 @@ const path = require('path');
 const entry = require('../../scripts/prepare-window-host.cjs');
 const driver = require('./window-host.cjs');
 const { createStore } = require('./t2-evidence.cjs');
-const PREPARE_MS = 120000, WORK_MS = 180000;
+const PREPARE_MS = 120000, WORK_MS = 180000, RESOURCE_MS = 72 * 60000;
 function install(options) {
   const { window: win, document: doc, eagle, hostRoot } = options;
   if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T2独立自动验证入口。');
@@ -13,7 +13,13 @@ function install(options) {
   const verify = options.verify || entry.verify, start = options.run || driver.run, storeFactory = options.createStore || createStore;
   let state = 'waiting', job = null, stopping = false, closeRequested = false, allowUnload = false, completed = false;
   let timer = null, done = Promise.resolve(), receipts = [], failureSaved = false, safeToRecord = false, closeScheduled = false;
-  let cancelPreparation = null;
+  let cancelPreparation = null, runCallback = null, exitCallback = null, activeMode = 'performance';
+  // Capture formal callbacks for test invocation; restore SDK registration immediately.
+  for (const [name, assign] of [['onPluginRun', callback => { runCallback = callback; }], ['onPluginBeforeExit', callback => { exitCallback = callback; }]]) {
+    if (typeof eagle[name] !== 'function') continue;
+    const registration = eagle[name];
+    eagle[name] = callback => { eagle[name] = registration; assign(callback); return registration.call(eagle, callback); };
+  }
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
     doc.title = 'T2 自动测量 · ' + text;
@@ -82,7 +88,7 @@ function install(options) {
   async function execute(callback, plugin) {
     let context = null; const callbackAt = win.performance.now();
     try {
-      state = 'preflight'; const prepared = verify(repo);
+      state = 'preflight'; const prepared = verify(repo); activeMode = prepared.marker.mode || 'performance';
       if (!plugin || typeof plugin.path !== 'string' || path.resolve(plugin.path).toLowerCase() !== prepared.host.toLowerCase())
         throw new Error('SDK提供的验证插件目录与准备记录不符。');
       safeToRecord = true;
@@ -110,15 +116,19 @@ function install(options) {
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
       context.readyEpoch = snapshot.epoch;
       context.readyTrigger = snapshot.loadMetrics.trigger;
-      state = 'measuring'; doc.title = 'T2 自动测量 · 请保持前台，约2分钟';
-      job = start({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
-        verifyLaunch: () => verify(repo) });
-      timer = win.setTimeout(() => { stopping = true; job.cancel(); }, WORK_MS);
+      state = 'measuring'; doc.title = activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : 'T2 自动测量 · 请保持前台，约2分钟';
+      const runner = activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
+      job = runner({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
+        verifyLaunch: () => verify(repo), eagle,
+        reloadSelected: () => { if (!runCallback) throw new Error('正式重复调用回调缺失。'); return runCallback(); },
+        closeSession: () => { if (!exitCallback) throw new Error('正式退出回调缺失。'); return exitCallback(); } });
+      timer = win.setTimeout(() => { stopping = true; job.cancel(); }, activeMode === 'resource' ? RESOURCE_MS : WORK_MS);
       const result = await job.done; clearTimer(); receipts = result.receipts || [];
       state = result.complete ? 'saved' : 'failed';
-      const passed = result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
-      message(passed ? '测量已保存，早期门槛通过；请告知Codex核对。' :
+      const passed = activeMode === 'resource' ? result.complete && result.resourceGatePassed : result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
+      message(passed ? (activeMode === 'resource' ? '本轮资源记录已保存；两轮齐备后由Codex核对。' : '测量已保存，早期门槛通过；请告知Codex核对。') :
         '测量已保存，存在未通过项；请告知Codex核对。', !passed);
+      if (activeMode === 'resource' && result.cleanupVerified) win.setTimeout(() => win.close(), 0);
       return result;
     } catch (error) {
       try { observe(win.EVADiagnostics, context); } catch (_) { /* Preserve original failure. */ }
@@ -133,4 +143,4 @@ function install(options) {
   return Object.freeze({ get done() { return done; }, snapshot: () => ({ state, completed, receipts: receipts.slice() }), cancel: stop,
     unsavedEvidence: () => job ? job.unsavedEvidence() : null });
 }
-module.exports = { install, PREPARE_MS, WORK_MS };
+module.exports = { install, PREPARE_MS, WORK_MS, RESOURCE_MS };

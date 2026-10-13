@@ -8,7 +8,7 @@ const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
 const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
   ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs'].map(n => 'plugin/' + n),
   'scripts/prepare-window-host.cjs', 'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs',
-  'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs'];
+  'tests/support/window-resource.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs'];
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 function same(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
 function directory(dir, io) {
@@ -43,7 +43,8 @@ function render(html, plugin, hashes) {
   out = out.replace(app, '<script src="bootstrap.js?verify=' + hashes['tests/host/window/bootstrap.js'] + '"></script>\n  ' + app);
   return out.replace('<title>视频分析</title>', '<title>T2 自动测量 · 视频分析</title>');
 }
-function generated(root, io) {
+function generated(root, io, mode = 'performance') {
+  if (!['performance', 'resource'].includes(mode)) throw new Error('Unknown measurement protocol.');
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
   if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
@@ -51,7 +52,7 @@ function generated(root, io) {
     keywords: ['视频', 'T2', '自动测量'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
   const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes)),
     'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
-  const marker = { schema: SCHEMA, hostRoot: p.host, pluginRoot: p.plugin, sourceHashes: hashes,
+  const marker = { schema: SCHEMA, mode, hostRoot: p.host, pluginRoot: p.plugin, sourceHashes: hashes,
     files: Object.fromEntries(OUTPUTS.map(n => [n, sha(files[n])])) };
   files['prepared.local.json'] = Buffer.from(JSON.stringify(marker, null, 2));
   const bytes = Object.values(files).reduce((n, data) => n + data.length, 0);
@@ -64,7 +65,9 @@ function verify(repo, io = fs, verifySources = true) {
   const current = JSON.stringify(SOURCES.slice().sort()), previous = JSON.stringify(SOURCES.filter(name => name !== 'plugin/process-identity.cjs').sort());
   // Only preparation can migrate the immediately preceding, fully owned
   // source list. Actual launch verification always requires the complete list.
-  const knownSourceList = keys === current || !verifySources && keys === previous;
+  const preceding = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-resource.cjs').sort());
+  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding);
+  if (marker.mode !== undefined && !['performance', 'resource'].includes(marker.mode)) throw new Error('Unknown measurement protocol.');
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
       !knownSourceList || Object.values(marker.sourceHashes).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Unknown test entry ownership or file list.');
@@ -76,8 +79,8 @@ function verify(repo, io = fs, verifySources = true) {
     throw new Error('正式代码或测试驱动已变化，请由Codex重新准备验证入口。');
   return { ...p, marker, bytes };
 }
-function prepare(repo, io = fs) {
-  const value = generated(repo, io), names = [...OUTPUTS, 'prepared.local.json'];
+function prepare(repo, io = fs, mode = 'performance') {
+  const value = generated(repo, io, mode), names = [...OUTPUTS, 'prepared.local.json'];
   if (names.some(n => io.existsSync(path.join(value.host, n)))) verify(repo, io, false);
   for (const name of names) {
     const file = path.join(value.host, name);
@@ -86,7 +89,7 @@ function prepare(repo, io = fs) {
   return verify(repo, io);
 }
 if (require.main === module) {
-  try { const value = prepare(path.resolve(__dirname, '..')); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
+  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--resource') ? 'resource' : 'performance'); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

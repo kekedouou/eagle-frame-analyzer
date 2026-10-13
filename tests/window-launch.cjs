@@ -48,6 +48,11 @@ function fileTests() {
   assert.notStrictEqual(manifest.id, 'EVAT1AUTO20261012', 'new entry must not collide with retained legacy registration');
   assert.strictEqual(manifest.main.multiple, false); assert.strictEqual(manifest.main.runAfterInstall, false);
   entry.prepare(m.root, m.io); assert.strictEqual(m.writes.length, 8);
+  const id = manifest.id;
+  entry.prepare(m.root, m.io, 'resource');
+  assert.strictEqual(entry.verify(m.root, m.io).marker.mode, 'resource');
+  assert.strictEqual(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).id, id);
+  entry.prepare(m.root, m.io, 'performance');
   ok('bounded idempotent entry retains formal body and uses escaped file URLs for Chinese/space paths');
   const source = path.join(m.root, 'plugin/app.js'); m.files.set(source, Buffer.from('changed source'));
   assert.throws(() => entry.verify(m.root, m.io), /重新准备/);
@@ -122,7 +127,7 @@ function launchModel(settings = {}) {
   const doc = { title: '', getElementById: id => nodes[id] || null };
   const options = { window: win, document: doc, eagle, hostRoot: host,
     verify() { verificationCalls++; clock += 2; if (settings.invalidEntry) throw new Error('Entry source changed');
-      return { host, plugin, marker: { sourceHashes: { 'plugin/app.js': 'a'.repeat(64) } } }; },
+      return { host, plugin, marker: { mode: settings.mode, sourceHashes: { 'plugin/app.js': 'a'.repeat(64) } } }; },
     run(args) { driverCalls++; options.lastDriver = args; if (settings.startFailure) throw new Error('controlled driver setup failure');
       return { done: jobDone.promise, cancel() { stopCalls++; }, unsavedEvidence: () => 'retained-driver-evidence' }; },
     createStore() { return { start(value) { assert.strictEqual(value.reserveBytes, 64 * 1024); },
@@ -171,6 +176,14 @@ function launchModel(settings = {}) {
 }
 const tick = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 async function launchTests() {
+  const resource = launchModel({ mode: 'resource' }), resourceDone = resource.launch();
+  await tick(); await tick();
+  assert(resource.doc.title.includes('65') || resource.doc.title.includes('60分钟'));
+  resource.fire(require('./support/window-launch.cjs').RESOURCE_MS);
+  assert.strictEqual(resource.counts().stopCalls, 1);
+  resource.jobDone.resolve({ complete: false, resourceGatePassed: false, cleanupVerified: false, receipts: [] });
+  await resourceDone; assert.strictEqual(resource.counts().closes, 0);
+  ok('resource mode uses its independent long-run deadline and never closes before cleanup is confirmed');
   const hostSequence = launchModel({ formal: true }), hostDone = hostSequence.launch();
   // Installed Eagle dispatches create then run without awaiting either callback.
   const runDone = hostSequence.runSDK(); await tick(); await tick();

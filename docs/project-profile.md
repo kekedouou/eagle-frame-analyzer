@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：新window入口已实际运行，当前512MiB预算下最后一次同UE六轮性能回归全部通过，独立复算及13份正式源码指纹一致。快拖75.50/80.03/80.33次提交每秒，最长76.3/48.5/48.7ms，P95为8.9/8.5/8.6ms；随机释放P95为16.1/16.1/17.8ms。单次复用仍22.760秒，当前素材无声，T2长期资源/完整生命周期及T4全矩阵未验收。用户正在核对RAM显示与淘汰语义，本轮不改缓存分配、不增加RAM。
+- 项目：Eagle Window 视频分析插件。2026-10-13：用户确认1080p/1440p预览和预算留到MVP后，继续阶段4。当前512MiB下同UE六轮性能回归已通过；已实现同一window入口的T2长时资源自动流程和独立审计，13组纯/加速模型、22组入口检查通过，两份实际完整缓存逐资产SHA预检通过。真实2×60分钟＋各5分钟静置尚未运行，T2未验收；T3/T4未开始。不增加RAM或修改播放器性能方案。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -41,6 +41,8 @@ T1 正式入口为 `plugin/manifest.json`；加载与真实窗口操作由用户
 用户关窗失败修复后的显式 `node scripts/verify-t1-close.cjs` 用登记H.264与正式cache验证首帧/最终校验前取消和完整缓存关闭；生成自己的partial、取消并清理，保留旧完整缓存，回执仍计T1预算。Eagle窗口/DOM/Player为模型，媒体/缓存真实，不能记成实际宿主关窗通过。正常退出靠beforeunload同步门禁等待异步清理，不能只返回退出通知Promise。详见[T1关闭记录](experiments/T1/report.md#用户关闭失败与修复)。
 
 最新关闭模型另覆盖快速清理：等待首次取消响应后，在下一事件任务请求真实关闭，不把关窗实现成卸载素材。技术命令及证据统计由Codex执行，用户负责Eagle中的真实使用体验，不再要求用户输入开发者控制台命令。显式 `node scripts/verify-t1-reads.cjs` 只测用户指定片段的现存缓存读取；`node scripts/verify-t1-browser.cjs [--baseline]` 用现有Chrome/本机Node24进行独立真实JPEG/Canvas诊断，基线固定`1afcaa4`旧核心。两者仅从本机环境变量 `EVA_T1_DIAGNOSTIC_SOURCE` 读取该视频绝对路径、核对固定SHA，不扫描库/生成媒体/重置旧缓存；不在默认检查中执行。Chrome有额外本机传输和不同内核限制、64MiB临时目录/1.5GiB RSS采样停止线、90秒上限，结束只清本轮自有临时目录。证据仍受T1预算约束；独立诊断不等于Eagle宿主性能验收，细节及失败原件见[T1本轮记录](experiments/T1/report.md#完整缓存关闭与后段拖动修复)。
+
+当前T2资源入口用 `node scripts/prepare-window-host.cjs --resource` 明确准备；不传参数仍准备既有六轮性能协议。路径、插件ID与名称不变，仅本机归属配置mode变化，正式plugin文件不变。用户关闭旧窗口后打开已有“视频分析 · T2 自动测量”，自动执行一轮60分钟负载＋5分钟静置，成功释放并保存后正常关窗；再次独立打开形成第二轮，保持同一初选素材。每轮T2预留4MiB，分钟压缩段不丢样，缺额/失焦/超限/改源即停止。独立核对命令为 `node scripts/audit-resource.cjs <runId1> [runId2]`，仅读原件并写≤128KiB审计，不重跑；不会把单轮/加速模型或renderer子范围当作T2整体通过。测试层固定真实SDK素材快照，不改变Eagle当前选中项；完整资源/故障及手动关窗结果另行验收。
 
 ### 历史原型命令及副作用
 
