@@ -98,8 +98,10 @@ T2本地命令及副作用：`node scripts/verify-t2-cache.cjs checks`跑统一�
 T2回归补充：`node scripts/verify-t2-cache.cjs audit-host <明确T1运行ID>`只读原回执及其选中源/缓存清单，解包复算、核对SHA后有界保存T2审计，不把保存失败改成通过。既有`verify-t1-browser.cjs --before-t2-fix`仅将捕获的Player/session替为`2d0cfb4`代码，当前代码由无参数命令捕获；两次仍使用原UE固定源、既有缓存、原64MiB scratch/90秒/T1证据配额，清自己的成功轮产物，不操作Eagle。它与`--baseline`互斥，保留旧`1afcaa4`诊断身份；不把本机对照记为真实宿主回归。
 
 
-## T3当前验收入口
+## T3验收入口与收尾
 
-T3标注实现与本地证据见[记录](experiments/T3/report.md)，实际写入范围见[提案](experiments/T3/plan.md#一次专用素材写入提案待批准尚未执行)。`node scripts/prepare-window-host.cjs --annotations`只更新中性目录`tests/host/window/`的既有四份本机文件，名称/标题明确T3，ID不变；不加载Eagle，不执行T2长测，不写素材。用户现已具体批准原提案一次添加/测试后删除，Codex已将精确库/素材/首帧0秒/文字/回退范围转录至writeApproval；本机5条标注（含用户原生新增）必须保护，按新ID回退。普通CLI准备仍默认只读，不自动续期已消费授权；当前已启用配置由Codex程序化准备。测试接线门禁不进入正式plugin，用户只需打开操作，不输入调试命令。
+T3标注实现与本地证据见[记录](experiments/T3/report.md)，实际写入范围见[提案](experiments/T3/plan.md#一次专用素材写入提案待批准尚未执行)。`node scripts/prepare-window-host.cjs --annotations`只更新中性目录`tests/host/window/`的既有四份本机文件，名称/标题明确T3，ID不变；不加载Eagle，不执行T2长测，不写素材。用户现已具体批准原提案一次添加/测试后删除，Codex已将精确库/素材/首帧0秒/文字/回退范围转录至writeApproval；本机5条标注（含用户原生新增）必须保护，按新ID回退。普通CLI准备仍默认只读，不自动续期已消费授权；原配置由Codex程序化准备，现授权已消费，重开不会再放行一次保存。测试接线门禁不进入正式plugin，用户只需打开操作，不输入调试命令。
 
-新证据独立`verification-runs/t3-*`，16MiB总额/2MiB单份，每轮宿主观察≤1MiB/64事件/20分钟；复用有界存储实现但保持T2原件与配额。关闭时独立验证源SHA及获准的新标注回退；任何未知结果保留、报告，不重复添加/删除。普通`node scripts/check.cjs`不触发该宿主流程。当前T3单素材真实Eagle保存/独立读回/关窗删除已核对，原5条保全；一次授权已消费，勿重复写入。定位画面与输入体验待用户确认，无通过标签；未知提案跨重启不持久化、旧原生即时刷新不保证、受影响性能待T4核对。
+新证据独立`verification-runs/t3-*`，16MiB总额/2MiB单份，每轮宿主观察≤1MiB/64事件/20分钟；复用有界存储实现但保持T2原件与配额。关闭时独立验证源SHA及获准的新标注回退；任何未知结果保留、报告，不重复添加/删除。普通`node scripts/check.cjs`不触发该宿主流程。当前T3单素材真实Eagle保存/独立读回/关窗删除已核对，原5条保全；一次授权已消费，勿重复写入。用户已回复“正常”确认定位画面与输入体验，T3单素材关卡通过，收尾固定phase4-t3-verified；未知提案跨重启不持久化、旧原生即时刷新不保证、受影响性能待T4核对。
+
+T3完成后继续阶段4：先补T2宿主/故障/资源缺口与T4样本，执行顺序见[开发计划前置核查](development-plan.md#2026-10-13-t3收尾后的t4前置核查)。不要求重跑已认可的两组65分钟长测，不以旧源码的最好成绩拼成最终候选通过。
