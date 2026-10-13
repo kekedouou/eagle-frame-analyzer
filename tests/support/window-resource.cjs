@@ -110,10 +110,8 @@ function execute(options, protocol) {
     return closeJob;
   }
   const fail = message => { if (!issue) issue = new Error(message); requestClose(); };
-  const foreground = () => doc.visibilityState === 'visible' && (typeof doc.hasFocus !== 'function' || doc.hasFocus());
   function guard() {
     if (issue) throw issue;
-    if (recording && !foreground()) throw new Error('资源验证进入后台或失焦，本轮停止。');
     const value = bridge.snapshot();
     if (!value || value.state === 'error' || value.state === 'closed') throw new Error('正式会话失败或提前关闭。');
     if (value.libraryEpoch !== first.libraryEpoch) throw new Error('素材库变化，本轮停止。');
@@ -150,7 +148,8 @@ function execute(options, protocol) {
       maxSampleGapMs = Math.max(maxSampleGapMs, gap); previousSampleAt = at;
       const cpuMicros = usage.user + usage.system;
       const row = [at - begin, phase, sampleIndex, rss, managed, cpuMicros, p ? p.activeImageTasks : null,
-        p ? p.pendingTargets : null, measuredFrames, value.epoch];
+        p ? p.pendingTargets : null, measuredFrames, value.epoch, doc.visibilityState === 'visible' ? 1 : 0,
+        typeof doc.hasFocus === 'function' && doc.hasFocus() ? 1 : 0];
       pendingRows.push(row); totalSamples++;
       const minute = row[0] / (protocol.workMs / 60);
       if (minute >= 10 && minute < 15 || minute >= 55 && minute < 60) {
@@ -169,7 +168,7 @@ function execute(options, protocol) {
   function flush() {
     if (!pendingRows.length || saveFailed) return;
     chunks.push(save({ schema: 'window-resource-chunk-v1', stage: 'T2', type: 'resource-chunk', index: chunks.length,
-      sourceIds: selection.samples.map(s => s.id), columns: 'elapsedMs,phase,sample,rendererRssBytes,managedBytes,cpuMicros,imageTasks,pendingTargets,drawSubmissions,sessionEpoch',
+      sourceIds: selection.samples.map(s => s.id), columns: 'elapsedMs,phase,sample,rendererRssBytes,managedBytes,cpuMicros,imageTasks,pendingTargets,drawSubmissions,sessionEpoch,visible,focused',
       samples: packRows(pendingRows) }));
     pendingRows = [];
   }
@@ -187,20 +186,20 @@ function execute(options, protocol) {
       if (!timeline) throw new Error('正式时间轴缺失。');
       selection = await (options.selections || selections)(options.eagle, first, pluginRoot);
       options.verifyLaunch();
-      const waitStart = now();
-      while (!foreground()) { if (issue) throw issue; if (now() - waitStart > 15000) throw new Error('15秒内未返回前台。'); await sleep(100); }
       begin = now(); startCPU = cpu(); recording = true;
       sample(); sampleTimer = win.setInterval(sample, protocol.sampleMs);
       let cycle = 0;
       while (now() - begin < protocol.workMs) {
-        const cycleStart = now(); phase = 'drag';
-        doc.title = 'T2 资源验证 · ' + Math.floor((now() - begin) / 60000) + '/60分钟，请保持前台';
+        const cycleStart = now(), drawsAtStart = measuredFrames; phase = 'drag';
+        doc.title = 'T2 资源验证 · ' + Math.floor((now() - begin) / 60000) + '/60分钟，可切换其它应用';
         pointer('pointerdown', .5);
         while (now() - cycleStart < protocol.cycleMs / 3 && now() - begin < protocol.workMs) {
           guard(); const fraction = (now() - cycleStart) / (protocol.cycleMs / 20);
           pointer('pointermove', .5 + .48 * Math.sin(fraction * Math.PI)); await sleep(protocol.actionMs);
         }
-        pointer('pointerup', .5); await settle(); phase = 'play'; click('play');
+        pointer('pointerup', .5); await settle();
+        if (measuredFrames <= drawsAtStart) throw new Error('拖动负载未产生实际画面提交，不能将后台空等计作有效测试。');
+        phase = 'play'; click('play');
         const playStart = now();
         while (now() - playStart < protocol.cycleMs / 4 && now() - begin < protocol.workMs) { guard(); await sleep(50); }
         if (guard().state === 'playing') click('play'); await settle(); phase = 'step';
@@ -260,7 +259,8 @@ function execute(options, protocol) {
         sourceHashesVerifiedAtEnd: complete, limitations: ['Not native window destruction or forced Eagle exit verification.',
           'Renderer RSS sampling may miss peaks; other Eagle/GPU/shared process resources are not measured.',
           'No FFmpeg generation expected: existing complete caches only; auxiliary process resource usage not measured.',
-          'This workload does not replace P01/P02 full raw input latency traces or manual audio/drag experience.',
+          'Window visibility/focus is sampled; background draw stalls fail workload checks. Actual background execution still requires host verification.',
+          'This workload does not replace foreground P01/P02 raw input latency traces or manual audio/drag experience.',
           'Two independent 65-minute launches and an independent receipt audit are required; one saved run is insufficient.'] };
       function retainFailure(error) {
         let pendingSamples = null;

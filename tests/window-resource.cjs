@@ -14,7 +14,7 @@ function model(settings = {}) {
     playback: { budget: { used: 100 * MIB }, pendingTargets: 0, activeImageTasks: 0 } });
   function emit(event) { for (const observer of observers) observer({ type: 'player', value: { event } }); }
   const win = { performance: { now: () => clock }, PointerEvent: class { constructor(type, value) { this.type = type; Object.assign(this, value); } },
-    dispatchEvent(event) { if (closed) return; if (event.type === 'pointerup') state = 'paused'; emit({ type: 'draw' }); },
+    dispatchEvent(event) { if (closed) return; if (event.type === 'pointerup') state = 'paused'; if (!settings.noDraws) emit({ type: 'draw' }); },
     setTimeout(callback, ms) {
       const id = ++next; timers.set(id, true);
       setImmediate(() => {
@@ -32,7 +32,7 @@ function model(settings = {}) {
   const timeline = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 10 }), dispatchEvent: win.dispatchEvent };
   const nodes = { timeline, play: { click() { state = state === 'playing' ? 'paused' : 'playing'; } }, previous: { click() {} }, next: { click() {} } };
   const options = { bridge: { snapshot, subscribe(observer) { observers.add(observer); return () => observers.delete(observer); } }, window: win,
-    document: { visibilityState: 'visible', hasFocus: () => !settings.hidden, getElementById: id => nodes[id] }, pluginRoot: 'D:/model/plugin',
+    document: { visibilityState: settings.hidden ? 'hidden' : 'visible', hasFocus: () => !settings.hidden, getElementById: id => nodes[id] }, pluginRoot: 'D:/model/plugin',
     memory() { sampleCount++; return settings.rssStop && sampleCount > 3 ? 2 * 1024 ** 3 : 400 * MIB; }, cpu: () => ({ user: clock * 10, system: 0 }),
     verifyLaunch() { if (settings.changed) throw new Error('source changed'); },
     async selections() { return { samples, choose: i => { selected = i; }, async verify() {}, restore() { restored = true; } }; },
@@ -70,7 +70,7 @@ async function main() {
     const rows = [];
     for (let t = 0; t <= 3900000; t += 100) {
       const second = t / 1000 % 60, phase = t >= 3600000 ? 'idle' : second < 20 ? 'drag' : second < 35 ? 'play' : second < 40 ? 'step' : 'load';
-      rows.push([t, phase, Math.floor(t / 60000) % 2, 400 * MIB, 100 * MIB, t, 0, 0, t / 100, Math.floor(t / 60000)]);
+      rows.push([t, phase, Math.floor(t / 60000) % 2, 400 * MIB, 100 * MIB, t, 0, 0, t / 100, Math.floor(t / 60000), 1, 1]);
     }
     const summary = { protocol: PROTOCOL, modelRun: false, complete: true, resourceGatePassed: true,
       workElapsedMs: 3600000, idleElapsedMs: 300000, trend: api.trends(rows), totalSamples: rows.length,
@@ -105,6 +105,18 @@ async function main() {
       const state = f.inspect(); assert(state.closed && state.restored && state.storeClosed); assert.strictEqual(state.observers + state.intervals, 0);
     });
   }
+  await test('background/focus loss keeps the resource workload running and retains explicit window-state samples', async () => {
+    const f = model({ hidden: true }); const result = await api.execute(f.options, MODEL).done;
+    assert(result.complete);
+    const chunk = f.saved.find(v => v.type === 'resource-chunk');
+    const rows = JSON.parse(zlib.gunzipSync(Buffer.from(chunk.samples.data, 'base64')));
+    assert(rows.length > 0); assert(rows.every(row => row[10] === 0 && row[11] === 0));
+    assert(f.inspect().reloaded > 0);
+  });
+  await test('suspended background drawing cannot be reported as completed resource workload', async () => {
+    const f = model({ hidden: true, noDraws: true }); const result = await api.execute(f.options, MODEL).done;
+    assert(!result.complete); assert.match(f.saved.find(v => v.type === 'resource-summary').error, /实际画面提交/);
+  });
   await test('a previous video disposal event cannot stand in for the final current-video release', async () => {
     const f = model({ missingFinalEvent: true }); await api.execute(f.options, MODEL).done;
     assert(f.inspect().reloaded > 0); assert(!f.saved.find(v => v.type === 'resource-summary').cleanup.verified);

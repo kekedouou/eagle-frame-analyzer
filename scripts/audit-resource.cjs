@@ -17,8 +17,9 @@ function evaluate(summary, rows) {
   if (summary.modelRun) throw new Error('Accelerated model cannot be a real resource receipt.');
   let previous = null, gap = 0, rss = 0, managed = 0, lastCPU = null;
   for (const row of rows) {
-    if (!Array.isArray(row) || row.length !== 10 || !['setup', 'drag', 'play', 'step', 'load', 'idle'].includes(row[1]) || ![0, 1].includes(row[2])) throw new Error('Invalid resource row.');
+    if (!Array.isArray(row) || row.length !== 12 || !['setup', 'drag', 'play', 'step', 'load', 'idle'].includes(row[1]) || ![0, 1].includes(row[2])) throw new Error('Invalid resource row.');
     for (const i of [0, 3, 5, 8, 9]) if (!Number.isFinite(row[i]) || row[i] < 0) throw new Error('Invalid numeric resource sample.');
+    if (![0, 1].includes(row[10]) || ![0, 1].includes(row[11])) throw new Error('Invalid window-state sample.');
     for (const i of [4, 6, 7]) if (row[i] !== null && (!Number.isFinite(row[i]) || row[i] < 0)) throw new Error('Invalid optional resource sample.');
     if (previous !== null && row[0] < previous || lastCPU !== null && row[5] < lastCPU) throw new Error('Resource time/CPU counter moved backwards.');
     if (previous !== null) gap = Math.max(gap, row[0] - previous);
