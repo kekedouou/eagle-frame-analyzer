@@ -3,12 +3,12 @@
 // copies product JS, prepares media, changes caches or deletes historical data.
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { pathToFileURL } = require('url');
-const SCHEMA = 'eva-t1-host-entry-v1', LIMIT = 256 * 1024;
+const SCHEMA = 'eva-window-host-entry-v1', LIMIT = 256 * 1024;
 const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
 const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
   ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs'].map(n => 'plugin/' + n),
-  'scripts/prepare-t1-host.cjs', 'tests/host/t1/bootstrap.js', 'tests/support/t1-launch.cjs', 'tests/support/t1-host.cjs',
-  'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t1-evidence.cjs'];
+  'scripts/prepare-window-host.cjs', 'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs',
+  'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs'];
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 function same(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
 function directory(dir, io) {
@@ -25,7 +25,7 @@ function read(file, io) {
   return data;
 }
 function paths(repo, io) {
-  const root = path.resolve(repo), plugin = path.join(root, 'plugin'), host = path.join(root, 'tests/host/t1');
+  const root = path.resolve(repo), plugin = path.join(root, 'plugin'), host = path.join(root, 'tests/host/window');
   for (const dir of [root, plugin, path.join(root, 'tests'), path.join(root, 'tests/host'), host]) directory(dir, io);
   if (/^c:/i.test(root)) throw new Error('The test entry must remain on the non-C project disk.');
   return { root, plugin, host };
@@ -36,19 +36,19 @@ function render(html, plugin, hashes) {
   for (const name of ['styles.css', 'player.js', 'ui.js', 'app.js']) {
     const attribute = name.endsWith('.css') ? 'href' : 'src', token = attribute + '="' + name + '"';
     if (out.split(token).length !== 2) throw new Error('Product HTML entry changed: ' + name);
-    const url = pathToFileURL(path.join(plugin, name)).href + '?t1=' + hashes['plugin/' + name];
+    const url = pathToFileURL(path.join(plugin, name)).href + '?verify=' + hashes['plugin/' + name];
     out = out.replace(token, attribute + '="' + url.replace(/&/g, '&amp;') + '"');
   }
-  const app = '<script src="' + (pathToFileURL(path.join(plugin, 'app.js')).href + '?t1=' + hashes['plugin/app.js']).replace(/&/g, '&amp;') + '"></script>';
-  out = out.replace(app, '<script src="bootstrap.js?t1=' + hashes['tests/host/t1/bootstrap.js'] + '"></script>\n  ' + app);
-  return out.replace('<title>视频分析</title>', '<title>T1 自动测量 · 视频分析</title>');
+  const app = '<script src="' + (pathToFileURL(path.join(plugin, 'app.js')).href + '?verify=' + hashes['plugin/app.js']).replace(/&/g, '&amp;') + '"></script>';
+  out = out.replace(app, '<script src="bootstrap.js?verify=' + hashes['tests/host/window/bootstrap.js'] + '"></script>\n  ' + app);
+  return out.replace('<title>视频分析</title>', '<title>T2 自动测量 · 视频分析</title>');
 }
 function generated(root, io) {
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
   if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
-  const manifest = { ...original, id: 'EVAT1AUTO20261012', name: '视频分析 T1：自动测量', logo: '/logo.local.png',
-    keywords: ['视频', 'T1', '自动测量'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
+  const manifest = { ...original, id: 'EVAT1AUTO20261012', name: '视频分析 · T2 自动测量', logo: '/logo.local.png',
+    keywords: ['视频', 'T2', '自动测量'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
   const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes)),
     'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
   const marker = { schema: SCHEMA, hostRoot: p.host, pluginRoot: p.plugin, sourceHashes: hashes,

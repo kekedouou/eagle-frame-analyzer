@@ -429,6 +429,10 @@
       const target = this.target, ordinal = target && target.predictedIndex;
       if (!this.info || !target || !this._valid(target.epoch) || this.state === 'error' || !Number.isInteger(ordinal) ||
         this.tasks.size >= 2 || this.cache.has(ordinal) || this.tasks.has(target.epoch + ':' + ordinal) || this.prefetchFailed.has(ordinal)) return;
+      // Speculation must not hold the spare slot in disk I/O while a later
+      // real target is already in RAM. Missing JPEGs remain demand reads;
+      // bounded RAM predictions and ordinary playback prefetch stay enabled.
+      if (this.experimentMode === 'compressed-ram' && !this.compressed.has(ordinal)) return;
       // Latest real target owns the first slot. A prediction is cache work only;
       // it never becomes a seek target or gets permission to draw.
       if (!this.cache.has(target.index) && !this.tasks.has(target.epoch + ':' + target.index)) return;

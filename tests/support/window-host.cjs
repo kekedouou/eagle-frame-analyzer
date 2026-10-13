@@ -7,9 +7,9 @@ const fs = require('fs'), path = require('path'), crypto = require('crypto'), os
 const protocol = require('./t0-protocol.cjs'), gate = require('./t0-gate.cjs');
 const frameIndex = require('../../plugin/frame-index.cjs');
 const { OWNER, RECIPE } = require('../../plugin/cache.cjs');
-const { createStore, LIMITS: EVIDENCE_LIMITS } = require('./t1-evidence.cjs');
+const { createStore, LIMITS: EVIDENCE_LIMITS } = require('./t2-evidence.cjs');
 const MIB = 1024 ** 2, RESERVE = 3 * MIB, RSS_STOP = 1.5 * 1024 ** 3;
-const VERSION = 't1-formal-dom-regression-v1';
+const VERSION = 'window-formal-dom-regression-v1';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function unsavedEvidenceJSON(summary, failure) {
   const persistenceError = { stage: failure.stage, code: failure.error.code || 'HOST_EVIDENCE_SAVE_FAILED',
@@ -20,7 +20,7 @@ function unsavedEvidenceJSON(summary, failure) {
   let json = JSON.stringify(base);
   if (Buffer.byteLength(json) <= EVIDENCE_LIMITS.fileBytes) return json;
   // Keep the entire trace before optional environment and duplicated summaries.
-  const minimal = { schema: VERSION, origin: summary.origin, type: 'unsaved-summary', complete: false,
+  const minimal = { schema: VERSION, stage: 'T2', origin: summary.origin, type: 'unsaved-summary', complete: false,
     earlyRegressionPassed: false, persisted: false, error: summary.error || null, persistenceError,
     source: summary.source, pluginRoot: summary.pluginRoot, receipts: summary.receipts, cleanup: summary.cleanup,
     resourceStop: summary.resourceStop, existingP03: summary.existingP03, interruptedTrace: trace,
@@ -35,7 +35,7 @@ function unsavedEvidenceJSON(summary, failure) {
   json = JSON.stringify(minimal);
   if (Buffer.byteLength(json) <= EVIDENCE_LIMITS.fileBytes) return json;
   // Defensive bound even if unexpected context, rather than a trace, is huge.
-  return JSON.stringify({ schema: VERSION, type: 'unsaved-summary', complete: false, earlyRegressionPassed: false,
+  return JSON.stringify({ schema: VERSION, stage: 'T2', type: 'unsaved-summary', complete: false, earlyRegressionPassed: false,
     persisted: false, persistenceError, traceRetention: minimal.traceRetention,
     omittedContext: 'The remaining context also exceeded 2MiB and cannot be retained completely.' });
 }
@@ -223,14 +223,14 @@ function run(options = {}) {
   function save(value, stage) {
     try { return store.save('host', value); }
     catch (failure) {
-      const error = new Error('T1证据未保存：' + String(failure.message || failure).slice(0, 1024) + '；可调用本次任务的 unsavedEvidence() 取回有界失败记录。');
+      const error = new Error('T2证据未保存：' + String(failure.message || failure).slice(0, 1024) + '；可调用本次任务的 unsavedEvidence() 取回有界失败记录。');
       error.code = failure.code || 'HOST_EVIDENCE_SAVE_FAILED';
       persistenceFailure = { stage, error }; throw error;
     }
   }
   async function saveRound(summary) {
     const trace = await round.capture.pack();
-    pendingRoundPayload = { schema: VERSION, origin, launchContext, type: 'round',
+    pendingRoundPayload = { schema: VERSION, stage: 'T2', origin, launchContext, type: 'round',
       source: first.sourceIdentity, protocol: protocol.PROTOCOL, summary, trace };
     const receipt = save(pendingRoundPayload, 'round');
     receipts.push(receipt); rounds.push(summary); round = null; pendingRoundPayload = null;
@@ -324,7 +324,7 @@ function run(options = {}) {
         result = { complete: false, earlyRegressionPassed: false, error: { code: 'HOST_ENTRY_CHANGED', message: launchSourceError } };
       } }
       const current = snapshot(), p03 = first.loadMetrics;
-      const summary = { schema: VERSION, origin, launchContext, type: 'summary', ...result,
+      const summary = { schema: VERSION, stage: 'T2', origin, launchContext, type: 'summary', ...result,
         launchSourcesVerifiedAtEnd: launchContext ? !launchSourceError : null,
         pluginRoot: first.pluginRoot,
         source: first.sourceIdentity, sourceMetadata: info.source, duration: info.duration, frames: info.frames.length, manifestSha256, manifestBytes,
@@ -336,7 +336,7 @@ function run(options = {}) {
           note: 'App/session entry through audio/index/first-frame ready and synchronous UI notification; one load only. Reuse has no numeric readiness gate; independent entry provenance, when present, is recorded separately.' },
         rounds, receipts, reservation, interruptedTrace: failedCapture, resourceStop: { requested: closeForRss, thresholdBytes: RSS_STOP,
           closeRequestedAfterReceipt: closeForRss, independentlyObservedReleased: false },
-        limitations: ['T1 early formal-UI regression only, not T0 full 18-round repetition or T4 full acceptance.',
+        limitations: ['T2 six-round formal-UI regression only; not complete T2 lifecycle acceptance, not T0 full 18-round repetition or T4 full acceptance.',
           'Same loaded Player and RAM working set remain across rounds; no automatic RAM reset, reload or complete-cache deletion.',
           'Synthetic DOM pointers exercise formal UI/session/player; physical mouse feel and OS pointer capture still require user observation.',
           'Draw submissions are measured, not monitor scanout. Completed-draw P95 excludes superseded/reused requests; their counts and gaps remain.',

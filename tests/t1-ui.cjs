@@ -169,4 +169,15 @@ test('Identical observations do not rewrite static material text or ARIA attribu
   assert.equal(textWrites, 1); assert.equal(sourceName, '另一视频'); assert.equal(attributes, 2);
   h.ui.destroy();
 });
+test('Video RAM is current, distinct from process memory, and its timer ends on destroy', () => {
+  const h = harness(); let tick, cleared = 0, budget = null;
+  h.win.setInterval = (fn, ms) => { assert.equal(ms, 500); tick = fn; return 17; };
+  h.win.clearInterval = id => { assert.equal(id, 17); cleared++; };
+  h.ui.bindSession({ memorySnapshot: () => budget });
+  assert.equal(h.el('memoryUsage').textContent, '视频缓存 RAM：—');
+  budget = { used: 128.5 * 1048576, limit: 512 * 1048576 }; tick();
+  assert.equal(h.el('memoryUsage').textContent, '视频缓存 RAM：128.5 / 512 MiB');
+  budget = null; tick(); assert.equal(h.el('memoryUsage').textContent, '视频缓存 RAM：—');
+  h.ui.destroy(); assert.equal(cleared, 1); tick(); assert.equal(h.el('memoryUsage').textContent, '视频缓存 RAM：—');
+});
 console.log('T1 UI: ' + checks + ' in-memory checks passed; real layout/input experience not tested.');

@@ -2,12 +2,12 @@
 // Recorder contracts only. No real DOM, Eagle, source videos or evidence writes.
 const assert = require('assert');
 const fs = require('fs'), path = require('path'), vm = require('vm'), crypto = require('crypto');
-const { _test: api, run } = require('./support/t1-host.cjs');
+const { _test: api, run } = require('./support/window-host.cjs');
 const frames = [0, 1, 2].map(id => ({ id, time: id / 10, end: (id + 1) / 10 }));
 const frozen = { epoch: 4, libraryEpoch: 2, sourceIdentity: { itemId: '中文', sha256: 'a'.repeat(64) } };
 const binding = { sessionEpoch: 4, libraryEpoch: 2, itemId: '中文', sourceSha256: 'a'.repeat(64) };
 let count = 0;
-function test(name, work) { work(); count++; console.log('ok T1 host recorder: ' + name); }
+function test(name, work) { work(); count++; console.log('ok Window host recorder: ' + name); }
 function player(c, event, override) { c.accept({ type: 'player', value: { binding: override || binding, event } }); }
 function request(c, id, time, inputAt = 100, kind = 'rapid', overrides = {}) {
   return c.dispatch(time, kind, () => player(c, { type: 'request', phase: 'input', at: inputAt + .5, inputAt,
@@ -16,6 +16,16 @@ function request(c, id, time, inputAt = 100, kind = 'rapid', overrides = {}) {
 function drawn(c, id, frameId, inputAt = 100, drawAt = 108) {
   player(c, { type: 'draw', at: drawAt + .5, drawAt, epoch: 1, requestId: id, frameId, inputAt, rafOpportunity: id, commitSource: 'raf' });
 }
+test('T2 host envelope validates stage and digest after canonical serialization', () => {
+  const { unwrapHost } = require('../scripts/verify-t2-cache.cjs')._test;
+  const { canonical } = require('./support/t2-evidence.cjs')._test;
+  const payload = { stage: 'T2', type: 'summary', nested: { z: 1, a: 2 } };
+  const outer = { schema: 't2-evidence-v1', kind: 'host', payload: JSON.parse(canonical(payload)),
+    key: crypto.createHash('sha256').update(canonical(payload)).digest('hex') };
+  assert.deepStrictEqual(unwrapHost(outer), payload);
+  assert.throws(() => unwrapHost({ ...outer, key: '0'.repeat(64) }));
+  assert.throws(() => unwrapHost({ ...outer, kind: 'cache' }));
+});
 test('pointer targets use actual frame interval midpoints including final frame and duplicate PTS', () => {
   assert.strictEqual(api.midpoint(frames, 0), .05); assert.strictEqual(api.midpoint(frames, 2), .25);
   assert.strictEqual(api.midpoint([{ time: 0, end: 0 }], 0), 0); assert.throws(() => api.midpoint(frames, 10));
@@ -75,7 +85,7 @@ test('invalid setup is rejected before any store, DOM or host operation', () => 
     document: {}, window: { PointerEvent() {} }, pluginRoot: 'D:/unused' }), /首帧暂停/);
 });
 test('unsaved evidence keeps a whole trace ahead of optional context and never exceeds 2MiB', () => {
-  const limit = require('./support/t1-evidence.cjs').LIMITS.fileBytes;
+  const limit = require('./support/t2-evidence.cjs').LIMITS.fileBytes;
   const failure = { stage: 'round', error: Object.assign(new Error('controlled capacity failure'), { code: 'ENOSPC' }) };
   const trace = { data: 'complete-small-trace', rawSha256: 'a'.repeat(64), truncated: false };
   const summary = { complete: true, earlyRegressionPassed: true, interruptedTrace: trace,
@@ -156,15 +166,15 @@ function lifecycleHarness(settings = {}) {
   const bridge = { snapshot: () => JSON.parse(JSON.stringify(value)), subscribe(callback) {
     if (settings.rejectSubscribe) throw new Error('controlled subscribe failure'); observers.add(callback); return () => observers.delete(callback);
   } };
-  const module = { exports: {} }, code = fs.readFileSync(path.join(__dirname, 'support/t1-host.cjs'), 'utf8');
+  const module = { exports: {} }, code = fs.readFileSync(path.join(__dirname, 'support/window-host.cjs'), 'utf8');
   const originalProtocol = require('./support/t0-protocol.cjs');
   vm.runInNewContext(code, { module, Buffer, console, process: { ...process, memoryUsage: () => ({ rss: settings.rss || 1, external: 0, arrayBuffers: 0 }) },
     require(name) {
       if (name === 'fs') return fakeFs;
-      if (name === './t1-evidence.cjs') return { createStore: () => store, LIMITS: require('./support/t1-evidence.cjs').LIMITS };
+      if (name === './t2-evidence.cjs') return { createStore: () => store, LIMITS: require('./support/t2-evidence.cjs').LIMITS };
       if (name === './t0-protocol.cjs') return { ...originalProtocol, PROTOCOL: { ...originalProtocol.PROTOCOL, roundMs: 30, randomTargets: 2 } };
-      return require(require('module').createRequire(path.join(__dirname, 'support/t1-host.cjs')).resolve(name));
-    } }, { filename: 't1-host-memory-lifecycle' });
+      return require(require('module').createRequire(path.join(__dirname, 'support/window-host.cjs')).resolve(name));
+    } }, { filename: 'window-host-memory-lifecycle' });
   return { driver: module.exports, options: { bridge, document: doc, window: win, pluginRoot }, store, saved, saveAttempts, observers, intervals,
     win, value, activePointer: () => activePointer, closed: () => closed, onRequest: callback => { requestObserver = callback; } };
 }
@@ -172,7 +182,7 @@ async function lifecycle() {
   const h = lifecycleHarness(), result = await h.driver.run(h.options).done;
   assert.strictEqual(result.complete, true); assert.strictEqual(h.saved.length, 7); assert.strictEqual(h.saved[6].rounds.length, 6);
   assert(h.store.closed); assert.strictEqual(h.observers.size, 0); assert.strictEqual(h.intervals.size, 0); assert.strictEqual(h.activePointer(), false);
-  count++; console.log('ok T1 host lifecycle: six bounded rounds save and release observers/timer/gesture in memory');
+  count++; console.log('ok Window host lifecycle: six bounded rounds save and release observers/timer/gesture in memory');
   const reuse = lifecycleHarness({ reused: true, loadMs: 10000 });
   reuse.options.launchContext = { kind: 'real-Eagle-formal-code-independent-entry', mappedFormalRoot: reuse.options.pluginRoot };
   reuse.options.verifyLaunch = () => {};
@@ -180,32 +190,32 @@ async function lifecycle() {
   assert.strictEqual(reused.p03.withinTarget, null); assert.strictEqual(reused.p03.totalMs, 10000);
   for (const receipt of reuse.saved) { assert.strictEqual(receipt.origin, 'automatic-real-Eagle-independent-entry-formal-code');
     assert.strictEqual(receipt.launchContext.mappedFormalRoot, reuse.options.pluginRoot); }
-  count++; console.log('ok T1 host lifecycle: independent-entry provenance is retained and reuse never fabricates a first-load gate');
+  count++; console.log('ok Window host lifecycle: independent-entry provenance is retained and reuse never fabricates a first-load gate');
   const changedEntry = lifecycleHarness();
   changedEntry.options.launchContext = { kind: 'real-Eagle-formal-code-independent-entry', mappedFormalRoot: changedEntry.options.pluginRoot };
   changedEntry.options.verifyLaunch = () => { throw new Error('controlled entry change'); };
   const changed = await changedEntry.driver.run(changedEntry.options).done;
   assert.strictEqual(changed.complete, false); assert.strictEqual(changed.error.code, 'HOST_ENTRY_CHANGED');
   assert.strictEqual(changedEntry.saved[6].launchSourcesVerifiedAtEnd, false);
-  count++; console.log('ok T1 host lifecycle: changed entry sources cannot retain a passing saved summary');
+  count++; console.log('ok Window host lifecycle: changed entry sources cannot retain a passing saved summary');
   let lastTask;
   const lastSave = lifecycleHarness({ onSave(value, length) { if (value.type === 'round' && length === 6) lastTask.cancel(); } });
   lastTask = lastSave.driver.run(lastSave.options); const lateCancelled = await lastTask.done;
   assert.strictEqual(lateCancelled.complete, false); assert.strictEqual(lateCancelled.error.code, 'HOST_USER_CANCELLED');
   assert.strictEqual(lastSave.saved[6].complete, false); assert(lastSave.store.closed);
-  count++; console.log('ok T1 host lifecycle: cancellation during the final round save remains a failed summary');
+  count++; console.log('ok Window host lifecycle: cancellation during the final round save remains a failed summary');
   const subscription = lifecycleHarness({ rejectSubscribe: true }); assert.throws(() => subscription.driver.run(subscription.options), /subscribe failure/);
-  assert(subscription.store.closed); count++; console.log('ok T1 host lifecycle: setup failure releases evidence lock');
+  assert(subscription.store.closed); count++; console.log('ok Window host lifecycle: setup failure releases evidence lock');
   const resource = lifecycleHarness({ rss: 1.5 * 1024 ** 3 }); const stopped = await resource.driver.run(resource.options).done;
   assert.strictEqual(stopped.complete, false); assert.strictEqual(stopped.error.code, 'HOST_RSS_STOP');
   assert(resource.store.closed); assert.strictEqual(resource.closed(), 1); assert.strictEqual(resource.observers.size, 0);
-  count++; console.log('ok T1 host lifecycle: resource stop preserves failure before requesting current-window close');
+  count++; console.log('ok Window host lifecycle: resource stop preserves failure before requesting current-window close');
   const cancelled = lifecycleHarness(), task = cancelled.driver.run(cancelled.options);
   cancelled.onRequest(() => task.cancel()); const cancellation = await task.done;
   assert.strictEqual(cancellation.complete, false); assert.strictEqual(cancellation.error.code, 'HOST_USER_CANCELLED');
   assert(cancelled.store.closed); assert.strictEqual(cancelled.activePointer(), false); assert.strictEqual(cancelled.observers.size, 0);
   assert.strictEqual(cancelled.saved[0].cleanup.remainingTargets, 0);
-  count++; console.log('ok T1 host lifecycle: mid-gesture cancellation terminates synthetic gesture and finitely waits before saving failure');
+  count++; console.log('ok Window host lifecycle: mid-gesture cancellation terminates synthetic gesture and finitely waits before saving failure');
   for (const stage of ['round', 'summary']) {
     const broken = lifecycleHarness({ failSave: stage }), unfinished = broken.driver.run(broken.options);
     assert.strictEqual(unfinished.unsavedEvidence(), null);
@@ -223,20 +233,20 @@ async function lifecycle() {
     }
     retained.complete = true; assert.strictEqual(JSON.parse(unfinished.unsavedEvidence()).complete, false);
     assert(broken.store.closed); assert.strictEqual(broken.observers.size, 0); assert.strictEqual(broken.intervals.size, 0); assert.strictEqual(broken.activePointer(), false);
-    count++; console.log('ok T1 host lifecycle: ' + stage + ' save failure rejects without retry, releases resources and retains bounded evidence');
+    count++; console.log('ok Window host lifecycle: ' + stage + ' save failure rejects without retry, releases resources and retains bounded evidence');
   }
   const stoppedSave = lifecycleHarness({ rss: 1.5 * 1024 ** 3, failSave: 'summary' });
   const stoppedTask = stoppedSave.driver.run(stoppedSave.options); await assert.rejects(stoppedTask.done, /证据未保存/);
   assert.strictEqual(JSON.parse(stoppedTask.unsavedEvidence()).resourceStop.requested, true);
   assert(stoppedSave.store.closed); assert.strictEqual(stoppedSave.closed(), 1); assert.strictEqual(stoppedSave.observers.size, 0);
-  count++; console.log('ok T1 host lifecycle: resource stop still releases lock and requests window close when saving fails');
+  count++; console.log('ok Window host lifecycle: resource stop still releases lock and requests window close when saving fails');
   const cancelledSave = lifecycleHarness({ failSave: 'summary' }), cancelledTask = cancelledSave.driver.run(cancelledSave.options);
   cancelledSave.onRequest(() => cancelledTask.cancel()); await assert.rejects(cancelledTask.done, /证据未保存/);
   const cancelledEvidence = JSON.parse(cancelledTask.unsavedEvidence());
   assert.strictEqual(cancelledEvidence.error.code, 'HOST_USER_CANCELLED'); assert(cancelledEvidence.interruptedTrace.data);
   assert.strictEqual(cancelledEvidence.cleanup.remainingTargets, 0); assert(cancelledSave.store.closed);
   assert.strictEqual(cancelledSave.activePointer(), false); assert.strictEqual(cancelledSave.observers.size, 0); assert.strictEqual(cancelledSave.intervals.size, 0);
-  count++; console.log('ok T1 host lifecycle: cancelled gesture and failed evidence save retain complete trace after finite cleanup');
-  console.log('T1 host recorder: ' + count + ' pure checks passed; no Eagle, media or evidence writes.');
+  count++; console.log('ok Window host lifecycle: cancelled gesture and failed evidence save retain complete trace after finite cleanup');
+  console.log('Window host recorder: ' + count + ' pure checks passed; no Eagle, media or evidence writes.');
 }
 lifecycle().catch(error => { console.error(error.stack); process.exitCode = 1; });

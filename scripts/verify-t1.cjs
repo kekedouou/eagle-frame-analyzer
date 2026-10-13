@@ -70,8 +70,8 @@ function git(args) {
 }
 function context(tools) {
   const names = [...fs.readdirSync(pluginRoot).filter(name => /\.(?:js|cjs|html|css|json)$/.test(name)).map(name => 'plugin/' + name),
-    'scripts/check.cjs', 'scripts/verify-t1.cjs', 'scripts/prepare-t1-host.cjs', 'tests/support/t1-evidence.cjs',
-    'tests/host/t1/bootstrap.js', 'tests/support/t1-launch.cjs', 'tests/support/t1-host.cjs', 'tests/t1-launch.cjs', 'tests/t1-host.cjs'];
+    'scripts/check.cjs', 'scripts/verify-t1.cjs', 'scripts/prepare-window-host.cjs', 'tests/support/t1-evidence.cjs',
+    'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs', 'tests/window-launch.cjs', 'tests/window-host.cjs'];
   return { origin: 'local-node-not-Eagle', date: new Date().toISOString(), node: process.versions.node, platform: process.platform,
     arch: process.arch, cpu: os.cpus()[0] && os.cpus()[0].model, logicalCpus: os.cpus().length, totalRamBytes: os.totalmem(),
     gitHead: git(['rev-parse', 'HEAD']), gitStatus: git(['status', '--short']),

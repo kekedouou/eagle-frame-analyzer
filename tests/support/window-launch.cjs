@@ -2,13 +2,13 @@
 // A real Eagle test window with original SDK calls and formal source files.
 // Only the onPluginCreate directory is mapped to the actual formal plugin.
 const path = require('path');
-const entry = require('../../scripts/prepare-t1-host.cjs');
-const driver = require('./t1-host.cjs');
-const { createStore } = require('./t1-evidence.cjs');
+const entry = require('../../scripts/prepare-window-host.cjs');
+const driver = require('./window-host.cjs');
+const { createStore } = require('./t2-evidence.cjs');
 const PREPARE_MS = 120000, WORK_MS = 180000;
 function install(options) {
   const { window: win, document: doc, eagle, hostRoot } = options;
-  if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T1独立自动验证入口。');
+  if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T2独立自动验证入口。');
   const repo = path.resolve(hostRoot, '../../..'), register = eagle.onPluginCreate;
   const verify = options.verify || entry.verify, start = options.run || driver.run, storeFactory = options.createStore || createStore;
   let state = 'waiting', job = null, stopping = false, closeRequested = false, allowUnload = false, completed = false;
@@ -16,7 +16,7 @@ function install(options) {
   let cancelPreparation = null;
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
-    doc.title = 'T1 自动测量 · ' + text;
+    doc.title = 'T2 自动测量 · ' + text;
     const node = doc.getElementById(failed ? 'error' : 'status');
     if (node) { node.textContent = text; node.hidden = false; }
   }
@@ -25,7 +25,7 @@ function install(options) {
     let store;
     try {
       store = storeFactory(repo); store.start({ reserveBytes: 64 * 1024 });
-      receipts.push(store.save('host', { schema: 't1-automatic-entry-failure-v1', origin: 'real-Eagle-independent-test-entry',
+      receipts.push(store.save('host', { schema: 'window-automatic-entry-failure-v1', stage: 'T2', origin: 'real-Eagle-independent-test-entry',
         complete: false, earlyRegressionPassed: false, at: new Date().toISOString(), state, context,
         error: { message: String(error && error.message || error).slice(0, 2048) } }));
     } catch (saving) { message('验证失败且回执未保存：' + String(saving.message).slice(0, 512), true); }
@@ -110,7 +110,7 @@ function install(options) {
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
       context.readyEpoch = snapshot.epoch;
       context.readyTrigger = snapshot.loadMetrics.trigger;
-      state = 'measuring'; doc.title = 'T1 自动测量 · 请保持前台，约2分钟';
+      state = 'measuring'; doc.title = 'T2 自动测量 · 请保持前台，约2分钟';
       job = start({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
         verifyLaunch: () => verify(repo) });
       timer = win.setTimeout(() => { stopping = true; job.cancel(); }, WORK_MS);

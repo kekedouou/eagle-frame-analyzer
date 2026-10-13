@@ -185,10 +185,16 @@ async function reuseIntegration() {
       passed: false, error: String(error.stack).slice(0, 8192) }))); throw error;
   } finally { try { if (handle) cache.release(handle); } finally { store.close(); } }
 }
+function unwrapHost(outer) {
+  const canonical = require('../tests/support/t2-evidence.cjs')._test.canonical;
+  if (outer.schema !== 't2-evidence-v1' || outer.kind !== 'host' || outer.key !== sha(Buffer.from(canonical(outer.payload))) || outer.payload.stage !== 'T2') throw new Error('T2 host envelope mismatch.');
+  return outer.payload;
+}
+module.exports = { _test: { unwrapHost } };
 async function auditHost(runId) {
-  if (typeof runId !== 'string' || !/^t1-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{20}$/.test(runId)) throw new Error('An explicit T1 host run ID is required.');
+  if (typeof runId !== 'string' || !/^t[12]-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{20}$/.test(runId)) throw new Error('An explicit T1/T2 host run ID is required.');
   const dir = path.join(repo, 'verification-runs', runId), gate = require('../tests/support/t0-gate.cjs');
-  const { _test: { registeredManifest } } = require('../tests/support/t1-host.cjs');
+  const { _test: { registeredManifest } } = require('../tests/support/window-host.cjs');
   const read = file => {
     const before = fs.lstatSync(file);
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 2 * 1024 ** 2 ||
@@ -198,35 +204,38 @@ async function auditHost(runId) {
     return { value: JSON.parse(bytes), bytes: bytes.length, sha256: sha(bytes) };
   };
   const owner = read(path.join(dir, 'owner.json')).value;
-  if (owner.owner !== require('../tests/support/t1-evidence.cjs').OWNER || owner.runId !== runId || owner.root !== path.join(repo, 'verification-runs')) throw new Error('Host receipt owner mismatch.');
+  if (owner.owner !== require(runId.startsWith('t2-') ? '../tests/support/t2-evidence.cjs' : '../tests/support/t1-evidence.cjs').OWNER || owner.runId !== runId || owner.root !== path.join(repo, 'verification-runs')) throw new Error('Host receipt owner mismatch.');
   const files = fs.readdirSync(dir).filter(n => /^host-[0-9a-f]{20}-\d+\.json$/.test(n));
   const records = files.map(n => ({ file: path.join(dir, n), ...read(path.join(dir, n)) }));
+  if (runId.startsWith('t2-')) for (const record of records) {
+    record.value = unwrapHost(record.value);
+  }
   const summaries = records.filter(r => r.value.type === 'summary'); if (summaries.length !== 1) throw new Error('Exactly one final host summary required.');
   const saved = summaries[0], summary = saved.value;
   const formalFiles = ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs'];
   if (JSON.stringify(Object.keys(summary.sourceFingerprints || {}).sort()) !== JSON.stringify(formalFiles.sort()) ||
     Object.values(summary.sourceFingerprints).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Measured formal source list is invalid.');
-  if (summary.schema !== 't1-formal-dom-regression-v1' || !summary.sourceFingerprintsUnchanged || !summary.launchSourcesVerifiedAtEnd ||
+  if (summary.schema !== (runId.startsWith('t2-') ? 'window-formal-dom-regression-v1' : 't1-formal-dom-regression-v1') || !summary.sourceFingerprintsUnchanged || !summary.launchSourcesVerifiedAtEnd ||
     JSON.stringify(summary.initialSourceFingerprints) !== JSON.stringify(summary.sourceFingerprints)) throw new Error('Measured source fingerprint consistency failed.');
   const manifest = registeredManifest(path.join(repo, 'plugin'), summary.initialSnapshot);
   if (manifest.manifestSha256 !== summary.manifestSha256 || manifest.manifestBytes !== summary.manifestBytes) throw new Error('Measured manifest changed.');
   const protocol = require('../tests/support/t0-protocol.cjs'), rounds = [];
   for (const record of records.filter(r => r.value.type === 'round')) {
     const item = record.value, s = item.summary, trace = item.trace;
-    if (JSON.stringify(item.protocol) !== JSON.stringify(protocol.PROTOCOL) || JSON.stringify(item.source) !== JSON.stringify(summary.source)) throw new Error('Measured protocol/source mismatch.');
+    if (!require('util').isDeepStrictEqual(item.protocol, protocol.PROTOCOL) || JSON.stringify(item.source) !== JSON.stringify(summary.source)) throw new Error('Measured protocol/source mismatch.');
     const reference = summary.receipts.find(r => r.file === record.file);
     if (!reference || reference.bytes !== record.bytes || reference.sha256 !== record.sha256) throw new Error('Summary receipt reference mismatch.');
     const events = gate.unpack(trace), capture = new gate.Capture(manifest.info.frames.map(f => f.id));
     for (const event of events) capture.append(event); capture.maxTasks = trace.maxImageTasks;
     const computed = capture.summarize(s.begin, s.end, { kind: s.kind, delayMs: s.delayMs });
-    for (const key of Object.keys(computed)) if (JSON.stringify(computed[key]) !== JSON.stringify(s[key])) throw new Error('Round recomputation mismatch: ' + key);
+    for (const key of Object.keys(computed)) if (!require('util').isDeepStrictEqual(computed[key], s[key])) throw new Error('Round recomputation mismatch: ' + key);
     if (s.final.expectedFrameId !== s.final.snapshot.playback.frameId || s.final.hint.text !== s.final.hint.expected || !s.final.correct) throw new Error('Final displayed frame/hint mismatch.');
     let releaseToDraw = null;
     if (s.kind === 'independent') {
       const releases = events.filter(e => e.type === 'input' && e.kind === 'release');
       const ids = new Set(releases.map(e => e.inputId));
       releaseToDraw = protocol.distribution(events.filter(e => e.type === 'draw' && ids.has(e.inputId)).map(e => e.at - e.inputAt));
-      if (releases.length !== protocol.PROTOCOL.randomTargets || JSON.stringify(releaseToDraw) !== JSON.stringify(s.releaseToDraw))
+      if (releases.length !== protocol.PROTOCOL.randomTargets || !require('util').isDeepStrictEqual(releaseToDraw, s.releaseToDraw))
         throw new Error('Random release count/statistics mismatch.');
     }
     const roundGateMet = s.valid && s.final.correct && (s.kind === 'rapid' ? computed.normalThresholdsMet :

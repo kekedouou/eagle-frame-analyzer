@@ -197,6 +197,16 @@ async function main() {
     assert.strictEqual(h.released.length, 0); assert.strictEqual((await h.session.close()).status, 'error');
     assert.strictEqual((await h.session.close()).status, 'error'); assert.strictEqual(h.session.snapshot().state, 'closed');
   });
+  await test('Current-video memory is observable during loading and invalidated before switching or closing', async () => {
+    const gate = deferred();
+    const h = harness({ load: async player => { player.value.budget = { used: 32, limit: 512 }; await gate.promise; } });
+    assert.equal(h.session.memorySnapshot(), null);
+    const pending = h.session.loadSelected(); await flush();
+    assert.deepStrictEqual(h.session.memorySnapshot(), { used: 32, limit: 512 });
+    const copy = h.session.memorySnapshot(); copy.used = 99; assert.equal(h.session.memorySnapshot().used, 32);
+    gate.resolve(); await pending;
+    const closing = h.session.close(); assert.equal(h.session.memorySnapshot(), null); await closing;
+  });
   console.log('T1 session memory tests passed: ' + tests + '. Not real Eagle, media, Canvas or performance verification.');
 }
 main().catch(error => { console.error(error.stack); process.exitCode = 1; });

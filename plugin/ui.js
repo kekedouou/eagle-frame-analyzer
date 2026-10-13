@@ -26,12 +26,19 @@
   }
   function createUI(options = {}) {
     const doc = options.document || document, win = options.window || window, now = options.now || (() => performance.now());
-    const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'status', 'error', 'retry'];
+    const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'memoryUsage', 'status', 'error', 'retry'];
     const el = Object.fromEntries(ids.map(id => [id, doc.getElementById(id)]));
     if (ids.some(id => !el[id])) throw new Error('播放器界面缺少必要元素。');
     let session = null, state = { state: 'empty', duration: 0 }, gesture = null, hintEpoch = null, hintGeometry = null, lastRequestedTime = 0;
     const attributes = new Map();
     const set = (node, key, value) => { if (node[key] !== value) node[key] = value; };
+    let memoryTimer = null;
+    function refreshMemory() {
+      const budget = session && typeof session.memorySnapshot === 'function' ? session.memorySnapshot() : null;
+      const available = budget && Number.isFinite(budget.used) && budget.used >= 0 && Number.isFinite(budget.limit) && budget.limit > 0;
+      set(el.memoryUsage, 'textContent', available ? '视频缓存 RAM：' + (budget.used / 1048576).toFixed(1) + ' / ' +
+        (budget.limit / 1048576).toFixed(0) + ' MiB' : '视频缓存 RAM：—');
+    }
     function attribute(name, value) {
       if (attributes.get(name) !== value) { el.timeline.setAttribute(name, value); attributes.set(name, value); }
     }
@@ -132,8 +139,14 @@
       if (!gesture) thumb(time);
       if (hintEpoch !== null) hint(time); // Includes final release settlement; only actual submitted frame time.
     }
-    return { canvas: el.picture, bindSession(value) { session = value; update(state); }, update,
-      destroy() { clearGesture(); listeners.forEach(([target, type, fn]) => target.removeEventListener(type, fn)); session = null; } };
+    return { canvas: el.picture, bindSession(value) {
+      session = value; update(state); refreshMemory();
+      if (memoryTimer === null && typeof win.setInterval === 'function') memoryTimer = win.setInterval(refreshMemory, 500);
+    }, update,
+      destroy() {
+        if (memoryTimer !== null) { win.clearInterval(memoryTimer); memoryTimer = null; }
+        clearGesture(); listeners.forEach(([target, type, fn]) => target.removeEventListener(type, fn)); session = null; refreshMemory();
+      } };
   }
   return { createUI, formatTime, pointerTime, spaceAllowed };
 });

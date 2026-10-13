@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。产品规格v1及补充、架构v1、3C工程文档已批准；用户整体授权阶段4。T1限定关卡通过；T2第二次UE真实回归完整但首轮117.8ms停顿仍失败，当前减少UI重复写入/布局读取，14组UI模型及独立Chrome回归通过，Eagle修正版待验，见[当前候选](progress.md#阶段-4-t2第二次宿主复验与界面优化)。T2未整体验收。
+- 项目：Eagle Window 视频分析插件。2026-10-13：用户仅授权当前512MiB预算下最后一次性能修复；已限制拖动预测只用压缩RAM，保留真实目标磁盘读取。右栏永久显示当前视频受管RAM。当前测量入口统一为 tests/host/window，显示“视频分析 · T2 自动测量”，新回执计入T2额度；旧证据保留。自动模型通过不代表Eagle性能通过，最后一次真实测量待执行；若仍失败停止预算内调优，转入RAM调整决策。T2未验收，T3/T4未开始。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -12,7 +12,6 @@
 - 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 
-当前补记：第三次UE宿主回归首轮173.5ms仍失败，后两轮及随机定位通过。用户要求停止反复小改/重测；旧“Eagle修正版待验”已由此次结果覆盖，现先进行针对性自动诊断，不再要求用户重复测量。详见[最新结果与流程修正](experiments/T2/report.md#第三次复验停止小幅调优后反复人工重测)。
 
 ## 资料位置
 
@@ -37,7 +36,7 @@
 
 T1 正式入口为 `plugin/manifest.json`；加载与真实窗口操作由用户执行。`node scripts/verify-t1.cjs record-checks` 执行默认检查并写 T1 回执；`media` 对四登记输入调用正式准备并逐资产读回，缺缓存时会生成；`cancel` 只在专用 H.264 尚无完整缓存时执行一次取消，已有则跳过；`profile` / `profile-final baseline|h264-cfr` 是保留既有完整缓存的有界临时生成诊断，前者至提交入口停止，后者执行最终内容校验后因已有目标拒绝覆盖，均清理自己 partial，不能充当完整首备。后三类属于有副作用的显式验证，不在默认检查中运行。详细证据、环境差异及宿主取证见 [T1 报告](experiments/T1/report.md)。
 
-T1免命令宿主入口：Codex执行 `node scripts/prepare-t1-host.cjs` 只生成`tests/host/t1/`四份有归属的本机入口文件，总量≤256KiB，不加载Eagle、不处理媒体、不清旧文件。用户加载该目录后自动运行既定六轮并保存，不输控制台命令；真实SDK创建目录仅在独立测试窗口映射到`plugin/`，其余使用原正式HTML/脚本及SDK。回执分开记录SDK回调→正式就绪、正式app入口→就绪及首次/复用；不冒充原正式manifest启动。源码或生成文件变化拒绝继续，统一检查会核对已准备入口指纹；缺口与操作见[T1恢复记录](experiments/T1/report.md#t1-免命令宿主测量入口)。
+当前免命令宿主入口：Codex执行 `node scripts/prepare-window-host.cjs`，仅生成 `tests/host/window/` 四份有归属本机文件（≤256KiB）。用户在Eagle加载该目录的manifest，显示“视频分析 · T2 自动测量”。通用目录与脚本不再绑定T1；保留旧插件ID以延续身份，Eagle已有注册路径需用户重新指定。旧tests/host/t1入口只提示迁移，历史原件不删除。自动六轮沿用既定协议，证据新存T2的16MiB额度，不代表完整T2长期验收。`node scripts/verify-t2-cache.cjs audit-host <runId>`兼容旧T1原件和新T2封装，核对内容摘要、源码及统计。
 
 用户关窗失败修复后的显式 `node scripts/verify-t1-close.cjs` 用登记H.264与正式cache验证首帧/最终校验前取消和完整缓存关闭；生成自己的partial、取消并清理，保留旧完整缓存，回执仍计T1预算。Eagle窗口/DOM/Player为模型，媒体/缓存真实，不能记成实际宿主关窗通过。正常退出靠beforeunload同步门禁等待异步清理，不能只返回退出通知Promise。详见[T1关闭记录](experiments/T1/report.md#用户关闭失败与修复)。
 

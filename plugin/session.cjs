@@ -24,6 +24,11 @@ function createSession(options) {
       error: error ? { ...error } : null, progress: progress ? { ...progress } : null,
       loadMetrics: loadMetrics ? { ...loadMetrics } : null });
   }
+  function memorySnapshot() {
+    if (closed || !owner || owner.epoch !== epoch || !owner.player) return null;
+    const budget = owner.player.snapshot().budget;
+    return budget ? { used: budget.used, limit: budget.limit } : null;
+  }
   function notify() { try { onChange(snapshot()); } catch (_) { /* UI observation does not own session state. */ } }
   function current(request) { return !closed && request.epoch === epoch && !request.controller.signal.aborted; }
   function describe(failure, fallback) { return { code: failure && failure.code || fallback,
@@ -168,6 +173,6 @@ function createSession(options) {
     toggle: () => state === 'playing' ? control('pause', [], ['playing']) : control('play', [], ['paused']),
     seek: (time, settings = {}) => control('seek', [time, { ...settings, inputAt: settings.inputAt === undefined ? now() : settings.inputAt }], ['paused', 'playing', 'seeking']),
     step: delta => control('step', [delta], ['paused', 'playing', 'seeking']),
-    libraryChanged: () => clear('library-changed'), close: () => clear('closed'), snapshot });
+    libraryChanged: () => clear('library-changed'), close: () => clear('closed'), snapshot, memorySnapshot });
 }
 module.exports = { createSession };

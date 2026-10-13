@@ -483,6 +483,21 @@ async function run() {
     assert(h.player.snapshot().cachePeakBytes <= 310000); await h.close();
     assert.equal(h.player.snapshot().cacheBytes, 0);
   });
+  await check('uncached drag speculation cannot block a newer RAM target behind two real tasks', async () => {
+    const readGate = deferred(); readGate.file = 'f13.jpg';
+    const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 100, readGate });
+    const info = sample('priority', null, 32); await h.load(info);
+    await h.settle(h.player.seek(.7, { kind: 'drag' })); await h.elapse(8);
+    await h.settle(h.player.seek(.9, { kind: 'drag' })); await h.elapse(8);
+    const decodeGate = h.gate(11), old = h.player.seek(1.1, { kind: 'drag' }); await flush();
+    try {
+      const newer = h.player.seek(1.6, { kind: 'drag' }); await flush(); await h.frame();
+      assert.equal(h.player.snapshot().frameId, 16, 'A disk prediction must not occupy the slot required by a newer compressed-RAM target.');
+      assert.equal((await newer).status, 'drawn'); assert.equal((await old).status, 'superseded');
+      assert.equal(h.reads.get('priority:f13.jpg') || 0, 0);
+      assert(h.player.snapshot().activeImageTasks <= 2);
+    } finally { decodeGate.resolve(); readGate.resolve(); await h.close(); }
+  });
   await check('compressed warm cancellation holds real reads and reservations until exit; no next-source overlap', async () => {
     const gate = deferred(); gate.file = 'f0.jpg'; const h = harness({ experimentMode: 'compressed-ram', readGate: gate });
     const old = h.player.load(sample('old')); await flush(); assert.equal(h.player.snapshot().activeImageTasks, 1);
