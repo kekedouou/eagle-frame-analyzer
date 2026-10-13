@@ -21,3 +21,5 @@
 /tests/host/window/logo.local.png
 /tests/host/window/prepared.local.json
 /tests/host/t2/cache-scratch/
+
+/tests/host/t2/lock-quarantine/

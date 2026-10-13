@@ -1,5 +1,19 @@
 # T2：资源与生命周期执行记录
 
+## 用户授权旧缓存清理与空锁隔离
+
+2026-10-13用户明确允许删除之前的缓存，并批准把该空锁移到项目内隔离目录保留。执行范围为正式plugin/cache旧缓存；原视频、Eagle库和历史PoC/T0输入/证据不在删除范围。开始前记录授权及范围，原提案的dev/ino/0字节SHA和根owner摘要复核一致。
+
+PowerShell对源锁取得Read＋FileShare.Delete句柄，排除其它读写持有者；确认根路径无重解析、原锁仍0字节/时间不变、隔离目标未存在后，使用同一原生命令移动至 tests/host/t2/lock-quarantine/writer-1791862136559.lock。Node复核隔离文件dev/ino仍与提案相同、内容SHA为空摘要。原件保留，本机隔离目录加入gitignore，不混入版本提交。
+
+锁前盘点确认无活跃lease，使用正式cache.begin建立本次有归属写锁，持锁内核对根精确文件清单阻止新增占用/未知目录；读取每项归属、路径、文件身份/大小/mtime/SHA，先保存压缩完整删除计划，再逐文件核对并unlink，最后仅rmdir空目录，无递归删除。共19个完整缓存目录、8329文件、422533466字节（约402.96MiB）删除；根owner.json保留224B，写锁已正常释放。完整计划回执 verification-runs/t2-2026-10-13T03-40-32-887Z-bf2fa7f7db4a58ffcc46/cleanup-bf2fa7f7db4a58ffcc46-0.json，SHA256 3cd7547000800a2bc375109553ef074086f3b0d4cd343d9f0e947f553606751b；结果-1.json SHA256 fe3e9103dc4fbc2851e18f6e7c3eae6e6a851bf4048a329d78567494397ecd1c。
+
+首次操作在持自己写锁时调用inventory，被只读盘点保护拒绝，0文件删除，finally正常释放写锁。失败回执 verification-runs/t2-2026-10-13T03-39-28-371Z-a005865d680a46343cec/cleanup-a005865d680a46343cec-0.json SHA256 548146a30d81d60c4c703a2fe174a7042dfc86f47c4abc1cf6e5b2a4d027da38。修正为锁前盘点、持锁直接验证精确清单；这是操作流程修正，非缓存盘点API缺陷。原失败记录保留。
+
+长时资源驱动要求完整缓存，删除旧缓存后不能直接声称可重测。依据既有阶段4准备授权，仅自动重建此前指定UE/《10月11日》两份，通过正式media/cache路径及现有FFmpeg，逐资产读回，核对源不变及无writer/lease遗留；该Node本地准备不替代Eagle/浏览器或长时验收。完成数据：H.2641490帧＋音频、UE1113帧无声，共2604资产逐项读回。回执 verification-runs/t2-2026-10-13T03-42-22-910Z-a7fb0be0c30d35856c2b/cache-a7fb0be0c30d35856c2b-0.json，SHA256 b1c15be68fc61429574d0eefea0223d24c284b29795420b3f834ae7d6a758ca2；两源内容指纹及ino/dev/size/mtime不变。最终两份缓存共157942942字节（150.63MiB）、lease为0、writer不存在，原隔离锁仍0字节。没有旧缓存恢复，其它17份保持清理状态。当前旧报错窗口可能已加载旧模块，需关闭后重开现有T2入口，不使用旧窗口重试按钮；Node恢复通过不代表真实长测通过。最终统一检查回执 verification-runs/t2-2026-10-13T03-45-44-378Z-1f2fc4f3374a79bdb253/checks-1f2fc4f3374a79bdb253-0.json，SHA256 b41ecf53532ecd78828823fa2b2249633adbd6bf04aa683c178c1654972c0f6d；T2证据共2935005B，原16MiB额度保持，writer均释放。五个既有标签不变，不建立T2验收标签。
+
+
+
 ## 重开CACHE_BUSY：空写锁保护与恢复提案
 
 用户新截图显示准备前CACHE_BUSY。实际启动失败原件分别为 verification-runs/t2-2026-10-13T03-21-43-003Z-51512cb16cb4bd1303db 和 t2-2026-10-13T03-21-52-280Z-9c06d8ddb0731b1d7cdd 的host回执，未开始长时测量，不记为性能或RAM失败。根writer.lock实际0字节，创建/修改时间2026-10-13 11:08:58；没有PID/进程出生/归属数据。只读独占FileStream探测成功并立即关闭，证明该次探测没有其它打开句柄，不证明未知空文件的原始创建者身份。未知锁自动保留符合现有规则。

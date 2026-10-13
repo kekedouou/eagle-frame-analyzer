@@ -2,7 +2,7 @@
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：T2重开被CACHE_BUSY阻止，现存plugin/cache/writer.lock为0字节、无身份信息，独占只读探测当时可打开。已修复先建空锁后查进程身份的中断窗口，12组恢复模型通过；既有空锁仍保留，已准备单文件隔离提案待用户具体批准，不自动删除未知锁。完整缓存/原视频未改。长时两轮未完成，最小化绘制缺口仍未修复；T2未验收，T3/T4未开始。
+- 项目：Eagle Window 视频分析插件。2026-10-13：用户授权的空锁隔离和旧缓存清理已执行。19份旧缓存/8329文件约402.96MiB已按清单删除，空锁原件保留项目隔离目录；自动重建长时测试所需H.264《10月11日》及UE两份，2604资产读回与源不变核对通过，无writer/lease残留。当前正式缓存共150.63MiB。旧报错窗口需关闭重开加载修正代码；真实长时两轮仍未完成，暂不最小化，T2未验收，T3/T4未开始。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
