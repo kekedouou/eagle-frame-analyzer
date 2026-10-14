@@ -9,7 +9,7 @@ const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css
   ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'preferences.cjs'].map(n => 'plugin/' + n),
   'scripts/prepare-window-host.cjs', 'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs',
   'tests/support/window-resource.cjs', 'tests/support/window-annotations.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs',
-  'tests/support/ram-diagnostic.cjs'];
+  'tests/support/ram-diagnostic.cjs', 'tests/support/window-reuse.cjs'];
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 function same(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
 function directory(dir, io) {
@@ -58,8 +58,9 @@ function validRam(value) {
   try { require('../tests/support/ram-diagnostic.cjs').hostRssLimit(value); return true; } catch (_) { return false; }
 }
 function generated(root, io, mode = 'performance', writeApproval = null, ramDiagnostic = null) {
-  if (!validRam(ramDiagnostic) || ramDiagnostic && mode !== 'performance') throw new Error('RAM candidate requires the bounded performance protocol.');
-  if (!['performance', 'resource', 'annotations', 'preferences'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
+  if (!validRam(ramDiagnostic) || ramDiagnostic && !['performance', 'reuse'].includes(mode)) throw new Error('RAM candidate requires the bounded performance protocol or approved reuse protocol.');
+  if (mode === 'reuse' && (!ramDiagnostic || ramDiagnostic.schema !== 'T2-ram-host-v2')) throw new Error('Reuse requires the approved 2GiB configuration.');
+  if (!['performance', 'resource', 'annotations', 'preferences', 'reuse'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
     throw new Error('Unknown measurement protocol or annotation approval.');
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
@@ -87,9 +88,11 @@ function verify(repo, io = fs, verifySources = true) {
   const beforeAnnotations = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-annotations.cjs').sort());
   const beforeRam = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/ram-diagnostic.cjs').sort());
   const beforePreferences = JSON.stringify(SOURCES.filter(name => name !== 'plugin/preferences.cjs').sort());
-  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations || keys === beforeRam || keys === beforePreferences);
-  if (marker.mode !== undefined && !['performance', 'resource', 'annotations', 'preferences'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
-      !validRam(marker.ramDiagnostic) || marker.ramDiagnostic && marker.mode !== 'performance') throw new Error('Unknown measurement protocol.');
+  const beforeReuse = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-reuse.cjs').sort());
+  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations || keys === beforeRam || keys === beforePreferences || keys === beforeReuse);
+  if (marker.mode !== undefined && !['performance', 'resource', 'annotations', 'preferences', 'reuse'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
+      !validRam(marker.ramDiagnostic) || marker.ramDiagnostic && !['performance', 'reuse'].includes(marker.mode) ||
+      marker.mode === 'reuse' && (!marker.ramDiagnostic || marker.ramDiagnostic.schema !== 'T2-ram-host-v2')) throw new Error('Unknown measurement protocol.');
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
       !knownSourceList || Object.values(marker.sourceHashes).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Unknown test entry ownership or file list.');
@@ -112,7 +115,9 @@ function prepare(repo, io = fs, mode = 'performance', writeApproval = null, ramD
 }
 if (require.main === module) {
   try { if (process.argv.includes('--ram-compare') && process.argv.includes('--ram-compare-2g')) throw new Error('Choose only one RAM comparison configuration.');
-    const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
+    const modes = ['--preferences', '--annotations', '--resource', '--reuse'].filter(flag => process.argv.includes(flag));
+    if (modes.length > 1) throw new Error('Choose only one measurement protocol.');
+    const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--reuse') ? 'reuse' : process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
     process.argv.includes('--ram-compare-2g') ? { schema: 'T2-ram-host-v2', ramMiB: 2048, compressedMiB: 256, rendererStopMiB: 3072 } :
       process.argv.includes('--ram-compare') ? { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 } : null); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }

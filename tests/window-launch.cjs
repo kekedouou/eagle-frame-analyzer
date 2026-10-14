@@ -82,6 +82,12 @@ function fileTests() {
   assert.match(m.files.get(path.join(m.host, 'index.local.html')).toString(), /<title>T3 标注验收/);
   assert.strictEqual(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).id, id);
   entry.prepare(m.root, m.io, 'performance');
+  const ram2 = { schema: 'T2-ram-host-v2', ramMiB: 2048, compressedMiB: 256, rendererStopMiB: 3072 };
+  entry.prepare(m.root, m.io, 'reuse', null, ram2);
+  assert.equal(entry.verify(m.root, m.io).marker.mode, 'reuse');
+  assert.throws(() => entry.prepare(m.root, m.io, 'reuse'), /approved 2GiB/);
+  assert.throws(() => entry.prepare(m.root, m.io, 'reuse', null, { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 }), /approved 2GiB/);
+  entry.prepare(m.root, m.io, 'performance');
   ok('bounded idempotent entry retains formal body and uses escaped file URLs for Chinese/space paths');
   const source = path.join(m.root, 'plugin/app.js'); m.files.set(source, Buffer.from('changed source'));
   assert.throws(() => entry.verify(m.root, m.io), /重新准备/);

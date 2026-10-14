@@ -100,6 +100,8 @@ function install(options) {
           new Promise((_, reject) => { selectionTimer = win.setTimeout(() => reject(new Error('RAM对照选中核对超过10秒，未执行准备。')), 10000); })]); }
         finally { win.clearTimeout(selectionTimer); }
         if (selected.itemId !== 'MV6H7OK0MBGX2') throw new Error('本次RAM对照请单选“喜多郁代”，未执行缓存或测量。');
+        if (activeMode === 'reuse') driver._test.registeredManifest(prepared.plugin, { sourceIdentity: {
+          itemId: selected.itemId, sha256: 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658' } });
         const text = fs.readFileSync(path.join(prepared.plugin, 'player.js'), 'utf8');
         if (sha(Buffer.from(text)) !== prepared.marker.sourceHashes['plugin/player.js']) throw new Error('Player changed before RAM capture.');
         const helper = require('./ram-diagnostic.cjs'), config = prepared.marker.ramDiagnostic;
@@ -159,17 +161,17 @@ function install(options) {
         message('内存设置已就绪，请体验修改与重开保留；本次不自动拖动。');
         return { complete: true, observationSaved: true, receipts };
       }
-      state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · '+(ramContext.ramMiB/1024)+'GB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
-      const runner = activeMode === 'annotations' && !options.run ? require('./window-annotations.cjs').run : activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
+      state = 'measuring'; doc.title = activeMode === 'reuse' ? 'T2 自动测量 · 2GB缓存复用与释放，三次载入' : activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · '+(ramContext.ramMiB/1024)+'GB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
+      const runner = activeMode === 'reuse' && !options.run ? require('./window-reuse.cjs').run : activeMode === 'annotations' && !options.run ? require('./window-annotations.cjs').run : activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
       job = runner({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
         verifyLaunch: () => verify(repo), eagle,
         reloadSelected: () => { if (!runCallback) throw new Error('正式重复调用回调缺失。'); return runCallback(); },
         closeSession: () => { if (!exitCallback) throw new Error('正式退出回调缺失。'); return exitCallback(); } });
-      timer = win.setTimeout(() => { stopping = true; job.cancel('timeout'); }, activeMode === 'annotations' ? 20 * 60000 : activeMode === 'resource' ? RESOURCE_MS : WORK_MS);
+      timer = win.setTimeout(() => { stopping = true; job.cancel('timeout'); }, activeMode === 'reuse' ? 5 * 60000 : activeMode === 'annotations' ? 20 * 60000 : activeMode === 'resource' ? RESOURCE_MS : WORK_MS);
       const result = await job.done; clearTimer(); receipts = result.receipts || [];
       state = result.complete ? 'saved' : 'failed';
-      const passed = activeMode === 'annotations' ? result.complete && result.observationSaved : activeMode === 'resource' ? result.complete && result.resourceGatePassed : result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
-      message(passed ? (activeMode === 'annotations' ? '标注观察已保存，由Codex核对；不代表T3整体验收通过。' : activeMode === 'resource' ? '本轮资源记录已保存；两轮齐备后由Codex核对。' : '测量已保存，早期门槛通过；请告知Codex核对。') :
+      const passed = activeMode === 'reuse' ? result.complete && result.reuseGatePassed : activeMode === 'annotations' ? result.complete && result.observationSaved : activeMode === 'resource' ? result.complete && result.resourceGatePassed : result.complete && result.earlyRegressionPassed && result.p03 && result.p03.withinTarget !== false;
+      message(passed ? (activeMode === 'reuse' ? '三次缓存复用及账本释放记录已保存，请告知Codex核对。' : activeMode === 'annotations' ? '标注观察已保存，由Codex核对；不代表T3整体验收通过。' : activeMode === 'resource' ? '本轮资源记录已保存；两轮齐备后由Codex核对。' : '测量已保存，早期门槛通过；请告知Codex核对。') :
         '测量已保存，存在未通过项；请告知Codex核对。', !passed);
       if (activeMode === 'resource' && result.complete && result.resourceGatePassed && result.cleanupVerified) win.setTimeout(() => win.close(), 0);
       return result;
