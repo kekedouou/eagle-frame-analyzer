@@ -31,7 +31,9 @@
 | FFmpeg | 使用Eagle中已安装的模块，不随包附带 | 随包内置，无需另外安装 |
 | 交付文件 | `eagle-video-analysis-0.1.0-beta.1-20261014.zip` | `video-analysis-standalone-preview-20261014.zip`（约233MiB） |
 
-**下载状态：当前两个包已完成本地交付，尚未提供公开下载链接。** 发布后请从本仓库的 Releases（版本发布页）下载对应ZIP。GitHub的“Download ZIP”下载的是源码，不包含绿色版完整运行环境。
+**插件内测版已公开预发行**：[发行说明与校验文件](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/v0.1.0-beta.1) · [直接下载插件ZIP](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/v0.1.0-beta.1/eagle-video-analysis-0.1.0-beta.1-20261014.zip)。
+
+绿色版标签为 `standalone-v0.1.0-preview.1`，Release暂存草稿，待补齐第三方依赖的许可／对应源码材料核查后再公开二进制下载。GitHub的“Download ZIP”下载的是源码，不包含绿色版完整运行环境。
 
 详细说明：[插件内测版](docs/beta-preview.md) · [绿色展示版](demos/standalone-preview/README.md)。
 
@@ -97,4 +99,4 @@
 
 ## 许可与分发状态
 
-项目代码的开源许可证尚未确定；本页不声明项目采用MIT或其他开源许可证。绿色包保留现有第三方许可证与源码材料，其依赖的完整许可／对应源码核查仍待公开分发前完成。维护者本地的两个ZIP位于被Git忽略的 `dist/`，上传源码不会自动上传体验包。
+项目代码的开源许可证尚未确定；本页不声明项目采用MIT或其他开源许可证。绿色包保留现有第三方许可证与源码材料，其依赖的完整许可／对应源码核查仍待完成，目前仅准备发行草稿。体验包通过Release附件单独上传，本地 `dist/` 仍被Git忽略，不将运行包、缓存或用户设置提交到源码仓库。
