@@ -8,7 +8,7 @@ const protocol = require('./t0-protocol.cjs'), gate = require('./t0-gate.cjs');
 const frameIndex = require('../../plugin/frame-index.cjs');
 const { OWNER, RECIPE } = require('../../plugin/cache.cjs');
 const { createStore, LIMITS: EVIDENCE_LIMITS } = require('./t2-evidence.cjs');
-const MIB = 1024 ** 2, RESERVE = 3 * MIB, RSS_STOP = 1.5 * 1024 ** 3;
+const MIB = 1024 ** 2, RESERVE = 3 * MIB;
 const VERSION = 'window-formal-dom-regression-v1';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function unsavedEvidenceJSON(summary, failure) {
@@ -155,6 +155,9 @@ function run(options = {}) {
       launchContext.kind !== 'real-Eagle-formal-code-independent-entry' || !samePath(launchContext.mappedFormalRoot, pluginRoot) ||
       typeof options.verifyLaunch !== 'function'))
     throw new Error('独立宿主入口来源无效或超过16KiB。');
+  const rssStop = require('./ram-diagnostic.cjs').hostRssLimit(launchContext && launchContext.ramDiagnostic);
+  if (launchContext && launchContext.ramDiagnostic && launchContext.ramDiagnostic.rendererRssStopBytes !== undefined &&
+    launchContext.ramDiagnostic.rendererRssStopBytes !== rssStop) throw new Error('RAM对照观察停止线记录不一致。');
   const origin = launchContext && launchContext.ramDiagnostic ? 'automatic-real-Eagle-in-memory-RAM-candidate' :
     launchContext ? 'automatic-real-Eagle-independent-entry-formal-code' : 'user-started-real-Eagle-formal-window';
   const first = bridge.snapshot();
@@ -251,7 +254,7 @@ function run(options = {}) {
         const memory = process.memoryUsage(), current = snapshot();
         round.capture.append({ type: 'memory', at: now(), rss: memory.rss, external: memory.external, arrayBuffers: memory.arrayBuffers,
           managed: current && current.playback && current.playback.cacheBytes });
-        if (memory.rss >= RSS_STOP) { closeForRss = true; fail('插件renderer RSS达到1.5GiB观察停止线，停止输入并保存异常后请求关闭当前插件窗口。', 'HOST_RSS_STOP'); }
+        if (memory.rss >= rssStop) { closeForRss = true; fail('测试进程内存达到'+(rssStop/1024**3)+'GB观察停止线，停止输入并保存后关闭当前测试窗口。', 'HOST_RSS_STOP'); }
       }, 100);
       for (let n = 1; n <= protocol.PROTOCOL.repeats; n++) {
         guard(); round = createCapture(info.frames, first);
@@ -335,7 +338,7 @@ function run(options = {}) {
         initialSnapshot: first, finalSnapshot: current, existingP03: { ...p03, singleRecordedLoad: true,
           withinTarget: p03.reused ? null : p03.totalMs <= Math.max(5, info.duration) * 1000,
           note: 'App/session entry through audio/index/first-frame ready and synchronous UI notification; one load only. Reuse has no numeric readiness gate; independent entry provenance, when present, is recorded separately.' },
-        rounds, receipts, reservation, interruptedTrace: failedCapture, resourceStop: { requested: closeForRss, thresholdBytes: RSS_STOP,
+        rounds, receipts, reservation, interruptedTrace: failedCapture, resourceStop: { requested: closeForRss, thresholdBytes: rssStop,
           closeRequestedAfterReceipt: closeForRss, independentlyObservedReleased: false },
         limitations: ['T2 six-round formal-UI regression only; not complete T2 lifecycle acceptance, not T0 full 18-round repetition or T4 full acceptance.',
           'Same loaded Player and RAM working set remain across rounds; no automatic RAM reset, reload or complete-cache deletion.',

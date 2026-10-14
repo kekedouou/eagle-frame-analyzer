@@ -1,5 +1,17 @@
 # T2：资源与生命周期执行记录
 
+## 2026-10-14 获批2GiB宿主对照准备
+
+用户明确批准一次2GiB总池/256MiB压缩池及该测试窗口renderer3GiB观察停止线，720p/q3、原3×30秒/3×200、100ms最长停顿/P95≤50ms均不改；普通/v1仍1.5GiB、独立Chrome集合与FFmpeg原边界不变。正式默认和用户设置仍1GiB。仅独立中性入口加入T2-ram-host-v2（ramMiB2048、compressedMiB256、rendererStopMiB3072），配置精确字段和元组校验，跨resource/annotations/preferences拒绝，普通准备清除标记，v1仍按原线。
+
+窗口预检指定喜多郁代素材ID、Player磁盘SHA，捕获原Player并只注入2GiB/256MiB；本次原源码无需变换，原/捕获SHA一致但实际选项不同，不能称正式默认2GiB。准备后再次核对源SHA和实际预算才运行。context记录rendererRssStopBytes，驱动核对配置并按100ms采样执行3GiB停止，保存/退出沿原流程；独立审计同步核对阈值和2GiB/256MiB快照。原设置/Player/发布包未改，不在本地启动实际Eagle或自动测量。
+
+局部自动检查通过：capture覆盖512/1024及显式host-only2048，独立Chrome默认调用仍拒绝2048；真实Budget账本超额/释放及构造器比例；v2异常/超范围/跨模式拒绝；23组宿主记录模型含2.9GiB继续、3GiB停止/关窗及普通1.5GiB不变；26组入口模型通过。新增window-ram-launch把实际launcher与实际捕获Player构造器连通，模型SDK/ready/driver，验证2GiB/256MiB真正注入且context3GiB，选错素材/实际预算不符均阻止测量。没有真正申请2GiB物理内存或执行JPEG解码，不将模型当真实宿主通过。
+
+执行入口仍tests/host/window，约2分钟六轮（必要时先正常准备源缓存，原样本缓存已被手动清理）。用户关闭旧窗口、单选喜多郁代、打开原T2自动测量即可；无需改设置、命令或新导入，运行阶段保持前台不操作。只准备本次一组，保留所有旧失败，不自动重复、不建T2/T4通过标签。后续核对首次/复用及native路径候选的准备时间影响，不能把与旧1GiB轮的差异全归因于RAM。
+
+最终统一检查通过：81项语法/依赖、全部纯/模型、26文档192链接。原件t2-2026-10-14T14-40-15-419Z-1fa85a1c562b8dd4eed6/checks-1fa85a1c562b8dd4eed6-0.json，SHA 45d2b284c26c8039bfeb1d03ca3954f8d1e3aadb9b393d0298a41941e993807c。授权/入口交接t2-2026-10-14T14-42-20-079Z-faafade712a2a887189b/audit-faafade712a2a887189b-0.json，SHA 9e66a64a3eb3685b04f2511058e9760a91068dfb543cb6736157f24c0550ca9b：9066B入口/source及新增接线/停止/审计工具SHA一致，performance/v2元组正确，设置仍ramMiB1024，正式plugin无Diff，eagleTestExecuted/performancePassed=false。T2总12065096B低于16MiB并可预留本轮3MiB；不清旧证据。最后只读文档/Diff核对，保存本地测试提交，八个既有阶段/发行标签不移动；无真实Eagle加载、远程推送或发布。
+
 ## 2026-10-14 A-06宿主结果、人工反馈与复用诊断
 
 用户报告“已测量，其它体验正常”，单列用户一般体验验收，非Codex亲自操作；不扩大为强退/关窗/每项清理分支或精确音画测试。只读设置现为ramMiB1024，新格式保存有旁证。72baaeb有两组宿主原件：t2-2026-10-14T13-31-55-931Z-5e0b60b391cae5eaad61无完整轮次，DOM输入未接纳而中断，原因未定；复用103.3781秒（writerAcquire64.4487、缓存校验21.8954、Player载入15.6785秒）。同期四份旧缓存按1天规则清理，writerAcquire还含恢复/查询/盘点，不能全部归因于清理。第二组t2-2026-10-14T13-36-11-206Z-f36d8c555ef61f0b2870完整六轮，结果如下。

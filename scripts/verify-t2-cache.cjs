@@ -227,6 +227,11 @@ async function auditHost(runId, allowRecordedFrames = false) {
     Object.values(summary.sourceFingerprints).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Measured formal source list is invalid.');
   if (summary.schema !== (runId.startsWith('t2-') ? 'window-formal-dom-regression-v1' : 't1-formal-dom-regression-v1') || !summary.sourceFingerprintsUnchanged || !summary.launchSourcesVerifiedAtEnd ||
     JSON.stringify(summary.initialSourceFingerprints) !== JSON.stringify(summary.sourceFingerprints)) throw new Error('Measured source fingerprint consistency failed.');
+  const ram = summary.launchContext && summary.launchContext.ramDiagnostic;
+  const expectedStop = require('../tests/support/ram-diagnostic.cjs').hostRssLimit(ram);
+  if (summary.resourceStop && summary.resourceStop.thresholdBytes !== expectedStop) throw new Error('Recorded renderer stop does not match the approved RAM configuration.');
+  if (ram && ram.schema === 'T2-ram-host-v2' && (!summary.resourceStop || summary.initialSnapshot.playback.budget.limit !== 2*1024**3 ||
+    summary.initialSnapshot.playback.compressed.limitBytes !== 256*1024**2)) throw new Error('Measured 2GiB/256MiB configuration mismatch.');
   let manifest;
   try { manifest = { ...registeredManifest(path.join(repo, 'plugin'), summary.initialSnapshot), liveVerified:true }; }
   catch(error) {
@@ -284,7 +289,7 @@ async function auditHost(runId, allowRecordedFrames = false) {
   try {
     const result = store.save('audit', { protocol: 't2-saved-host-audit-v2', runId, receiptSha256: saved.sha256, source: summary.source,
       evidenceIntegrityPassed: true, complete: summary.complete, earlyRegressionPassed: summary.earlyRegressionPassed, error: summary.error || null,
-      ramDiagnostic: summary.launchContext && summary.launchContext.ramDiagnostic || null,
+      ramDiagnostic: ram || null, expectedRendererStopBytes: expectedStop,
       currentSourceMatches, sourceShaVerified: true, manifestSha256: manifest.manifestSha256, liveManifestVerified:manifest.liveVerified,
       manifestReferenceSource:manifest.liveVerified?'current-live-cache':'saved-digest-and-trace-frame-ids-only', allAssetHashesVerified: false,
       rounds, interruptedTraceEvents: interrupted ? interrupted.length : 0,

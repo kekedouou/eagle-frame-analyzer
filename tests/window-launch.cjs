@@ -43,6 +43,11 @@ function fileTests() {
     assert.throws(() => entry.prepare(ram.root, ram.io, 'performance', null, { ...config, ramMiB: 2048 }));
     assert.throws(() => entry.prepare(ram.root, ram.io, 'performance', null, { ...config, extra: true }));
     const reset = entry.prepare(ram.root, ram.io); assert.strictEqual(reset.marker.ramDiagnostic, undefined);
+    const host2={schema:'T2-ram-host-v2',ramMiB:2048,compressedMiB:256,rendererStopMiB:3072};
+    assert.deepStrictEqual(entry.prepare(ram.root,ram.io,'performance',null,host2).marker.ramDiagnostic,host2);
+    for(const mode of ['resource','annotations','preferences'])assert.throws(()=>entry.prepare(ram.root,ram.io,mode,null,host2));
+    for(const patch of [{rendererStopMiB:4096},{rendererStopMiB:1536},{ramMiB:4096},{compressedMiB:128},{extra:true}])assert.throws(()=>entry.prepare(ram.root,ram.io,'performance',null,{...host2,...patch}));
+    assert.strictEqual(entry.prepare(ram.root,ram.io).marker.ramDiagnostic,undefined);
     ok('RAM candidate is explicitly bounded, isolated from long/annotation modes and cleared by ordinary preparation');
   }
   {

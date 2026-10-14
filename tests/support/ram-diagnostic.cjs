@@ -5,10 +5,11 @@ function once(text, from, to) {
   if (text.split(from).length !== 2) throw new Error('RAM diagnostic capture no longer matches expected boundary.');
   return text.replace(from, to);
 }
-function candidate(text, mib) {
-  if (![512, 1024].includes(mib)) throw new Error('RAM diagnostic allows only 512/1024MiB.');
+function candidate(text, mib, settings = {}) {
+  if (![512, 1024].includes(mib) && !(mib === 2048 && settings.host2GiB === true)) throw new Error('RAM diagnostic allows only 512/1024MiB or the explicit 2GiB host capture.');
   let source, transformations;
   if (text.includes('const RAM_LIMIT = 512 * 1024 * 1024;')) {
+    if (mib === 2048) throw new Error('Legacy capture cannot exceed its 1GiB diagnostic bound.');
     const captured = once(text, 'const RAM_LIMIT = 512 * 1024 * 1024;', 'const RAM_LIMIT = 1024 * 1024 * 1024;');
     source = once(captured, 'this.compressedLimit > 64 * 1024 ** 2', 'this.compressedLimit > 128 * 1024 ** 2');
     transformations = ['Test-only maximum RAM 1GiB', 'Test-only maximum compressed pool 128MiB'];
@@ -28,8 +29,16 @@ function rssLimit(args) {
     throw new Error('2GiB RSS stop is restricted to explicit RAM diagnostic mode.');
   return 2 * 1024 ** 3;
 }
-function activate(win, text, mib) {
-  const captured = candidate(text, mib);
+function hostRssLimit(value) {
+  if (value == null) return 1.5 * 1024 ** 3;
+  if (value.schema === 'T2-ram-host-v1' && value.ramMiB === 1024 && value.compressedMiB === 128 && value.rendererStopMiB === undefined)
+    return 1.5 * 1024 ** 3;
+  if (value.schema === 'T2-ram-host-v2' && value.ramMiB === 2048 && value.compressedMiB === 256 && value.rendererStopMiB === 3072)
+    return 3 * 1024 ** 3;
+  throw new Error('Unknown host RAM/renderer-stop configuration.');
+}
+function activate(win, text, mib, settings) {
+  const captured = candidate(text, mib, settings);
   if (!win || typeof win.eval !== 'function') throw new Error('RAM diagnostic requires the actual window evaluation context.');
   const api = win.eval('(function(){const module={exports:{}};\n' + captured.source + '\nreturn module.exports;})()');
   if (!api || typeof api.Player !== 'function') throw new Error('RAM diagnostic Player capture did not initialize.');
@@ -38,4 +47,4 @@ function activate(win, text, mib) {
   } };
   return captured;
 }
-module.exports = { candidate, rssLimit, activate };
+module.exports = { candidate, rssLimit, activate, hostRssLimit };

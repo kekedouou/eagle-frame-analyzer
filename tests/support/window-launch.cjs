@@ -99,13 +99,16 @@ function install(options) {
         try { selected = await Promise.race([require('../../plugin/eagle.cjs').createEagleAdapter(eagle).captureSelected(),
           new Promise((_, reject) => { selectionTimer = win.setTimeout(() => reject(new Error('RAM对照选中核对超过10秒，未执行准备。')), 10000); })]); }
         finally { win.clearTimeout(selectionTimer); }
-        if (selected.itemId !== 'MV6H7OK0MBGX2') throw new Error('本次1GiB对照请单选“喜多郁代”，未执行缓存或测量。');
+        if (selected.itemId !== 'MV6H7OK0MBGX2') throw new Error('本次RAM对照请单选“喜多郁代”，未执行缓存或测量。');
         const text = fs.readFileSync(path.join(prepared.plugin, 'player.js'), 'utf8');
         if (sha(Buffer.from(text)) !== prepared.marker.sourceHashes['plugin/player.js']) throw new Error('Player changed before RAM capture.');
-        const captured = require('./ram-diagnostic.cjs').activate(win, text, 1024);
+        const helper = require('./ram-diagnostic.cjs'), config = prepared.marker.ramDiagnostic;
+        const rendererRssStopBytes = helper.hostRssLimit(config);
+        const captured = helper.activate(win, text, config.ramMiB, { host2GiB: config.schema === 'T2-ram-host-v2' });
         ramContext = { ...prepared.marker.ramDiagnostic, originalPlayerSha256: sha(Buffer.from(text)),
           candidatePlayerSha256: sha(Buffer.from(captured.source)), transformations: captured.transformations,
-          boundary: 'Test-only in-memory Player capture. Formal default files unchanged. Real Eagle driver retains 1.5GiB renderer stop line.' };
+          rendererRssStopBytes,
+          boundary: 'Test-only in-memory Player capture; formal defaults/settings unchanged. Renderer stop applies only to this recorded RAM host configuration.' };
       }
       context = { kind: 'real-Eagle-formal-code-independent-entry', sdkPluginRoot: prepared.host,
         ramDiagnostic: ramContext,
@@ -127,9 +130,9 @@ function install(options) {
       const bridge = win.EVADiagnostics, snapshot = await waitReady(bridge, context, aborted);
       if (ramContext && (!snapshot.sourceIdentity || snapshot.sourceIdentity.itemId !== 'MV6H7OK0MBGX2' ||
           snapshot.sourceIdentity.sha256 !== 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658'))
-        throw new Error('1GiB对照素材在准备过程中改变或源SHA不符，不执行测量。');
-      if (ramContext && (snapshot.playback.budget.limit !== 1024 ** 3 || snapshot.playback.compressed.limitBytes !== 128 * 1024 ** 2))
-        throw new Error('实际Player预算与1GiB/128MiB对照配置不符，不执行测量。');
+        throw new Error('RAM对照素材在准备过程中改变或源SHA不符，不执行测量。');
+      if (ramContext && (snapshot.playback.budget.limit !== ramContext.ramMiB * 1024 ** 2 || snapshot.playback.compressed.limitBytes !== ramContext.compressedMiB * 1024 ** 2))
+        throw new Error('实际Player预算与本轮RAM对照配置不符，不执行测量。');
       clearTimer(); cancelPreparation = null;
       if (stopping) throw new Error('准备阶段已取消，未执行测量。');
       verify(repo);
@@ -156,7 +159,7 @@ function install(options) {
         message('内存设置已就绪，请体验修改与重开保留；本次不自动拖动。');
         return { complete: true, observationSaved: true, receipts };
       }
-      state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · 1GiB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
+      state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · '+(ramContext.ramMiB/1024)+'GB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
       const runner = activeMode === 'annotations' && !options.run ? require('./window-annotations.cjs').run : activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
       job = runner({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
         verifyLaunch: () => verify(repo), eagle,

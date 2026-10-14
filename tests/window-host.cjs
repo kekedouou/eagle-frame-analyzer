@@ -208,6 +208,15 @@ async function lifecycle() {
   assert(subscription.store.closed); count++; console.log('ok Window host lifecycle: setup failure releases evidence lock');
   const resource = lifecycleHarness({ rss: 1.5 * 1024 ** 3 }); const stopped = await resource.driver.run(resource.options).done;
   assert.strictEqual(stopped.complete, false); assert.strictEqual(stopped.error.code, 'HOST_RSS_STOP');
+  for(const rss of [2.9*1024**3,3*1024**3]){
+    const h2=lifecycleHarness({rss});h2.options.launchContext={kind:'real-Eagle-formal-code-independent-entry',mappedFormalRoot:h2.options.pluginRoot,
+      ramDiagnostic:{schema:'T2-ram-host-v2',ramMiB:2048,compressedMiB:256,rendererStopMiB:3072,rendererRssStopBytes:3*1024**3}};
+    h2.options.verifyLaunch=()=>{};const result=await h2.driver.run(h2.options).done;
+    assert.strictEqual(result.complete,rss<3*1024**3);assert.strictEqual(h2.saved.at(-1).resourceStop.thresholdBytes,3*1024**3);
+    if(rss>=3*1024**3){assert.strictEqual(result.error.code,'HOST_RSS_STOP');assert(h2.closed());}
+    assert(h2.store.closed);assert.strictEqual(h2.intervals.size,0);
+  }
+  count++;console.log('ok Window host lifecycle: explicit 2GiB host allows sampled RSS below 3GiB and stops/closes at 3GiB; default remains 1.5GiB');
   assert(resource.store.closed); assert.strictEqual(resource.closed(), 1); assert.strictEqual(resource.observers.size, 0);
   count++; console.log('ok Window host lifecycle: resource stop preserves failure before requesting current-window close');
   const cancelled = lifecycleHarness(), task = cancelled.driver.run(cancelled.options);

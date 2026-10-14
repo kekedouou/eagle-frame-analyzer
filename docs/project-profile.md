@@ -1,6 +1,6 @@
 # 项目说明
 
-当前A-06：用户反馈其它体验正常，72baaeb六轮性能尚未通过；数据/native路径候选见[最新记录](progress.md#2026-10-14-a-06人工反馈与性能缺口)。RAM512MiB及1～10GiB下拉/默认1GiB、1天清理及清除其他缓存已实现；独立设置页留后续。当前tests/host/window暂为preferences观察，避免盲测1GiB；2GiB测试/renderer3GiB观察线待批准，尚未实现/启动，设置和发布包不改。以下旧步骤仅适用于历史节点。
+当前已获批一次2GiB/256MiB与测试renderer3GiB观察线，`node scripts/prepare-window-host.cjs --ram-compare-2g`准备同一tests/host/window（T2六轮）。严格v2配置仅在performance模式生效；窗口预算覆盖，正式Player/默认/设置1GiB不改，普通/v1窗口1.5GiB边界不变。模型已核对接线/停止分支，2GiB真实结果待测。具体停点见[最新记录](progress.md#2026-10-14-获批2gib一次对照)；旧1GiB失败、人工一般体验及发布快照不追改，下方旧步骤仅适用于历史节点。
 
 文档职责：根README面向使用者，介绍Eagle插件、两种体验包及快速开始；本文件承担工程目录、运行/检查入口和上下文恢复，进度与实验原始记录仍在docs/progress.md及其链接中。主页不累积实验流水账，也不把绿色展示版升级为正式开发主线。
 

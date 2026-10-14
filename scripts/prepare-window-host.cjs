@@ -52,8 +52,10 @@ function validApproval(value) {
     typeof value.userQuote === 'string' && value.userQuote.trim() && value.addOnce === true && typeof value.allowDelete === 'boolean';
 }
 function validRam(value) {
-  return value == null || value.schema === 'T2-ram-host-v1' && value.ramMiB === 1024 && value.compressedMiB === 128 &&
-    Object.keys(value).sort().join(',') === 'compressedMiB,ramMiB,schema';
+  if (value == null) return true;
+  const keys = Object.keys(value).sort().join(',');
+  if (keys !== (value.schema === 'T2-ram-host-v2' ? 'compressedMiB,ramMiB,rendererStopMiB,schema' : 'compressedMiB,ramMiB,schema')) return false;
+  try { require('../tests/support/ram-diagnostic.cjs').hostRssLimit(value); return true; } catch (_) { return false; }
 }
 function generated(root, io, mode = 'performance', writeApproval = null, ramDiagnostic = null) {
   if (!validRam(ramDiagnostic) || ramDiagnostic && mode !== 'performance') throw new Error('RAM candidate requires the bounded performance protocol.');
@@ -109,8 +111,10 @@ function prepare(repo, io = fs, mode = 'performance', writeApproval = null, ramD
   return verify(repo, io);
 }
 if (require.main === module) {
-  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
-    process.argv.includes('--ram-compare') ? { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 } : null); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
+  try { if (process.argv.includes('--ram-compare') && process.argv.includes('--ram-compare-2g')) throw new Error('Choose only one RAM comparison configuration.');
+    const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
+    process.argv.includes('--ram-compare-2g') ? { schema: 'T2-ram-host-v2', ramMiB: 2048, compressedMiB: 256, rendererStopMiB: 3072 } :
+      process.argv.includes('--ram-compare') ? { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 } : null); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }
