@@ -1,5 +1,7 @@
 # 项目说明
 
+文档职责：根README面向使用者，介绍Eagle插件、两种体验包及快速开始；本文件承担工程目录、运行/检查入口和上下文恢复，进度与实验原始记录仍在docs/progress.md及其链接中。主页不累积实验流水账，也不把绿色展示版升级为正式开发主线。
+
 2026-10-14当前补充：用户已确认内存设置体验通过；下面“待设置人工验收”是交接时的历史状态。急用内测包采用scripts/package-beta.cjs冻结当前plugin到dist，不替换测试入口、不修改播放器。`node scripts/package-beta.cjs`首次生成唯一展示目录/ZIP，已有则拒绝覆盖；`--verify`只读复核快照与ZIP。输出总量≤4MiB（目录≤2MiB、ZIP≤2MiB），不自动堆积多版本；dist忽略入Git，保留本次快照而不清理用户运行数据。使用说明见[内测介绍](beta-preview.md)，当前阶段/交付结果见[进度](progress.md#2026-10-14-临时内测展示交付)。继续开发仍使用plugin及现有tests，不在dist里修代码。
 
 当前正式设置候选（A-05）：默认等效1GiB，按整机RAM百分比配置、JPEG池上限1/8，preferences.cjs仅管理plugin根本地配置，UI经session调用。下一体验入口由`node scripts/prepare-window-host.cjs --preferences`准备，复用中性目录/ID，标题“T2内存设置验收”，只记录就绪/配置，不自动拖动/长测。不要沿用下方旧RAM变体入口作为当前人工步骤；新设置操作尚未真实验收。保存仅memory-settings.json/next≤4KiB，Git忽略，原视频/磁盘缓存/标注不改；具体当前证据见[T2记录](experiments/T2/report.md#2026-10-14-1gib宿主通过及内存设置候选)。
