@@ -3,6 +3,8 @@
 // Formal cache ownership, bounded I/O and guarded cache maintenance.
 // Unknown locks/partials remain protected, never inferred dead from a PID.
 const fs = require('fs');
+// Same canonical-path checks, using the OS implementation available in Node16.
+const realpath = typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native : fs.realpathSync;
 const path = require('path');
 const crypto = require('crypto');
 const { validateIndex } = require('./frame-index.cjs');
@@ -31,12 +33,12 @@ function samePath(left, right) {
 }
 function directory(dir) {
   const stat = fs.lstatSync(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory() || !samePath(fs.realpathSync(dir), dir)) fail('缓存目录不能使用链接或重解析路径。');
+  if (stat.isSymbolicLink() || !stat.isDirectory() || !samePath(realpath(dir), dir)) fail('缓存目录不能使用链接或重解析路径。');
   return stat;
 }
 function regular(file) {
   const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1 || !samePath(fs.realpathSync(file), file)) fail('缓存文件必须是唯一链接的普通文件。');
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1 || !samePath(realpath(file), file)) fail('缓存文件必须是唯一链接的普通文件。');
   return stat;
 }
 function sameFile(stat, other) { return stat.isFile() && other.isFile() && stat.ino === other.ino && stat.dev === other.dev && other.nlink === 1; }

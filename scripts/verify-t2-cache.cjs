@@ -190,8 +190,17 @@ function unwrapHost(outer) {
   if (outer.schema !== 't2-evidence-v1' || outer.kind !== 'host' || outer.key !== sha(Buffer.from(canonical(outer.payload))) || outer.payload.stage !== 'T2') throw new Error('T2 host envelope mismatch.');
   return outer.payload;
 }
-module.exports = { _test: { unwrapHost } };
-async function auditHost(runId) {
+function recordedFrames(summary, records) {
+  if (!/^[0-9a-f]{64}$/.test(summary.manifestSha256 || '') || !Number.isSafeInteger(summary.manifestBytes) || summary.manifestBytes<1 || summary.manifestBytes>8*1024**2)
+    throw new Error('Invalid saved manifest digest/length.');
+  const traces = records.filter(r=>r.value.type==='round').map(r=>r.value.trace).concat(summary.interruptedTrace || []).filter(Boolean);
+  const ids = traces[0] && traces[0].frameIds;
+  if (!Array.isArray(ids) || ids.length !== summary.frames || ids.some(n=>!Number.isSafeInteger(n)) || new Set(ids).size !== ids.length ||
+    traces.some(t=>JSON.stringify(t.frameIds)!==JSON.stringify(ids))) throw new Error('No consistent complete recorded frame IDs; saved-only audit refused.');
+  return {info:{frames:ids.map(id=>({id}))},manifestSha256:summary.manifestSha256,manifestBytes:summary.manifestBytes,liveVerified:false};
+}
+module.exports = { _test: { unwrapHost, recordedFrames } };
+async function auditHost(runId, allowRecordedFrames = false) {
   if (typeof runId !== 'string' || !/^t[12]-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{20}$/.test(runId)) throw new Error('An explicit T1/T2 host run ID is required.');
   const dir = path.join(repo, 'verification-runs', runId), gate = require('../tests/support/t0-gate.cjs');
   const { _test: { registeredManifest } } = require('../tests/support/window-host.cjs');
@@ -218,7 +227,13 @@ async function auditHost(runId) {
     Object.values(summary.sourceFingerprints).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Measured formal source list is invalid.');
   if (summary.schema !== (runId.startsWith('t2-') ? 'window-formal-dom-regression-v1' : 't1-formal-dom-regression-v1') || !summary.sourceFingerprintsUnchanged || !summary.launchSourcesVerifiedAtEnd ||
     JSON.stringify(summary.initialSourceFingerprints) !== JSON.stringify(summary.sourceFingerprints)) throw new Error('Measured source fingerprint consistency failed.');
-  const manifest = registeredManifest(path.join(repo, 'plugin'), summary.initialSnapshot);
+  let manifest;
+  try { manifest = { ...registeredManifest(path.join(repo, 'plugin'), summary.initialSnapshot), liveVerified:true }; }
+  catch(error) {
+    const expected = path.join(repo,'plugin/cache','media-'+summary.source.sha256+'-'+sha(Buffer.from(require('../plugin/cache.cjs').RECIPE)).slice(0,12));
+    if (!allowRecordedFrames || error.code!=='ENOENT' || fs.existsSync(expected)) throw error;
+    manifest = recordedFrames(summary, records);
+  }
   if (manifest.manifestSha256 !== summary.manifestSha256 || manifest.manifestBytes !== summary.manifestBytes) throw new Error('Measured manifest changed.');
   const protocol = require('../tests/support/t0-protocol.cjs'), rounds = [];
   for (const record of records.filter(r => r.value.type === 'round')) {
@@ -270,20 +285,22 @@ async function auditHost(runId) {
     const result = store.save('audit', { protocol: 't2-saved-host-audit-v2', runId, receiptSha256: saved.sha256, source: summary.source,
       evidenceIntegrityPassed: true, complete: summary.complete, earlyRegressionPassed: summary.earlyRegressionPassed, error: summary.error || null,
       ramDiagnostic: summary.launchContext && summary.launchContext.ramDiagnostic || null,
-      currentSourceMatches, sourceShaVerified: true, manifestSha256: manifest.manifestSha256, allAssetHashesVerified: false,
+      currentSourceMatches, sourceShaVerified: true, manifestSha256: manifest.manifestSha256, liveManifestVerified:manifest.liveVerified,
+      manifestReferenceSource:manifest.liveVerified?'current-live-cache':'saved-digest-and-trace-frame-ids-only', allAssetHashesVerified: false,
       rounds, interruptedTraceEvents: interrupted ? interrupted.length : 0,
       interruptedDraws: interrupted ? interrupted.filter(e => e.type === 'draw').length : 0,
       interruptedInputs: interrupted ? interrupted.filter(e => e.type === 'input').length : 0,
       interruptedLastActivityAt: interrupted ? Math.max(...interrupted.filter(e => e.type !== 'memory').map(e => e.at)) : null,
       finalObservedPlayback: summary.finalSnapshot.playback, existingP03: summary.existingP03,
-      limitation: 'Independent integrity/statistics audit only; task counts are saved observations, not proof of actual resource release. Long-gap context lists up to eight internal gaps and does not replace the full-window maximum. No physical monitor presentation or new host run.' });
+      limitation: 'Independent integrity/statistics audit only; task counts are saved observations, not proof of actual resource release. Long-gap context lists up to eight internal gaps and does not replace the full-window maximum. No physical monitor presentation or new host run.' +
+        (manifest.liveVerified ? '' : ' Cache removed: only saved digest/frame IDs are referenced; current manifest, source PTS mapping and pixel accuracy are not independently verified.') });
     console.log(JSON.stringify(result));
   } finally { store.close(); }
 }
 if (require.main === module) {
   const command = process.argv[2];
   Promise.resolve().then(() => command === 'filesystem' ? filesystem() : command === 'checks' ? checks() : command === 'reuse' ? reuseIntegration() :
-    command === 'audit-host' ? auditHost(process.argv[3]) :
+    command === 'audit-host' ? auditHost(process.argv[3], process.argv.includes('--recorded-frames')) :
       command === 'worker' || command === 'worker-child' ? worker(path.resolve(process.argv[3]), command === 'worker-child') :
       Promise.reject(new Error('Use explicit filesystem, reuse, checks or audit-host command.'))).catch(error => { console.error(error.stack); process.exitCode = 1; });
 }
