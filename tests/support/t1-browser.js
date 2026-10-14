@@ -1,7 +1,7 @@
 /* Test-only native-browser diagnostic. Formal code never imports this file. */
 (function () {
   'use strict';
-  let info, source, ui, session, player, events = null, dropped = 0;
+  let info, source, ui, session, player, diagnosticOptions = {}, events = null, dropped = 0;
   const now = () => performance.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const maximumEvents = 24000;
   function emit(event) {
@@ -27,7 +27,7 @@
         return new Uint8Array(await response.arrayBuffer());
       }, release: () => true },
       createPlayer: options => {
-        player = new EVAPlayer.Player({ ...options, canvas: ui.canvas, frameIndex: EVAFrameIndex, emit });
+        player = new EVAPlayer.Player({ ...options, ...diagnosticOptions, canvas: ui.canvas, frameIndex: EVAFrameIndex, emit });
         return player;
       }, onChange: value => ui.update(value)
     });
@@ -104,6 +104,10 @@
           expectedHint, actualHint: hint.textContent, correct, checkScope: 'Final state frame ordinal and actual-time hint only; no independent pixel identity check.' }, snapshot: last }, trace };
   }
   window.T1Browser = { async initialize(value) { info = value.info; source = value.source; EVAFrameIndex.validateIndex(info);
+    diagnosticOptions = value.diagnosticOptions || {};
+    if (Object.keys(diagnosticOptions).length && (![512 * 1024 ** 2, 1024 ** 3].includes(diagnosticOptions.ramBytes) ||
+        diagnosticOptions.compressedRamBytes !== diagnosticOptions.ramBytes / 8 ||
+        Object.keys(diagnosticOptions).sort().join(',') !== 'compressedRamBytes,ramBytes')) throw new Error('Invalid bounded RAM diagnostic options.');
     return { userAgent: navigator.userAgent, devicePixelRatio, viewport: [innerWidth, innerHeight], audio: !!info.audio,
       visibilityState: document.visibilityState, focused: document.hasFocus(), performanceTimeOrigin: performance.timeOrigin,
       limitations: ['Independent installed Chrome, not Eagle.', 'Node cache reads cross loopback HTTP; read time includes transport and buffer copies.',

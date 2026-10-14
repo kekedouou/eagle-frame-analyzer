@@ -4,24 +4,27 @@
 const fs = require('fs'), path = require('path'), crypto = require('crypto'), http = require('http');
 const { spawn, execFile, execFileSync } = require('child_process'), zlib = require('zlib');
 const { createCache, RECIPE } = require('../plugin/cache.cjs');
-const { createStore } = require('../tests/support/t1-evidence.cjs');
+const RAM_DIAGNOSTIC = process.argv.includes('--ram-compare');
+const { createStore } = require(RAM_DIAGNOSTIC ? '../tests/support/t2-evidence.cjs' : '../tests/support/t1-evidence.cjs');
 const repo = path.resolve(__dirname, '..'), pluginRoot = path.join(repo, 'plugin');
-const SHA = 'aabf057017744c38737f65c4e7a983a1f8d9e5258c178bcc3e723dcdb56ccc53';
-const SOURCE = process.env.EVA_T1_DIAGNOSTIC_SOURCE;
+const pinned = RAM_DIAGNOSTIC ? require('./verify-t2-close.cjs')._test.selectedInput(
+  JSON.parse(fs.readFileSync(path.join(repo, 'tests/host/t0/config.local.json')))) : null;
+const SHA = pinned ? pinned.sha256 : 'aabf057017744c38737f65c4e7a983a1f8d9e5258c178bcc3e723dcdb56ccc53';
+const SOURCE = pinned ? pinned.file : process.env.EVA_T1_DIAGNOSTIC_SOURCE;
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const MIB = 1024 ** 2, SCRATCH_LIMIT = 64 * MIB, RSS_LIMIT = 1.5 * 1024 ** 3;
 const nonce = crypto.randomBytes(12).toString('hex'), scratch = path.join(repo, 'verification-runs', 'browser-scratch-' + nonce);
 const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const store = createStore(repo), result = { schema: 't1-isolated-native-chrome-v1', origin: 'Codex-automatic-independent-Chrome',
+const store = createStore(repo), result = { schema: RAM_DIAGNOSTIC ? 't2-isolated-ram-comparison-v1' : 't1-isolated-native-chrome-v1', origin: 'Codex-automatic-independent-Chrome',
   playerVersion: process.argv.includes('--before-t2-fix') ? 'git-2d0cfb4-before-t2-fix' : process.argv.includes('--baseline') ? 'git-1afcaa4-baseline' : 'workspace-candidate',
   sourceSha256: SHA, source: SOURCE, complete: false, EagleHostVerified: false, formalPerformancePassed: null,
   limits: { scratchBytes: SCRATCH_LIMIT, observedRendererRssBytes: RSS_LIMIT, deadlineMs: 90000, evidenceBytes: 2 * MIB },
   limitation: 'Filesystem/RSS limits are sampled stop lines, not OS-enforced quotas; observed overshoot is recorded as failure.', rounds: [] };
 let cache, info, transaction, browser, server, cdp, sessionId, marker, stopped = null, monitor, deadline, monitoring = false;
 let serverReads = [], sockets = new Set(), activeReads = 0, scratchPeak = 0, rssPeak = 0, retainedFailure = null;
-let cleaning = false;
+let cleaning = false, diagnosticOptions;
 const ownedProcesses = new Map();
 function stop(error) { if (!stopped) { stopped = error instanceof Error ? error : new Error(String(error));
   if (cdp) cdp.call('Browser.close', {}, undefined, 2000).catch(() => {});
@@ -75,7 +78,7 @@ function summary(values) {
 async function ownedRss() {
   const processes = await cdp.call('SystemInfo.getProcessInfo');
   for (const item of processes.processInfo) if (Number.isSafeInteger(Number(item.id))) ownedProcesses.set(Number(item.id), { id: Number(item.id), type: item.type });
-  const ids = processes.processInfo.filter(p => p.type === 'renderer').map(p => Number(p.id)).filter(Number.isSafeInteger);
+  const ids = processes.processInfo.filter(p => RAM_DIAGNOSTIC || p.type === 'renderer').map(p => Number(p.id)).filter(Number.isSafeInteger);
   if (!ids.length) return { bytes: 0, processIds: [], available: false };
   // A short-lived renderer can exit between CDP's list and the OS sample.
   // Enumerate live processes without turning that ordinary race into exit 1.
@@ -99,6 +102,8 @@ async function captureOwnedDescendants() {
 }
 async function main() {
   store.start({ reserveBytes: 2 * MIB });
+  if (RAM_DIAGNOSTIC && (process.argv.includes('--baseline') || process.argv.includes('--before-t2-fix')))
+    throw new Error('RAM comparison cannot use historical candidates.');
   deadline = setTimeout(() => stop(new Error('90-second diagnostic deadline reached.')), 90000);
   if (typeof WebSocket !== 'function') throw new Error('This explicit browser tool requires existing local Node 24 native WebSocket.');
   if (typeof SOURCE !== 'string' || !path.isAbsolute(SOURCE)) throw new Error('An explicit absolute EVA_T1_DIAGNOSTIC_SOURCE is required.');
@@ -124,6 +129,18 @@ async function main() {
     }
   }
   result.driverSha256 = sha(fs.readFileSync(path.join(repo, 'tests/support/t1-browser.js')));
+  if (RAM_DIAGNOSTIC) {
+    const option = process.argv.find(value => value.startsWith('--ram-mib=')), mib = option ? Number(option.split('=')[1]) : NaN;
+    const c = require('../tests/support/ram-diagnostic.cjs').candidate(code['player.js'], mib);
+    code['player.js'] = c.source; diagnosticOptions = c.options;
+    result.ramDiagnostic = { mib, compressedMiB: mib / 8, options: diagnosticOptions, transformations: c.transformations,
+      candidatePlayerSha256: sha(Buffer.from(c.source)),
+      helperSha256: sha(fs.readFileSync(path.join(repo, 'tests/support/ram-diagnostic.cjs'))),
+      runnerSha256: sha(fs.readFileSync(__filename)),
+      rssScope: 'Owned isolated Chrome process set plus external Node current RSS, sampled ~1s; transient sampler/GPU device allocations excluded.', samples: [] };
+    result.limits.observedOwnedProcessRssBytes = result.limits.observedRendererRssBytes;
+    delete result.limits.observedRendererRssBytes;
+  }
   cache = createCache({ pluginRoot }); transaction = cache.begin({ sourceSha256: SHA });
   const candidate = await transaction.readComplete(); if (!candidate) throw new Error('Existing target cache missing; diagnostic never generates media.');
   const source = { ...candidate.source, id: 'diagnostic-source-' + SHA.slice(0, 16), name: path.basename(SOURCE, path.extname(SOURCE)), filePath: SOURCE, file: SOURCE };
@@ -190,20 +207,29 @@ async function main() {
   await cdp.call('Runtime.enable', {}, sessionId);
   await cdp.call('Page.bringToFront', {}, sessionId);
   const pageAt = performance.now(); while (!await cdp.evaluate('!!window.T1Browser')) { guard(); if (performance.now() - pageAt > 5000) throw new Error('Diagnostic page failed to initialize.'); await pause(25); }
-  result.environment = await cdp.evaluate('T1Browser.initialize(' + JSON.stringify({ info, source }) + ')');
+  result.environment = await cdp.evaluate('T1Browser.initialize(' + JSON.stringify({ info, source, diagnosticOptions }) + ')');
   result.adaptation = 'Original formal Player/UI/frame-index/session source captured before launch; session path.resolve is an identity shim for supplied canonical absolute paths. Node/cache runs over loopback HTTP; selection/media prepare and cache-release facade are simulated. Cache synchronous path/ownership/hash work runs in external Node, whereas real Eagle runs it on the renderer thread. The transport moves work as well as adding copies and cannot be characterized as a conservative Eagle measurement.';
   monitor = setInterval(async () => {
     if (monitoring || stopped || cleaning) return; monitoring = true;
     try { const bytes = scratchBytes(); scratchPeak = Math.max(scratchPeak, bytes); if (bytes >= SCRATCH_LIMIT) stop(new Error('Scratch observed 64MiB stop line reached.'));
       const rss = await ownedRss(); if (cleaning) return;
-      rssPeak = Math.max(rssPeak, rss.bytes); if (!rss.available) stop(new Error('Renderer RSS could not be reliably sampled.'));
-      if (rss.bytes >= RSS_LIMIT) stop(new Error('Renderer observed RSS stop line reached.'));
+      const observed = rss.bytes + (RAM_DIAGNOSTIC ? process.memoryUsage().rss : 0);
+      rssPeak = Math.max(rssPeak, observed); if (!rss.available) stop(new Error('Owned process RSS could not be reliably sampled.'));
+      if (RAM_DIAGNOSTIC) {
+        const rows = result.ramDiagnostic.samples;
+        if (rows.length >= 128) stop(new Error('RAM diagnostic resource record bound reached.'));
+        else rows.push({ atMs: performance.now(), chromeRss: rss.bytes, nodeRss: process.memoryUsage().rss,
+          missedExitedProcessIds: rss.missedExitedProcessIds });
+      }
+      if (observed >= RSS_LIMIT) stop(new Error('Owned process observed 1.5GiB RSS stop line reached.'));
     } catch (error) { stop(error); } finally { monitoring = false; }
   }, 1000);
-  for (const settings of [{ name: 'segment2-6-ColdDecoded', start: 2, end: 6, fresh: true },
+  const settingsList = RAM_DIAGNOSTIC ? [1, 2, 3].map(n => ({ name: 'whole-video-cold-decoded-' + n,
+    start: 0, end: info.frames[info.frames.length - 1].time, fresh: true })) : [{ name: 'segment2-6-ColdDecoded', start: 2, end: 6, fresh: true },
     { name: 'segment2-6-repeat', start: 2, end: 6, fresh: false },
     { name: 'segment14-18-ColdDecoded', start: 14, end: 18, fresh: true },
-    { name: 'segment14-18-repeat', start: 14, end: 18, fresh: false }]) {
+    { name: 'segment14-18-repeat', start: 14, end: 18, fresh: false }];
+  for (const settings of settingsList) {
     guard(); const readsAt = serverReads.length;
     const round = await cdp.evaluate('T1Browser.round(' + JSON.stringify(settings) + ')', 25000); guard();
     const raw = Buffer.from(JSON.stringify(round.trace)); delete round.trace;
@@ -266,7 +292,8 @@ async function cleanup() {
     }
     result.scratchRemoved = !fs.existsSync(scratch);
   }
-  result.observedScratchPeakBytes = scratchPeak; result.observedRendererRssPeakBytes = rssPeak;
+  result.observedScratchPeakBytes = scratchPeak;
+  result[RAM_DIAGNOSTIC ? 'observedOwnedProcessRssPeakBytes' : 'observedRendererRssPeakBytes'] = rssPeak;
   if (result.sourceBefore) {
     result.sourceAfter = { sha256: await fileSha(SOURCE), size: fs.statSync(SOURCE).size, mtimeMs: fs.statSync(SOURCE).mtimeMs };
     result.sourceUnchanged = JSON.stringify(result.sourceBefore) === JSON.stringify(result.sourceAfter);
@@ -280,7 +307,7 @@ async function cleanup() {
   try { await main(); } catch (error) { retainedFailure = error; result.complete = false; result.error = { message: error.message, stack: String(error.stack).slice(0, 4096) }; }
   try { await cleanup(); } catch (error) { result.complete = false; result.cleanupError = error.message; retainedFailure = retainedFailure || error; }
   if (stopped) { result.complete = false; result.stopReason = stopped.message; retainedFailure = retainedFailure || stopped; }
-  try { const receipt = store.save('host', result); process.stdout.write(JSON.stringify({ receipt, complete: result.complete, failure: retainedFailure && retainedFailure.message, disposal: result.disposal, cleanup: { scratchRemoved: result.scratchRemoved, sourceUnchanged: result.sourceUnchanged, leaseReleased: result.nodeLeaseReleased } }) + '\n'); }
+  try { const receipt = store.save(RAM_DIAGNOSTIC ? 'audit' : 'host', result); process.stdout.write(JSON.stringify({ receipt, complete: result.complete, failure: stopped ? stopped.message : retainedFailure && retainedFailure.message, disposal: result.disposal, cleanup: { scratchRemoved: result.scratchRemoved, sourceUnchanged: result.sourceUnchanged, leaseReleased: result.nodeLeaseReleased } }) + '\n'); }
   catch (error) { process.stderr.write('Evidence persistence failed: ' + error.message + '\n'); retainedFailure = retainedFailure || error; }
   finally { try { store.close(); } catch (error) { process.stderr.write(error.message + '\n'); retainedFailure = retainedFailure || error; } }
   if (retainedFailure) process.exitCode = 1;
