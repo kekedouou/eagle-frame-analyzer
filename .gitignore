@@ -14,6 +14,7 @@
 /plugin/cache/
 /plugin/memory-settings.json
 /plugin/memory-settings.next.json
+/dist/
 /tests/host/t1/manifest.json
 /tests/host/t1/index.local.html
 /tests/host/t1/logo.local.png
