@@ -213,7 +213,8 @@ async function auditHost(runId) {
   const summaries = records.filter(r => r.value.type === 'summary'); if (summaries.length !== 1) throw new Error('Exactly one final host summary required.');
   const saved = summaries[0], summary = saved.value;
   const formalFiles = ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs'];
-  if (JSON.stringify(Object.keys(summary.sourceFingerprints || {}).sort()) !== JSON.stringify(formalFiles.sort()) ||
+  const recordedFiles = JSON.stringify(Object.keys(summary.sourceFingerprints || {}).sort());
+  if (![formalFiles, [...formalFiles, 'preferences.cjs']].some(names => recordedFiles === JSON.stringify(names.sort())) ||
     Object.values(summary.sourceFingerprints).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Measured formal source list is invalid.');
   if (summary.schema !== (runId.startsWith('t2-') ? 'window-formal-dom-regression-v1' : 't1-formal-dom-regression-v1') || !summary.sourceFingerprintsUnchanged || !summary.launchSourcesVerifiedAtEnd ||
     JSON.stringify(summary.initialSourceFingerprints) !== JSON.stringify(summary.sourceFingerprints)) throw new Error('Measured source fingerprint consistency failed.');

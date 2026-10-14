@@ -1,12 +1,14 @@
 # 项目说明
 
+当前正式设置候选（A-05）：默认等效1GiB，按整机RAM百分比配置、JPEG池上限1/8，preferences.cjs仅管理plugin根本地配置，UI经session调用。下一体验入口由`node scripts/prepare-window-host.cjs --preferences`准备，复用中性目录/ID，标题“T2内存设置验收”，只记录就绪/配置，不自动拖动/长测。不要沿用下方旧RAM变体入口作为当前人工步骤；新设置操作尚未真实验收。保存仅memory-settings.json/next≤4KiB，Git忽略，原视频/磁盘缓存/标注不改；具体当前证据见[T2记录](experiments/T2/report.md#2026-10-14-1gib宿主通过及内存设置候选)。
+
 1GiB宿主对照准备：`node scripts/prepare-window-host.cjs --ram-compare`复用tests/host/window，T2标题/ID不变，正文运行前核对指定喜多郁代及内存捕获预算；同一performance协议，仅显式1024/128MiB变体，原Player磁盘代码不改。候选源码SHA/原SHA另记launchContext，不能称与正式默认完全相同。普通无参数prepare恢复默认、清除诊断标记；resource/annotations模式拒绝此标记，T3许可不续期。真实Eagle原1.5GiB renderer观察线不变。
 
 2026-10-14新增受限对照入口：`node scripts/verify-t1-browser.cjs --ram-compare --ram-mib=512|1024`。虽复用历史浏览器工具文件，RAM模式明确为T2证据、固定喜多郁代，使用仅内存捕获的预算变体，正式Player默认不变；参数是二选一，不能把竖线原样作为shell命令。各命令独立生成有界诊断和清理自身scratch，不生成/删除原源或完整缓存、不操作Eagle。边界见[计划](development-plan.md#当前获批范围内的生命周期补验)。
 
 ## 身份与入口
 
-- 项目：Eagle Window 视频分析插件。2026-10-13：用户接受两组不同素材的独立长时资源验证，并批准优先继续T3标注开发；保留同组重复性未验证、原严格合并false及T2整体验收未完成。720p/512MiB预算不变，剩余宿主/进程覆盖缺口在最终验收前核查。
+- 项目：Eagle Window 视频分析插件。2026-10-14：T3单素材通过，喜多郁代1GiB宿主六轮通过；当前设置候选默认等效1GiB、JPEG池上限1/8。保留原512MiB成绩与失败、同组长时重复性及其余覆盖缺口，T2整体/T4尚未完成；设置操作等待真实验收。
 - Git 根目录：eagle-video-analysis/；只有一个 .git，不在父级或原型内初始化新仓库。
 - 正式Eagle入口：plugin/manifest.json，main.url为同目录index.html。prototypes/window-player/manifest.json仅保留A/B历史原型入口。
 - S1 入口：prototypes/playback-clock/manifest.json，实验边界和检查方法见 [S1 计划](experiments/S1/plan.md)。
@@ -90,6 +92,7 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 | plugin/eagle.cjs | 唯一素材/标注 API 边界；独立读回，不直接写 metadata.json |
 | plugin/media.cjs | 只读源媒体、分析和 FFmpeg；通过缓存句柄受限写入，不自行淘汰目录 |
 | plugin/cache.cjs | 文件所有权、实际路径、预算、锁、完整提交、淘汰与清理；不操作 UI 或素材元数据 |
+| plugin/preferences.cjs | 物理RAM/百分比换算与本地原子设置保存；不访问素材库或清理媒体缓存 |
 | plugin/process-identity.cjs | 缓存内部只读Windows进程出生/后代证明；未知时保留，不主动终止进程，不调用Eagle API |
 | plugin/frame-index.cjs | 纯时间/源帧映射；整数 PTS、呈现编号与源时间关系 |
 | plugin/player.js | Canvas、Web Audio 与调度；通过缓存读取/预算句柄取得资源，不调用标注 API |

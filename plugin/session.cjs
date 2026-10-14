@@ -12,6 +12,7 @@ function createSession(options) {
   const onChange = options.onChange || (() => {});
   let epoch = 0, libraryEpoch = 0, closed = false, tail = Promise.resolve(), controller = null, owner = null;
   let state = 'empty', source = null, duration = 0, playback = null, error = null, progress = null, loadMetrics = null;
+  let memoryResume = null;
   const emptyComments = () => Object.freeze({ status: 'idle', items: Object.freeze([]), libraryPath: null, message: '', draft: null });
   let comments = emptyComments(), draftSequence = 0;
   const writes = new Map(), annotationReceipts = [];
@@ -26,7 +27,8 @@ function createSession(options) {
       sourceIdentity: source ? Object.freeze({ libraryEpoch, itemId: source.id, filePath: source.filePath, sha256: source.sha256 || null }) : null,
       playback: observed ? { ...observed, frame: observed.frameId, time: observed.time } : null,
       error: error ? { ...error } : null, progress: progress ? { ...progress } : null,
-      loadMetrics: loadMetrics ? { ...loadMetrics } : null, comments });
+      loadMetrics: loadMetrics ? { ...loadMetrics } : null, comments,
+      memorySettings: options.memoryPreferences ? options.memoryPreferences.snapshot() : null });
   }
   function memorySnapshot() {
     if (closed || !owner || owner.epoch !== epoch || !owner.player) return null;
@@ -114,9 +116,16 @@ function createSession(options) {
       if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
       await player.load(info);
       if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
-      const ready = player.snapshot();
+      let ready = player.snapshot();
       if (ready.state !== 'paused' || ready.frameId !== info.frames[0].id || ready.frameOrdinal !== 0)
         throw issue('FIRST_FRAME_NOT_READY', '首帧尚未准确显示并暂停，未开放播放操作。');
+      if (Number.isFinite(request.restoreTime)) {
+        const located = await player.seek(request.restoreTime, { kind: 'memory-settings', final: true, inputAt: now() });
+        if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
+        ready = player.snapshot();
+        if (!located || !['drawn', 'reused'].includes(located.status) || ready.state !== 'paused' || ready.frameId !== located.frameId)
+          throw issue('MEMORY_POSITION_NOT_READY', '内存设置后未能准确恢复当前位置。');
+      }
       owned.ready = true; playback = { ...ready }; state = 'paused'; progress = null; error = null;
       if (request.restoredWrite) restoreWrite(request.restoredWrite);
       // UI enables ready controls synchronously inside this notification. Count
@@ -133,20 +142,38 @@ function createSession(options) {
       return { status: 'error', error: { ...error } };
     }
   }
-  function loadSelected(settings = {}) {
+  function startLoad(settings = {}, retainedSource = null) {
     if (closed) return Promise.resolve({ status: 'ignored', reason: 'closed' });
+    if (settings.trigger !== 'memory-settings') memoryResume = null;
     const startedAt = Number.isFinite(settings.startedAt) ? settings.startedAt : now();
-    const request = { epoch: invalidate(), controller: new AbortController(), captured: null, startedAt, trigger: settings.trigger || 'selected-load' };
+    const request = { epoch: invalidate(), controller: new AbortController(), captured: null, startedAt, trigger: settings.trigger || 'selected-load', restoreTime: settings.restoreTime };
     if (!current(request)) return Promise.resolve({ status: 'superseded' });
     controller = request.controller;
     // Start the single official API call now, before the disposal/preparation queue.
-    let response; try { response = eagleAdapter.captureSelected(); } catch (failure) { response = Promise.reject(failure); }
+    let response; try { response = retainedSource || eagleAdapter.captureSelected(); } catch (failure) { response = Promise.reject(failure); }
     request.captured = Promise.resolve(response).then(value => ({ value }), failure => ({ error: failure }));
     if (!current(request)) return Promise.resolve({ status: 'superseded' });
     state = 'preparing'; source = null; duration = 0; playback = null; error = null; loadMetrics = null;
     comments = emptyComments();
     progress = { stage: 'selection', message: '正在读取 Eagle 选中的视频' }; notify();
     return enqueue(() => runLoad(request));
+  }
+  function loadSelected(settings = {}) { return startLoad(settings); }
+  async function setMemoryPercent(percent) {
+    const preferences = options.memoryPreferences;
+    if (!preferences) throw issue('MEMORY_SETTINGS_UNAVAILABLE', '当前入口没有内存设置接口。');
+    preferences.preview(percent);
+    if (closed || state === 'preparing' || comments.draft) throw issue('MEMORY_SETTINGS_BUSY', '请等待准备完成，并先保存或取消标注。');
+    const token = epoch, retained = source;
+    if (owner && owner.ready) await control('pause', [], ['paused', 'playing', 'seeking']);
+    if (closed || token !== epoch) return { status: 'superseded' };
+    const retainedTime = memoryResume && retained && memoryResume.id === retained.id && memoryResume.filePath === retained.filePath ? memoryResume.time : 0;
+    const time = owner && owner.player ? owner.player.snapshot().time : retainedTime;
+    preferences.save(percent);
+    memoryResume = retained ? { id: retained.id, filePath: retained.filePath, time } : null;
+    notify();
+    if (closed || token !== epoch) return { status: 'superseded' };
+    return retained ? startLoad({ trigger: 'memory-settings', restoreTime: time }, retained) : { status: 'applied' };
   }
   function control(method, args, allowed) {
     const owned = owner, token = epoch;
@@ -162,6 +189,7 @@ function createSession(options) {
   function clear(kind) {
     if (closed) return tail.then(() => error ? { status: 'error', error: { ...error } } : { status: 'closed' });
     if (kind === 'closed') closed = true; else libraryEpoch++;
+    memoryResume = null;
     const token = invalidate();
     if (kind === 'closed' || token === epoch) {
       state = kind === 'closed' ? 'closed' : 'empty'; source = null; duration = 0; playback = null; error = null; loadMetrics = null;
@@ -299,7 +327,7 @@ function createSession(options) {
       const item = comments.items.find(value => value.id === id);
       return item && item.time <= duration ? control('seek', [item.time, { kind: 'annotation', final: true, inputAt: now() }], ['paused', 'playing', 'seeking']) : Promise.resolve({ status: 'ignored' });
     },
-    annotationHistory: () => Object.freeze(annotationReceipts.slice()),
+    annotationHistory: () => Object.freeze(annotationReceipts.slice()), setMemoryPercent,
     libraryChanged: () => clear('library-changed'), close: () => clear('closed'), snapshot, memorySnapshot });
 }
 module.exports = { createSession };

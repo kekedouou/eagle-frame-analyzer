@@ -46,11 +46,62 @@ function harness(settings = {}) {
     };
     h.players.push(player); return player;
   }
-  h.session = createSession({ eagleAdapter, media, cache, createPlayer, now: () => h.clock,
+  h.session = createSession({ eagleAdapter, media, cache, createPlayer, now: () => h.clock, memoryPreferences: settings.memoryPreferences,
     onChange(value) { h.changes.push(value); if (settings.onChange) settings.onChange(value, h); } });
   return h;
 }
 async function main() {
+  await test('RAM apply pins current source/position, pauses, persists and disposes before replacement', async () => {
+    let percent = 2.5, saves = 0;
+    const h = harness({ memoryPreferences: { snapshot: () => ({ percent }), preview(value) { if (!(value > 0)) throw new Error('invalid percent'); },
+      save(value) { percent = value; saves++; } } });
+    await h.session.loadSelected(); await h.session.seek(2, { final: true }); await h.session.toggle();
+    const source = h.session.snapshot().source.id; h.selection = selected('B');
+    const result = await h.session.setMemoryPercent(5);
+    assert.equal(result.status, 'ready'); assert.equal(saves, 1); assert.equal(percent, 5);
+    assert.equal(h.session.snapshot().source.id, source); assert.equal(h.session.snapshot().playback.time, 2);
+    assert.equal(h.session.snapshot().state, 'paused'); assert.equal(h.players.length, 2); assert.equal(h.calls, 1);
+    await h.session.close();
+  });
+  await test('Invalid RAM percent or failed persistence cannot invalidate the current video', async () => {
+    const h = harness({ memoryPreferences: { snapshot: () => ({ percent: 2.5 }), preview(value) { if (!(value > 0)) throw new Error('invalid percent'); },
+      save() { throw new Error('disk refused'); } } });
+    await h.session.loadSelected(); await h.session.seek(2, { final: true });
+    await assert.rejects(() => h.session.setMemoryPercent(0), /invalid percent/);
+    await assert.rejects(() => h.session.setMemoryPercent(5), /disk refused/);
+    assert.equal(h.players.length, 1); assert.equal(h.session.snapshot().playback.time, 2);
+    await h.session.close();
+  });
+  for (const action of ['switch', 'close']) await test('RAM apply waits old disposal and cannot override a later ' + action, async () => {
+    const gate = deferred(); let disposed = 0;
+    const h = harness({ memoryPreferences: { snapshot: () => ({}), preview() {}, save() {} },
+      async dispose() { if (!disposed++) await gate.promise; } });
+    await h.session.loadSelected(); const apply = h.session.setMemoryPercent(5); await flush();
+    assert.equal(h.players.length, 1); assert(h.players[0].disposed); assert.equal(h.released.length, 0);
+    h.selection = selected('B'); const next = action === 'switch' ? h.session.loadSelected() : h.session.close();
+    await flush(); assert.equal(h.players.length, 1); gate.resolve(); await Promise.all([apply, next]);
+    assert.equal(h.session.snapshot().state, action === 'switch' ? 'paused' : 'closed');
+    if (action === 'switch') { assert.equal(h.session.snapshot().source.id, 'B'); await h.session.close(); }
+  });
+  await test('Insufficient RAM load can be retried at the original displayed position', async () => {
+    let reject = true;
+    const h = harness({ memoryPreferences: { snapshot: () => ({}), preview() {}, save() {} },
+      load: async (_p, _info, model) => { if (model.players.length === 2 && reject) throw new Error('RAM insufficient'); } });
+    await h.session.loadSelected(); await h.session.seek(2, { final: true });
+    assert.equal((await h.session.setMemoryPercent(.01)).status, 'error');
+    reject = false; assert.equal((await h.session.setMemoryPercent(5)).status, 'ready');
+    assert.equal(h.session.snapshot().playback.time, 2); assert.equal(h.session.snapshot().state, 'paused');
+    await h.session.close();
+  });
+  await test('A selection made synchronously during RAM notification wins over the retained source', async () => {
+    let percent = 2.5, switching = null;
+    const h = harness({ memoryPreferences: { snapshot: () => ({ percent }), preview() {}, save(v) { percent = v; } },
+      onChange(value, model) { if (percent === 5 && !switching && value.state === 'paused') {
+        switching = true; model.selection = selected('B'); switching = model.session.loadSelected();
+      } } });
+    await h.session.loadSelected(); assert.equal((await h.session.setMemoryPercent(5)).status, 'superseded');
+    await switching; assert.equal(h.session.snapshot().source.id, 'B'); await h.session.close();
+  });
   await test('Read-only snapshots follow completed background work without UI notifications', async () => {
     const h = harness(); await h.session.loadSelected(); const player = h.players[0];
     player.change({ activeImageTasks: 1, cacheBytes: 100, rafOpportunity: 20 });

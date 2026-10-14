@@ -30,6 +30,10 @@ canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
 .error { color: #efb1ab; overflow-wrap: anywhere; }
 .timeline-area { position: relative; }
 .comment-markers { position: absolute; inset: 0; pointer-events: none; }
+.memory-settings { font-size: 12px; margin: 10px 0; }
+.memory-settings summary { cursor: pointer; margin-bottom: 8px; }
+.memory-controls { display: flex; align-items: center; gap: 5px; margin-top: 6px; }
+#memoryPercent { width: 76px; min-width: 0; padding: 5px; background: #202020; color: #eee; border: 1px solid #555; border-radius: 3px; }
 .comment-marker { pointer-events: auto; position: absolute; bottom: 0; width: 8px; height: 7px; padding: 0; border: 0; border-radius: 1px; background: #9ab4cf; transform: translateX(-50%); }
 .comments { margin-top: 22px; border-top: 1px solid #3b3b3b; padding-top: 12px; }
 .comment-heading, .comment-actions { display: flex; align-items: center; gap: 8px; }

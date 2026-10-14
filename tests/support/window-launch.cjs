@@ -22,7 +22,7 @@ function install(options) {
   }
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
-    doc.title = (activeMode === 'annotations' ? 'T3 标注验收' : 'T2 自动测量') + ' · ' + text;
+    doc.title = (activeMode === 'annotations' ? 'T3 标注验收' : activeMode === 'preferences' ? 'T2 内存设置验收' : 'T2 自动测量') + ' · ' + text;
     const node = doc.getElementById(failed ? 'error' : 'status');
     if (node) { node.textContent = text; node.hidden = false; }
   }
@@ -139,6 +139,23 @@ function install(options) {
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
       context.readyEpoch = snapshot.epoch;
       context.readyTrigger = snapshot.loadMetrics.trigger;
+      if (activeMode === 'preferences') {
+        if (!snapshot.memorySettings || !snapshot.playback || snapshot.playback.budget.limit !== snapshot.memorySettings.ramBytes)
+          throw new Error('正式内存设置与实际Player额度不符，未记录就绪。');
+        const store = storeFactory(repo, { stage: 'T2' });
+        try {
+          store.start({ reserveBytes: 64 * 1024 });
+          receipts.push(store.save('host', { schema: 'window-memory-settings-ready-v1', stage: 'T2', origin: 'real-Eagle-preferences-ready-observation',
+            at: new Date().toISOString(), launchContext: context, state: snapshot.state, sourceIdentity: snapshot.sourceIdentity,
+            memorySettings: snapshot.memorySettings, playback: snapshot.playback ? { frameId: snapshot.playback.frameId,
+              time: snapshot.playback.time, budget: snapshot.playback.budget } : null, loadMetrics: snapshot.loadMetrics,
+            settingsInteractionVerified: false, performanceVerified: false }));
+        } catch (error) { failureSaved = true; throw new Error('内存设置就绪证据未保存：' + error.message); }
+        finally { store.close(); }
+        state = 'saved';
+        message('内存设置已就绪，请体验修改与重开保留；本次不自动拖动。');
+        return { complete: true, observationSaved: true, receipts };
+      }
       state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · 1GiB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
       const runner = activeMode === 'annotations' && !options.run ? require('./window-annotations.cjs').run : activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
       job = runner({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,

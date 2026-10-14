@@ -45,6 +45,13 @@ function fileTests() {
     const reset = entry.prepare(ram.root, ram.io); assert.strictEqual(reset.marker.ramDiagnostic, undefined);
     ok('RAM candidate is explicitly bounded, isolated from long/annotation modes and cleared by ordinary preparation');
   }
+  {
+    const m = fileModel(), p = entry.prepare(m.root, m.io, 'preferences');
+    assert.equal(p.marker.mode, 'preferences'); assert.equal(p.marker.ramDiagnostic, undefined);
+    assert.equal(p.marker.writeApproval, undefined);
+    assert(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).name.includes('内存设置'));
+    ok('Memory settings observation reuses neutral entry and excludes RAM capture/annotation grant');
+  }
   const m = fileModel(), result = entry.prepare(m.root, m.io);
   assert(result.bytes <= entry.LIMIT); assert.strictEqual(m.writes.length, 4);
   const html = m.files.get(path.join(m.host, 'index.local.html')).toString();
@@ -172,6 +179,7 @@ function launchModel(settings = {}) {
         return { source: { ...value, sha256: 'a'.repeat(64) }, duration: 3, frames: [{ id: 0 }], metrics: { reused: true } }; } }) },
       'session.cjs': require('../plugin/session.cjs'), 'diagnostics.cjs': require('../plugin/diagnostics.cjs'), 'frame-index.cjs': {}
     };
+    modules['preferences.cjs'] = { createMemoryPreferences: () => ({ snapshot: () => ({ ramBytes: 1024 ** 3, compressedRamBytes: 128 * 1024 ** 2, percent: 2.5 }) }) };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugin/app.js'), 'utf8'), {
       window: win, eagle, performance: win.performance, Promise, setTimeout: win.setTimeout,
       require(name) { if (name === 'path') return path; if (name === 'fs') return { realpathSync: value => value };
@@ -298,6 +306,18 @@ async function launchTests() {
   annotations.jobDone.resolve({ complete: true, observationSaved: true, overallT3Accepted: false, receipts: ['T3-model'] }); await annotationsDone;
   assert.match(annotations.nodes.status.textContent, /不代表T3整体验收通过/); assert.strictEqual(annotations.counts().closes, 0);
   ok('T3 uses one neutral entry with explicit read-only mode, short observation deadline and no automatic long workload/close');
+  const settingsReady = { state: 'paused', loadMetrics: { entryAt: 12, readyAt: 112, totalMs: 100, reused: true },
+    memorySettings: { ramBytes: 1024 ** 3, percent: 2.5, persisted: true },
+    playback: { budget: { limit: 1024 ** 3 }, frameId: 0, time: 0 } };
+  const memory = launchModel({ mode: 'preferences', snapshot: settingsReady }); await memory.launch();
+  assert.equal(memory.counts().driverCalls, 0); assert.equal(memory.timers.size, 0);
+  assert.equal(memory.saved.length, 1); assert.equal(memory.saved[0].value.performanceVerified, false);
+  assert.equal(memory.saved[0].value.memorySettings.persisted, true); assert.match(memory.doc.title, /内存设置验收/);
+  assert.equal(memory.unload().returnValue, undefined);
+  const memoryFailed = launchModel({ mode: 'preferences', snapshot: settingsReady, saveFailure: true }); await memoryFailed.launch();
+  assert.equal(memoryFailed.saved.length, 0); assert.equal(memoryFailed.counts().storeCloses, 1);
+  assert.match(memoryFailed.nodes.error.textContent, /就绪证据未保存/);
+  ok('Settings observation records actual configuration without workload and never retries failed evidence writes');
 }
 (async () => { fileTests(); await launchTests(); console.log('Window automatic entry: ' + count + ' pure checks passed; no Eagle, media or evidence writes.'); })()
   .catch(error => { console.error(error.stack); process.exitCode = 1; });

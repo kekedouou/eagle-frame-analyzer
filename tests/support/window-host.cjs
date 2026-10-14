@@ -41,7 +41,7 @@ function unsavedEvidenceJSON(summary, failure) {
 }
 function fingerprints(pluginRoot) {
   const sources = {};
-  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs']) {
+  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs', 'preferences.cjs']) {
     const absolute = path.join(pluginRoot, file), stat = fs.lstatSync(absolute);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MIB || !samePath(fs.realpathSync(absolute), absolute)) throw new Error('正式源码指纹路径或容量不符合边界。');
     const bytes = fs.readFileSync(absolute); if (bytes.length !== stat.size) throw new Error('正式源码指纹读取不完整。'); sources[file] = sha(bytes);

@@ -6,7 +6,7 @@ const { pathToFileURL } = require('url');
 const SCHEMA = 'eva-window-host-entry-v1', LIMIT = 256 * 1024;
 const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
 const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
-  ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs'].map(n => 'plugin/' + n),
+  ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'preferences.cjs'].map(n => 'plugin/' + n),
   'scripts/prepare-window-host.cjs', 'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs',
   'tests/support/window-resource.cjs', 'tests/support/window-annotations.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs',
   'tests/support/ram-diagnostic.cjs'];
@@ -42,7 +42,7 @@ function render(html, plugin, hashes, mode = 'performance') {
   }
   const app = '<script src="' + (pathToFileURL(path.join(plugin, 'app.js')).href + '?verify=' + hashes['plugin/app.js']).replace(/&/g, '&amp;') + '"></script>';
   out = out.replace(app, '<script src="bootstrap.js?verify=' + hashes['tests/host/window/bootstrap.js'] + '"></script>\n  ' + app);
-  return out.replace('<title>视频分析</title>', '<title>' + (mode === 'annotations' ? 'T3 标注验收' : 'T2 自动测量') + ' · 视频分析</title>');
+  return out.replace('<title>视频分析</title>', '<title>' + (mode === 'annotations' ? 'T3 标注验收' : mode === 'preferences' ? 'T2 内存设置验收' : 'T2 自动测量') + ' · 视频分析</title>');
 }
 function validApproval(value) {
   if (value == null) return true;
@@ -57,12 +57,12 @@ function validRam(value) {
 }
 function generated(root, io, mode = 'performance', writeApproval = null, ramDiagnostic = null) {
   if (!validRam(ramDiagnostic) || ramDiagnostic && mode !== 'performance') throw new Error('RAM candidate requires the bounded performance protocol.');
-  if (!['performance', 'resource', 'annotations'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
+  if (!['performance', 'resource', 'annotations', 'preferences'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
     throw new Error('Unknown measurement protocol or annotation approval.');
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
   if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
-  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: mode === 'annotations' ? '视频分析 · T3 标注验收' : '视频分析 · T2 自动测量', logo: '/logo.local.png',
+  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: mode === 'annotations' ? '视频分析 · T3 标注验收' : mode === 'preferences' ? '视频分析 · T2 内存设置验收' : '视频分析 · T2 自动测量', logo: '/logo.local.png',
     keywords: ['视频', mode === 'annotations' ? 'T3' : 'T2', '验证'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
   const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes, mode)),
     'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
@@ -84,8 +84,9 @@ function verify(repo, io = fs, verifySources = true) {
   const preceding = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-resource.cjs').sort());
   const beforeAnnotations = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-annotations.cjs').sort());
   const beforeRam = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/ram-diagnostic.cjs').sort());
-  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations || keys === beforeRam);
-  if (marker.mode !== undefined && !['performance', 'resource', 'annotations'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
+  const beforePreferences = JSON.stringify(SOURCES.filter(name => name !== 'plugin/preferences.cjs').sort());
+  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations || keys === beforeRam || keys === beforePreferences);
+  if (marker.mode !== undefined && !['performance', 'resource', 'annotations', 'preferences'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
       !validRam(marker.ramDiagnostic) || marker.ramDiagnostic && marker.mode !== 'performance') throw new Error('Unknown measurement protocol.');
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
@@ -108,7 +109,7 @@ function prepare(repo, io = fs, mode = 'performance', writeApproval = null, ramD
   return verify(repo, io);
 }
 if (require.main === module) {
-  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
+  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
     process.argv.includes('--ram-compare') ? { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 } : null); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }
   catch (error) { console.error(error.message); process.exitCode = 1; }

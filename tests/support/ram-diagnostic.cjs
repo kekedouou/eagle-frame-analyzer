@@ -7,10 +7,18 @@ function once(text, from, to) {
 }
 function candidate(text, mib) {
   if (![512, 1024].includes(mib)) throw new Error('RAM diagnostic allows only 512/1024MiB.');
-  const captured = once(text, 'const RAM_LIMIT = 512 * 1024 * 1024;', 'const RAM_LIMIT = 1024 * 1024 * 1024;');
-  const source = once(captured, 'this.compressedLimit > 64 * 1024 ** 2', 'this.compressedLimit > 128 * 1024 ** 2');
+  let source, transformations;
+  if (text.includes('const RAM_LIMIT = 512 * 1024 * 1024;')) {
+    const captured = once(text, 'const RAM_LIMIT = 512 * 1024 * 1024;', 'const RAM_LIMIT = 1024 * 1024 * 1024;');
+    source = once(captured, 'this.compressedLimit > 64 * 1024 ** 2', 'this.compressedLimit > 128 * 1024 ** 2');
+    transformations = ['Test-only maximum RAM 1GiB', 'Test-only maximum compressed pool 128MiB'];
+  } else {
+    once(text, 'const RAM_LIMIT = 1024 * 1024 * 1024;', 'const RAM_LIMIT = 1024 * 1024 * 1024;');
+    once(text, 'this.compressedLimit > Math.floor(ledgerLimit / 8)', 'this.compressedLimit > Math.floor(ledgerLimit / 8)');
+    source = text; transformations = ['Native configurable Player capture; no source transformation'];
+  }
   return { source, options: { ramBytes: mib * MIB, compressedRamBytes: mib * MIB / 8 },
-    transformations: ['Test-only maximum RAM 1GiB', 'Test-only maximum compressed pool 128MiB',
+    transformations: [...transformations,
       'Explicit per-run total budget and 1/8 compressed limit; defaults on disk unchanged'] };
 }
 function rssLimit(args) {

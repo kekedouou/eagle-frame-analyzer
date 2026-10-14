@@ -8,10 +8,10 @@
   else if (root && root.document) root.EVAPlayer = exported;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const RAM_LIMIT = 512 * 1024 * 1024;
+  const RAM_LIMIT = 1024 * 1024 * 1024;
   class Budget {
     constructor(limit) {
-      if (!Number.isSafeInteger(limit) || limit <= 0 || limit > RAM_LIMIT) throw new Error('RAM预算无效或超过512MiB。');
+      if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('RAM预算必须是有效的正整数字节数。');
       this.limit = limit; this.used = 0; this.peak = 0; this.tokens = new Set();
     }
     reserve(bytes, kind, evict) {
@@ -69,13 +69,13 @@
       this.budget = options.budget || new Budget(options.ramBytes === undefined ? RAM_LIMIT : options.ramBytes);
       if (['reserve', 'shrink', 'release', 'snapshot'].some(name => typeof this.budget[name] !== 'function')) throw new Error('注入的RAM账本无效。');
       const ledgerLimit = this.budget.snapshot().limit;
-      if (!Number.isSafeInteger(ledgerLimit) || ledgerLimit <= 0 || ledgerLimit > RAM_LIMIT) throw new Error('注入的RAM账本无效。');
+      if (!Number.isSafeInteger(ledgerLimit) || ledgerLimit <= 0) throw new Error('注入的RAM账本无效。');
       this.playbackGuardMs = options.playbackGuardMs === undefined ? 150 : options.playbackGuardMs;
       if (!Number.isFinite(this.playbackGuardMs) || this.playbackGuardMs <= 0) throw new Error('播放欠载保护间隔无效。');
       this.experimentMode = options.experimentMode || 'baseline';
       if (!['baseline', 'compressed-ram', 'ready-submit'].includes(this.experimentMode)) throw new Error('未知T0对照模式。');
-      this.compressedLimit = options.compressedRamBytes === undefined ? 64 * 1024 ** 2 : options.compressedRamBytes;
-      if (!Number.isSafeInteger(this.compressedLimit) || this.compressedLimit < 0 || this.compressedLimit > 64 * 1024 ** 2) throw new Error('压缩图像池不得超过64MiB。');
+      this.compressedLimit = options.compressedRamBytes === undefined ? Math.floor(ledgerLimit / 8) : options.compressedRamBytes;
+      if (!Number.isSafeInteger(this.compressedLimit) || this.compressedLimit < 0 || this.compressedLimit > Math.floor(ledgerLimit / 8)) throw new Error('压缩图像池不得超过总RAM额度的1/8。');
       this.observeCanvas = !!options.observeCanvas;
       this.compressed = new Map(); this.compressedBytes = 0; this.compressedCapacity = 0;
       this.compressedStats = { warmedBytes: 0, warmedFrames: 0, hits: 0, misses: 0, warmMs: 0, admittedFrames: 0, evictions: 0 };

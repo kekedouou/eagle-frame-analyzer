@@ -70,7 +70,7 @@ function harness(options = {}) {
       contexts.push(output); return output;
     }
   };
-  player = new Player({ canvas, env, frameIndex, ramBytes: options.ramBytes, budget: options.budget,
+  player = new Player({ canvas, env, frameIndex, ramBytes: options.ramBytes === undefined ? 512 * 1024 ** 2 : options.ramBytes, budget: options.budget,
     playbackGuardMs: options.playbackGuardMs, experimentMode: options.experimentMode,
     compressedRamBytes: options.compressedRamBytes, observeCanvas: options.observeCanvas,
     emit: event => { events.push(event); if (options.onEvent) options.onEvent(event, player); },
@@ -121,7 +121,7 @@ async function run() {
     const budget = new Budget(100), first = budget.reserve(70, 'a');
     const second = budget.reserve(40, 'b', () => { budget.release(first); return true; }); budget.shrink(second, 20, 'decoded');
     assert.equal(budget.used, 20); assert.equal(budget.peak, 70); budget.release(second); budget.release(second); assert.equal(budget.used, 0);
-    assert.throws(() => budget.reserve(101, 'bad'), /RAM/); assert.throws(() => new Budget(513 * 1024 ** 2), /512/);
+    assert.throws(() => budget.reserve(101, 'bad'), /RAM/); assert.throws(() => new Budget(Number.MAX_SAFE_INTEGER + 1), /RAM/);
   });
   await check('load draws first frame before resolving and idle does not manufacture draws', async () => {
     const h = harness(); const result = await h.load(sample()); assert.equal(result.status, 'drawn');

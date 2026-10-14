@@ -36,6 +36,13 @@
       <p id="sourceName" class="source-name">未载入视频</p>
       <p class="preview-quality">720p 预览</p>
       <p id="memoryUsage" class="muted" title="当前视频由播放器管理的JPEG、解码图像、音频与在途预留；不包含浏览器、GPU或FFmpeg额外占用。">视频缓存 RAM：—</p>
+      <details class="memory-settings">
+        <summary>内存设置</summary>
+        <label for="memoryPercent">缓存最多使用本机RAM的</label>
+        <div class="memory-controls"><input id="memoryPercent" type="number" min="0" max="100" step="any" aria-label="缓存RAM百分比" disabled><span>%</span><button id="memoryApply" type="button" disabled>应用</button></div>
+        <p id="memoryAllowance" class="muted"></p>
+        <p id="memoryStatus" class="muted" role="status"></p>
+      </details>
       <p id="status" class="status" role="status">等待素材</p>
       <p id="error" class="error" role="alert" hidden></p>
       <button id="retry" type="button" hidden>重试</button>

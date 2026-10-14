@@ -20,6 +20,7 @@ function harness(settings = {}) {
   const modules = {
     'cache.cjs': { createCache(options) { assert.strictEqual(options.pluginRoot, root); return { readAsset() {}, release() {} }; } },
     'eagle.cjs': { createEagleAdapter() { return adapter; } },
+    'preferences.cjs': { createMemoryPreferences() { return { snapshot: () => ({ ramBytes: 1024 ** 3, compressedRamBytes: 128 * 1024 ** 2, percent: 2.5 }) }; } },
     'session.cjs': { createSession(options) { config = options; return settings.realSession ? require('../plugin/session.cjs').createSession(options) : session; } },
     'diagnostics.cjs': { createDiagnostics: require('../plugin/diagnostics.cjs').createDiagnostics },
     'media.cjs': { createMedia(options) { assert.strictEqual(options.tools.ffmpeg, 'existing-only'); return { prepare(snapshot, options) { prepared++; assert.strictEqual(snapshot.id, 'fixed'); return { snapshot, options }; } }; } },

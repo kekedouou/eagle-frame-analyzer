@@ -36,6 +36,8 @@
       const { createEagleAdapter } = require(path.join(root, 'eagle.cjs'));
       const { createSession } = require(path.join(root, 'session.cjs'));
       const { createDiagnostics } = require(path.join(root, 'diagnostics.cjs'));
+      const { createMemoryPreferences } = require(path.join(root, 'preferences.cjs'));
+      const preferences = createMemoryPreferences({ pluginRoot: root });
       const frameIndex = require(path.join(root, 'frame-index.cjs'));
       diagnostics = createDiagnostics({ snapshot: () => session ? { ...session.snapshot(),
         annotationReceipts: session.annotationHistory ? session.annotationHistory() : [], pluginRoot: root } : null });
@@ -56,12 +58,13 @@
         }
         return preparedMedia.prepare(snapshot, options);
       } };
-      session = createSession({ eagleAdapter: adapter, media, cache, now,
+      session = createSession({ eagleAdapter: adapter, media, cache, now, memoryPreferences: preferences,
         createPlayer: options => {
           const value = session.snapshot(), identity = value.sourceIdentity;
           const binding = Object.freeze({ sessionEpoch: value.epoch, libraryEpoch: value.libraryEpoch,
             itemId: identity && identity.itemId, sourceSha256: identity && identity.sha256 });
-          return new window.EVAPlayer.Player({ ...options, canvas: ui.canvas, frameIndex,
+          const memory = preferences.snapshot();
+          return new window.EVAPlayer.Player({ ...options, ramBytes: memory.ramBytes, compressedRamBytes: memory.compressedRamBytes, canvas: ui.canvas, frameIndex,
             emit: event => diagnostics.publish('player', () => ({ binding, event })) });
         }, onChange: snapshot => { ui.update(snapshot); diagnostics.publish('state', snapshot); } });
       ui.bindSession(session);

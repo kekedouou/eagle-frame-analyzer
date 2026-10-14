@@ -3,7 +3,7 @@ const fs = require('fs'), path = require('path'), vm = require('vm'), assert = r
 const { candidate, rssLimit, activate } = require('./support/ram-diagnostic.cjs');
 const original = fs.readFileSync(path.join(__dirname, '../plugin/player.js'), 'utf8');
 const formal = require('../plugin/player.js'), index = require('../plugin/frame-index.cjs');
-assert.throws(() => new formal.Budget(1024 ** 3));
+assert.equal(new formal.Budget(1024 ** 3).snapshot().limit, 1024 ** 3);
 for (const mib of [512, 1024]) {
   const c = candidate(original, mib), m = { exports: {} };
   vm.runInNewContext(c.source, { module: m, console });
@@ -14,7 +14,7 @@ for (const mib of [512, 1024]) {
   const p = new m.exports.Player(options);
   assert.equal(p.snapshot().budget.limit, mib * 1024 ** 2);
   assert.equal(p.compressedLimit, mib * 1024 ** 2 / 8);
-  assert.throws(() => new m.exports.Player({ ...options, ramBytes: 1024 ** 3 + 1 }));
+  assert.throws(() => new m.exports.Player({ ...options, ramBytes: Number.MAX_SAFE_INTEGER + 1 }));
   assert.throws(() => new m.exports.Player({ ...options, compressedRamBytes: 128 * 1024 ** 2 + 1 }));
 }
 assert.throws(() => candidate(original, 2048));

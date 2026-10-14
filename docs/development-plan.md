@@ -267,6 +267,8 @@ T3获用户单素材体验验收，真实保存/回退与证据详见[T3报告](
 
 ### 当前获批范围内的生命周期补验
 
+用户确认1GiB宿主通过后的正式设置行为，按A-05小范围实施R-06/R-08/P-04：新preferences.cjs（本地配置/百分比换算）、app注入、session.setMemoryPercent（同素材保留显示时间、暂停、安全释放后重载）、现有UI折叠设置。源/磁盘/标注不变；设置本地文件≤4KiB（同目录唯一next防并发，原失败/未知占用保留）、默认缺文件不写；Git忽略配置。测试包括百分比与物理RAM变化、持久化/原子失败/并发文件变化/链接保护、修改中切换/关闭及旧解码未结束不得重叠、恢复帧/暂停、不丢失标注草稿、输入不抢空格。先用模型/默认入口检查，再准备同一中性Eagle入口做设置体验/恢复保存检查；历史1GiB成绩不自动移植到新源码。设置应用沿原完整缓存校验，有等待成本；不同时优化缓存安全检查或开发高画质，以免无法归因。
+
 1GiB局部对照完成后，沿既有阶段4/同比扩大授权准备真实Eagle对照，仍使用tests/host/window，Codex命令`node scripts/prepare-window-host.cjs --ram-compare`。只在标记performance模式显式添加T2-ram-host-v1（1024/128MiB），在正式initialize之前验证单选喜多郁代、Player磁盘SHA、受限内存捕获；实际就绪后再次核对Player账本1GiB/池128MiB。原正式Player文件/默认值不改；捕获源码SHA/变更说明进入launchContext，结果origin与正式默认区分，独立审计显式保留ramDiagnostic。继续原3×30秒正常拖动/3×200定位和T2原配额，既有完整缓存复用就绪单列，不删除重建来假装首备。真实宿主原renderer 1.5GiB线、180秒测量/120秒准备保护不变（独立Chrome＋Node的2GiB特批不自动传到Eagle）；未选指定源或错误额度不测量。自动模型/默认检查通过后用户只需重开当前入口；人工启动是真实Eagle能力限制，不要求命令/重复评分。独立Chrome证据不能作为宿主通过或默认额度定案。
 
 2026-10-14停止线调整已获用户“允许”：仅独立RAM诊断加入显式`--rss-stop-mib=2048`，本轮命令为`node scripts/verify-t1-browser.cjs --ram-compare --ram-mib=1024 --rss-stop-mib=2048`。缓存1GiB/压缩128MiB、源喜多郁代和既有完整缓存、三轮各6秒、90秒总保护、scratch64MiB、T2证据原16MiB/单份2MiB保持；观察集合仍独立Chrome全部可归属进程＋Node。旧1.5GiB失败原件不改；真实宿主/FFmpeg停止线和默认工具线不变，不扩展2GiB缓存或新画质。样本/场景外结论不推广。

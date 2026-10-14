@@ -27,7 +27,8 @@
   function createUI(options = {}) {
     const doc = options.document || document, win = options.window || window, now = options.now || (() => performance.now());
     const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'memoryUsage', 'status', 'error', 'retry',
-      'commentMarkers', 'commentList', 'commentStatus', 'commentAdd', 'commentEditor', 'commentTime', 'commentText', 'commentSave', 'commentCancel'];
+      'commentMarkers', 'commentList', 'commentStatus', 'commentAdd', 'commentEditor', 'commentTime', 'commentText', 'commentSave', 'commentCancel',
+      'memoryPercent', 'memoryApply', 'memoryAllowance', 'memoryStatus'];
     const el = Object.fromEntries(ids.map(id => [id, doc.getElementById(id)]));
     if (ids.some(id => !el[id])) throw new Error('播放器界面缺少必要元素。');
     let session = null, state = { state: 'empty', duration: 0 }, gesture = null, hintEpoch = null, hintGeometry = null, lastRequestedTime = 0;
@@ -45,6 +46,28 @@
     }
     const listeners = [];
     const on = (target, type, handler) => { target.addEventListener(type, handler); listeners.push([target, type, handler]); };
+    let memoryBusy = false, shownMemory = null, shownPercent = '';
+    function updateMemorySettings() {
+      const memory = state.memorySettings;
+      const disabled = !session || !memory || memoryBusy || state.state === 'preparing' || state.state === 'closed' || !!state.comments?.draft;
+      set(el.memoryApply, 'disabled', disabled); set(el.memoryPercent, 'disabled', disabled);
+      if (memory && memory !== shownMemory) {
+        shownMemory = memory; shownPercent = String(Number(memory.percent.toFixed(4)));
+        set(el.memoryPercent, 'value', shownPercent);
+        set(el.memoryAllowance, 'textContent', '缓存上限 ' + (memory.ramBytes / 1048576).toFixed(1) + ' MiB（不含程序额外占用）');
+      }
+    }
+    on(el.memoryApply, 'click', async () => {
+      if (el.memoryApply.disabled || !session || typeof session.setMemoryPercent !== 'function') return;
+      const active = session, percent = el.memoryPercent.value === shownPercent && shownMemory ? shownMemory.percent : Number(el.memoryPercent.value);
+      memoryBusy = true; set(el.memoryStatus, 'textContent', '正在应用，完成后保持暂停…'); updateMemorySettings();
+      try { const result = await active.setMemoryPercent(percent);
+        if (session !== active) return;
+        set(el.memoryStatus, 'textContent', result.status === 'error' ? '设置已保存，视频准备失败；可提高额度后重试。' :
+          result.status === 'superseded' ? '操作已被素材切换或关闭替代。' : '设置已保存。');
+      } catch (failure) { if (session === active) set(el.memoryStatus, 'textContent', String(failure.message || failure)); }
+      finally { memoryBusy = false; if (session === active) { shownMemory = null; updateMemorySettings(); } }
+    });
     const interactive = () => !!session && !state.comments?.draft && ['paused', 'playing', 'seeking'].includes(state.state);
     const invoke = fn => {
       try { Promise.resolve(fn()).catch(() => {}); } catch (_) { /* session publishes operation errors */ }
@@ -193,6 +216,7 @@
       if (!gesture) thumb(time);
       if (hintEpoch !== null) hint(time); // Includes final release settlement; only actual submitted frame time.
       updateComments();
+      updateMemorySettings();
     }
     return { canvas: el.picture, bindSession(value) {
       session = value; update(state); refreshMemory();

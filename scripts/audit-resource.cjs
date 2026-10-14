@@ -31,11 +31,13 @@ function evaluate(summary, rows) {
   assert.strictEqual(managed, summary.peakManagedBytes); assert.strictEqual(gap, summary.maxSampleGapMs);
   const durationValid = summary.workElapsedMs >= PROTOCOL.workMs && summary.idleElapsedMs >= PROTOCOL.idleMs &&
     rows.length > 0 && rows[0][0] <= PROTOCOL.sampleMs && rows[rows.length - 1][0] >= PROTOCOL.workMs + PROTOCOL.idleMs - 1000;
-  const passed = summary.complete && !summary.error && durationValid && trend.passed && rss < 1.5 * 1024 ** 3 && managed <= 512 * 1024 ** 2 &&
+  const managedLimit = summary.managedLimitBytes === undefined ? 512 * 1024 ** 2 : summary.managedLimitBytes;
+  if (!Number.isSafeInteger(managedLimit) || managedLimit <= 0) throw new Error('Invalid recorded RAM budget.');
+  const passed = summary.complete && !summary.error && durationValid && trend.passed && rss < 1.5 * 1024 ** 3 && managed <= managedLimit &&
     summary.sourceHashesVerifiedAtEnd && summary.cleanup && summary.cleanup.verified && summary.cleanup.result === 'closed' && !summary.cleanup.error && summary.cleanup.state === 'closed' && summary.cleanup.disposedBudgetBytes === 0;
   assert.strictEqual(!!passed, summary.resourceGatePassed, 'Saved resource gate does not match independent recomputation.');
   return { passed: !!passed, durationValid, trend, samples: rows.length, maxSampleGapMs: gap,
-    peakRendererRssBytes: rss, peakManagedBytes: managed, workElapsedMs: summary.workElapsedMs, idleElapsedMs: summary.idleElapsedMs };
+    peakRendererRssBytes: rss, peakManagedBytes: managed, managedLimitBytes: managedLimit, workElapsedMs: summary.workElapsedMs, idleElapsedMs: summary.idleElapsedMs };
 }
 function audit(runId) {
   if (!runPattern.test(runId)) throw new Error('An explicit T2 resource run ID is required.');

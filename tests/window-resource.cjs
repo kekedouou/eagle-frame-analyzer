@@ -11,7 +11,7 @@ function model(settings = {}) {
   const observers = new Set(), timers = new Map(), intervals = new Map(), saved = [];
   const samples = [0, 1].map(i => ({ id: 'item-' + i, sha256: String(i).repeat(64) }));
   const snapshot = () => ({ state, epoch, libraryEpoch: 0, loadMetrics: { reused: true }, sourceIdentity: { itemId: samples[source].id, sha256: samples[source].sha256 },
-    playback: { budget: { used: 100 * MIB }, pendingTargets: 0, activeImageTasks: 0 } });
+    playback: { budget: { used: 100 * MIB, limit: 512 * MIB }, pendingTargets: 0, activeImageTasks: 0 } });
   function emit(event) { for (const observer of observers) observer({ type: 'player', value: { event } }); }
   const win = { performance: { now: () => clock }, PointerEvent: class { constructor(type, value) { this.type = type; Object.assign(this, value); } },
     dispatchEvent(event) { if (closed) return; if (settings.playbackError && event.type === 'pointermove') emit({ type: 'error', error: 'test decoder failure', code: 'TEST_DECODE', phase: 'background-image' }); if (event.type === 'pointerup') state = 'paused'; if (!settings.noDraws) emit({ type: 'draw' }); },

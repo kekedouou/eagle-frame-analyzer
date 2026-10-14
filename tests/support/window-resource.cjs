@@ -91,6 +91,8 @@ function run(options) { return execute(options, PROTOCOL); }
 function execute(options, protocol) {
   const { bridge, document: doc, window: win, pluginRoot } = options;
   const first = bridge && bridge.snapshot();
+  const managedLimit = first && first.playback && first.playback.budget && first.playback.budget.limit;
+  if (!Number.isSafeInteger(managedLimit) || managedLimit <= 0) throw new Error('资源验证缺少实际RAM配置上限。');
   if (!first || first.state !== 'paused' || !first.loadMetrics || !first.sourceIdentity ||
     !win || !doc || typeof options.reloadSelected !== 'function' || typeof options.closeSession !== 'function')
     throw new Error('资源验证需要正式首帧、重载和正常退出回调。');
@@ -158,7 +160,8 @@ function execute(options, protocol) {
         comparisonRows.push([row[0], row[1], row[2], row[3]]);
       }
       peakRss = Math.max(peakRss, rss); peakManaged = Math.max(peakManaged, managed || 0); lastCPU = cpuMicros;
-      if (rss >= 1.5 * 1024 ** 3 || managed !== null && managed > 512 * MIB) throw new Error('资源观察停止线或受管预算超限。');
+      if (rss >= 1.5 * 1024 ** 3 || managed !== null && (managed > managedLimit || p.budget.limit !== managedLimit))
+        throw new Error('资源观察停止线、受管预算超限或测试中配置改变。');
       if (pendingRows.length >= 650 || pendingRows.length && row[0] - pendingRows[0][0] >= protocol.cycleMs) flush();
     } catch (error) { sampleFault = error; fail(error.message); }
   }
@@ -266,7 +269,7 @@ function execute(options, protocol) {
         resourceGatePassed: complete && !issue && !saveFailed && trend.passed && !!cleanup && cleanup.verified && protocol === PROTOCOL,
         protocol, modelRun: protocol !== PROTOCOL, workElapsedMs, idleElapsedMs, launchContext: options.launchContext, error: failure || issue && issue.message,
         samples: selection ? selection.samples : [], sourceSelection: 'test-only fixed snapshots from real SDK; Eagle selection itself is unchanged',
-        chunks, loads, trend, cleanup, totalSamples, maxSampleGapMs, peakRendererRssBytes: peakRss, peakManagedBytes: peakManaged,
+        chunks, loads, trend, cleanup, totalSamples, maxSampleGapMs, peakRendererRssBytes: peakRss, peakManagedBytes: peakManaged, managedLimitBytes: managedLimit,
         totalDrawSubmissions: measuredFrames, playerErrors: eventErrors, playerFailures, cpu: { start: startCPU, endMicros: lastCPU, scope: 'current renderer process, one logical core = 100%; interval deltas retained in chunks' },
         sourceHashesVerifiedAtEnd: complete, limitations: ['Not native window destruction or forced Eagle exit verification.',
           'Renderer RSS sampling may miss peaks; other Eagle/GPU/shared process resources are not measured.',
