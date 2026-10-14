@@ -29,13 +29,15 @@
 | 预览与控制 | 720p、播放、拖动、逐帧、内存设置 | 同类分析操作，只准备当前选中的视频 |
 | 时间点标注 | 读取和添加Eagle素材标注 | 不支持，不访问Eagle素材库 |
 | FFmpeg | 使用Eagle中已安装的模块，不随包附带 | 随包内置，无需另外安装 |
-| 交付文件 | `eagle-video-analysis-0.1.0-beta.1-20261014.zip` | `video-analysis-standalone-preview-20261014.zip`（约233MiB） |
+| 交付文件 | `eagle-video-analysis-0.1.0-beta.1-20261014.zip` | `video-analysis-standalone-0.1.0-win-x64.zip`（约233MiB） |
 
 **插件内测版已公开预发行**：[发行说明与校验文件](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/v0.1.0-beta.1) · [直接下载插件ZIP](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/v0.1.0-beta.1/eagle-video-analysis-0.1.0-beta.1-20261014.zip)。
 
-绿色版标签为 `standalone-v0.1.0-preview.1`，Release暂存草稿；大文件附件上传超时，第三方依赖的许可／对应源码材料核查也待补齐，目前没有公开二进制下载。GitHub的“Download ZIP”下载的是源码，不包含绿色版完整运行环境。
+**绿色独立版0.1.0公开发行**：[发行说明与源码材料](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/standalone-v0.1.0) · [直接下载Windows绿色包](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/video-analysis-standalone-0.1.0-win-x64.zip)。
 
-详细说明：[插件内测版](docs/beta-preview.md) · [绿色展示版](demos/standalone-preview/README.md)。
+解压后即可使用，无需Eagle或另装FFmpeg。GitHub的“Download ZIP”下载的是源码，不包含绿色版完整运行环境。
+
+详细说明：[插件内测版](docs/beta-preview.md) · [绿色独立版使用说明](docs/releases/standalone-v0.1.0.md)。
 
 ## 快速开始
 
@@ -99,4 +101,4 @@
 
 ## 许可与分发状态
 
-项目代码的开源许可证尚未确定；本页不声明项目采用MIT或其他开源许可证。绿色包保留现有第三方许可证与源码材料，其依赖的完整许可／对应源码核查仍待完成，目前仅准备发行草稿。体验包通过Release附件单独上传，本地 `dist/` 仍被Git忽略，不将运行包、缓存或用户设置提交到源码仓库。
+项目自身代码的开源许可证尚未确定，本页不擅自声明MIT或其他许可。绿色包保留Electron/Chromium许可、FFmpeg LGPL-3.0-or-later许可及对应源码、构建参数和来源索引；同一发行页另提供FFmpeg源码附件，运行时无需另行下载。组件版权与核对范围见[第三方说明](demos/standalone-preview/THIRD-PARTY.md)，不将未做的全量依赖复现审计写成通过。体验包通过Release附件单独上传，本地 `dist/` 仍被Git忽略，不将运行包、缓存或用户设置提交到源码仓库。

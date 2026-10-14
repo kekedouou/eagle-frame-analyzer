@@ -1,0 +1,55 @@
+# Video Analysis 0.1.0 · Windows绿色独立版
+
+无需Eagle的短视频分析播放器。解压后即可打开或拖入MP4／视频文件夹，自动准备720p预览，再播放、逐帧或快速拖动观察画面。内置FFmpeg和运行环境，无需额外安装软件；无测试按钮，不提供标注。
+
+## 下载
+
+下载 **video-analysis-standalone-0.1.0-win-x64.zip**（约233MiB）。GitHub自动提供的Source code ZIP是源码，不是可直接运行的软件。
+
+- [软件ZIP](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/video-analysis-standalone-0.1.0-win-x64.zip)
+- [SHA256校验文件](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/video-analysis-standalone-0.1.0-win-x64.zip.sha256)
+
+## 三步开始
+
+1. 将整个ZIP解压到 **D、E等非C盘的可写普通目录**，不要在ZIP里直接运行，也不要只复制exe。
+2. 双击 **VideoAnalysisPreview.exe**。
+3. 拖入MP4或视频文件夹，或点击右侧“打开视频／打开文件夹”。等待当前视频自动准备完成。
+
+适用Windows 10 22H2或更新的64位Windows。输入为不超过30秒、单文件不超过2GiB的普通MP4，当前支持H.264、H.265、VP9。文件夹扫描不跟随链接；只准备当前选中视频。
+
+## 操作
+
+| 想做什么 | 操作 |
+| --- | --- |
+| 播放／暂停 | 点击播放按钮，或按空格；输入框、视频列表聚焦时保留控件自身行为 |
+| 快速查看画面 | 拖动底部进度条，上方显示目标时间 |
+| 上一帧／下一帧 | 点击对应按钮；进度条聚焦时也可按左右方向键 |
+| 换视频 | 点击右侧列表中的另一项 |
+| 调整缓存内存 | 展开右侧“内存设置”，修改占整机RAM的百分比并应用；保留位置，重新准备后保持暂停，下次沿用 |
+
+## 缓存和清理
+
+原视频只读，生成内容放在软件目录的data中。磁盘缓存预算5GiB，完整有效缓存保留以供复用；关闭时取消并清理未完成任务。再次打开仍需校验和准备内存，不承诺秒开。
+
+RAM默认额度等效1GiB，按本机总内存换算百分比；侧栏显示当前视频的受管缓存。这不包含浏览器、GPU或FFmpeg的额外占用，不是整个进程的内存硬上限。
+
+需要清缓存或恢复默认设置时，先关闭软件并确认相关进程退出，再删除本软件目录内的data。不要删除原视频。卸载只需关闭后删除整个软件文件夹。移动软件时请整包移动；旧data若因路径归属检查被拒绝，可保留原件后重新生成，不要手改锁文件。
+
+## 当前范围
+
+- 预览固定720p，不提供1080p／2K预览、标注或与Eagle的数据同步。
+- 这是当前插件成果的公开体验发行，独立版不另建长期开发路线；Eagle插件仍是主线。
+- 已有独立Electron自动验证，不能推广为全部素材、全部电脑或长期稳定性保证；不改变插件MVP及T2/T4验收状态。
+- 本包未作Windows代码签名；系统可能要求确认来源，请核对本发行页和SHA256。
+
+## 完整性与源码材料
+
+ZIP：244,671,262字节，110文件。SHA256：
+
+`a5ed9c7f6eef4951daf77b3b4c66ee12fcc2e96ab187e1e04a4aee48e188b40f`
+
+公开包仅更新用户说明并增加许可全文／来源索引；原有运行文件与冻结展示包逐字节一致。Git标签为standalone-v0.1.0，旧standalone-v0.1.0-preview.1保留为历史记录，不重写。
+
+软件使用Electron44.7.2及BtbN FFmpeg8.1 LGPL-shared。FFmpeg按LGPL-3.0-or-later提供，包内保留许可证、对应FFmpeg源码归档、构建参数及来源说明；同一发行页另提供[FFmpeg源码附件](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/FFmpeg-46d899d7a0-source.tar.gz)。这些材料供查阅源码，运行软件不需另外下载。组件版权归各自作者，详见[第三方材料说明](../../demos/standalone-preview/THIRD-PARTY.md)；没有把未完成的全量依赖复现审计写成通过。
+
+遇到问题时请提供：Windows版本、视频时长／已知规格、内存设置、操作步骤和错误截图。不必提供整个素材库或未经许可的原视频。
