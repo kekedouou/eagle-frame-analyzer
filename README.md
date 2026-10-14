@@ -33,7 +33,7 @@
 
 **插件内测版已公开预发行**：[发行说明与校验文件](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/v0.1.0-beta.1) · [直接下载插件ZIP](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/v0.1.0-beta.1/eagle-video-analysis-0.1.0-beta.1-20261014.zip)。
 
-绿色版标签为 `standalone-v0.1.0-preview.1`，Release暂存草稿，待补齐第三方依赖的许可／对应源码材料核查后再公开二进制下载。GitHub的“Download ZIP”下载的是源码，不包含绿色版完整运行环境。
+绿色版标签为 `standalone-v0.1.0-preview.1`，Release暂存草稿；大文件附件上传超时，第三方依赖的许可／对应源码材料核查也待补齐，目前没有公开二进制下载。GitHub的“Download ZIP”下载的是源码，不包含绿色版完整运行环境。
 
 详细说明：[插件内测版](docs/beta-preview.md) · [绿色展示版](demos/standalone-preview/README.md)。
 

@@ -13,7 +13,7 @@
 | 阶段 3C 工程审查与计划 | 用户验收通过并结束，固定 phase3c-approved 工程文档节点 | 不代表产品实测通过或阶段 4 执行授权；具体收尾见下节 |
 | 阶段 4 MVP 开发 | T1限定验收通过；两组T2独立长测获认可；T3单素材关卡验收通过 | T2未整体验收/未建标签；同组重复性、宿主专项与T4全矩阵保留 |
 
-## 2026-10-14 体验包发行与Git标签准备
+## 2026-10-14 体验包发行与Git标签
 
 用户确认已上传远程仓库，授权发行两个体验包并打Git标签。已核对origin为kekedouou/eagle-frame-analyzer、main初始为7fc4958，工作区初始干净、远程原无标签。插件原ZIP逐项核验通过，绿色包沿用交付SHA；不重建包/缓存或改变代码及T2/T4状态。两个带说明的标签已原子推送并读回核对：v0.1.0-beta.1→bf7fffc97bc862d0bd500daaf09a36cca4a86f03，standalone-v0.1.0-preview.1→613c4e29c0c073c52f4da4fc0f5d6fcc23cb3a5d，均不是阶段验收标签，不推送/重写旧验收标签。
 
@@ -22,6 +22,10 @@
 认证使用现有Git Credential Manager，首次网页流程最终“任务已取消”、未存凭据，第二次经用户网页授权成功。登录/上传只在各自进程使用用户已有代理，未修改系统/Git网络配置；凭据由系统凭据工具保存，未写入项目、命令参数或报告。一次性上传助手和回执放demos/standalone-preview/work（已忽略），只发送获批ZIP、校验、说明/标签，不发送素材/旧证据。绿色大文件首次流上传中断：草稿附件640100238为starter/digest=null，核对归属后仅删除该失败附件并记录failed-upload-640100238.json；改用既有curl重传，不覆盖完整附件。
 
 当前插件公开发行已核实；绿色草稿附件仍在有界重传（单次15分钟上限），不能写成上传完成。25文档186本地链接/锚点检查及Git Diff检查通过；两个原始ZIP仍为交付SHA，受保护播放器/测试/原型/产品/架构无变更。本次发行记录与主页下载入口单独提交并同步main，两个发行标签继续固定各自打包提交。
+
+最终状态：插件预发行已公开，ZIP与SHA256附件已验证；绿色草稿的curl重传达到900秒上限（HTTP100/exit28），远程640120192仍starter/digest=null，核对draft/素材名称/uploader后只清除此失败附件，草稿现有0附件、不公开。绿色本地原包保留，待办明确为完整上传及第三方依赖许可/对应源码材料核查，不继续重复重传。绿版草稿更新说明时服务端临时改成untagged，随后显式设置tag_name/target_commitish并读回，确认关联standalone-v0.1.0-preview.1及613c4e2；远程Git标签未改写。维护者草稿入口以[发行列表](https://github.com/kekedouou/eagle-frame-analyzer/releases)为准，私有草稿URL会变化，不把它作为公开下载入口。
+
+本地回执为work/release-plugin-receipt.json、release-standalone-receipt.json及两份failed-upload审计，均无凭据。首次大文件失败的具体传输原因未取得，不能补写成已知故障；随后curl的明确结果为超时。此次仅插件发行完成，绿色发行未完成；Git工作区及main在最终记录提交后核对同步，不添加T2/T4验收标签或将发行当验收。
 
 ## 2026-10-14 GitHub产品主页整理
 
