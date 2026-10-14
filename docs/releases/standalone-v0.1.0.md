@@ -48,7 +48,7 @@ ZIP：244,671,262字节，110文件。SHA256：
 
 `a5ed9c7f6eef4951daf77b3b4c66ee12fcc2e96ab187e1e04a4aee48e188b40f`
 
-公开包仅更新用户说明并增加许可全文／来源索引；原有运行文件与冻结展示包逐字节一致。Git标签为standalone-v0.1.0，旧standalone-v0.1.0-preview.1保留为历史记录，不重写。
+公开包仅更新用户说明并增加许可全文／来源索引；原有运行文件与冻结展示包逐字节一致。Git标签为standalone-v0.1.0，对应当前绿色独立版公开发行。
 
 软件使用Electron44.7.2及BtbN FFmpeg8.1 LGPL-shared。FFmpeg按LGPL-3.0-or-later提供，包内保留许可证、对应FFmpeg源码归档、构建参数及来源说明；同一发行页另提供[FFmpeg源码附件](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/FFmpeg-46d899d7a0-source.tar.gz)。这些材料供查阅源码，运行软件不需另外下载。组件版权归各自作者，详见[第三方材料说明](../../demos/standalone-preview/THIRD-PARTY.md)；没有把未完成的全量依赖复现审计写成通过。
 
