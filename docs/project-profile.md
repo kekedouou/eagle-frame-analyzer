@@ -1,6 +1,6 @@
 # 项目说明
 
-当前2GiB/256MiB真实Eagle六轮通过，用户追加允许后续T2/T4在2GiB档使用renderer3GiB观察线，正式默认/设置仍1GiB，普通/v1窗口1.5GiB边界不变。下一小任务`node scripts/prepare-window-host.cjs --reuse --ram-compare-2g`准备同一tests/host/window，仅三次已有缓存载入/账本释放，不重复快拖、不清完整缓存。严格v2配置只在performance或reuse模式生效，其他模式拒绝；真实复用待启动。具体停点见[最新记录](progress.md#2026-10-14-2gib通过及复用补验)；旧1GiB失败、人工一般体验及发布快照不追改，下方旧步骤仅适用于历史节点。
+当前复用检查的首帧/后台邻帧时序误判已复现并修正，仅测试层变化。`node scripts/prepare-window-host.cjs --reuse --ram-compare-2g`准备同一tests/host/window，三次已有缓存载入/账本释放；原就绪耗时不变，预读收尾独立限10秒/单列计时。需重开一次真实Eagle入口，不能把模型或先前两份首轮失败当三次通过。2GiB六轮通过仍有效，后续T2/T4在2GiB档renderer3GiB观察线已批准，正式默认/设置仍1GiB，普通/v1仍1.5GiB。不重复快拖、不清完整缓存，其他模式拒绝v2。具体停点见[最新记录](progress.md#2026-10-14-复用测试等待修正)；下方旧步骤仅适用于历史节点。
 
 文档职责：根README面向使用者，介绍Eagle插件、两种体验包及快速开始；本文件承担工程目录、运行/检查入口和上下文恢复，进度与实验原始记录仍在docs/progress.md及其链接中。主页不累积实验流水账，也不把绿色展示版升级为正式开发主线。
 

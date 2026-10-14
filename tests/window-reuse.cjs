@@ -3,7 +3,7 @@
 const assert = require('assert');
 const { run, SOURCE } = require('./support/window-reuse.cjs');
 async function check(fault) {
-  let observer, reloads = 0, closes = 0, storeClosed = 0, saved, current;
+  let observer, reloads = 0, closes = 0, storeClosed = 0, saved, current, clock = 10;
   const config = { schema: 'T2-ram-host-v2', ramMiB: 2048, compressedMiB: 256, rendererStopMiB: 3072 };
   function snapshot(epoch) { return { state: 'paused', epoch, libraryEpoch: 0, sourceIdentity: SOURCE,
     loadMetrics: { reused: true, totalMs: 8, entryAt: 1, readyAt: 9 },
@@ -14,7 +14,15 @@ async function check(fault) {
   if (fault === 'wrong-budget') current.playback.budget.limit = 1024 ** 3;
   if (fault === 'pending') current.playback.pendingTargets = 1;
   if (fault === 'wrong-frame') current.playback.frameOrdinal = 5;
-  const win = { performance: { now: () => 10 }, setTimeout, clearTimeout, setInterval, clearInterval };
+  if (fault === 'clock') current.loadMetrics.readyAt = NaN;
+  if (['prefetch', 'prefetch-timeout', 'prefetch-identity', 'prefetch-cancel'].includes(fault)) current.playback.activeImageTasks = 1;
+  const win = { performance: { now: () => clock }, clearTimeout, setInterval, clearInterval,
+    setTimeout(fn, ms) { if (ms !== 10) return setTimeout(fn, ms);
+      return setTimeout(() => { clock += fault === 'prefetch-timeout' ? 10001 : 10;
+        if (fault === 'prefetch-cancel') job.cancel();
+        else if (fault === 'prefetch-identity') current.sourceIdentity = { ...SOURCE, itemId: 'changed' };
+        else current.playback.activeImageTasks = 0;
+        fn(); }, 1); } };
   const release = bytes => observer({ type: 'player', value: { event: { phase: 'disposed', budgetBytes: bytes } } });
   const job = run({ window: win, pluginRoot: __dirname, launchContext: { ramDiagnostic: config },
     bridge: { snapshot: () => current, subscribe: fn => { observer = fn; return () => { observer = null; }; } },
@@ -35,16 +43,20 @@ async function check(fault) {
     assert.equal(pending.persisted, false); assert.equal(pending.reuseGatePassed, false); assert.equal(pending.loads.length, 3); }
   else {
     const result = await job.done;
-    assert.equal(result.reuseGatePassed, !fault, fault);
-    assert.equal(saved.complete, !fault, fault);
+    const expectedPass = !fault || fault === 'prefetch';
+    assert.equal(result.reuseGatePassed, expectedPass, fault);
+    assert.equal(saved.complete, expectedPass, fault);
     assert.equal(saved.resourceStop.thresholdBytes, 3 * 1024 ** 3);
-    if (!fault) { assert.equal(reloads, 2); assert.equal(saved.loads.length, 3); assert.deepEqual(saved.releases, [0, 0, 0]); }
+    if (expectedPass) { assert.equal(reloads, 2); assert.equal(saved.loads.length, 3); assert.deepEqual(saved.releases, [0, 0, 0]); }
+    if (fault === 'prefetch') { assert.equal(saved.loads[0].readyPlayback.activeImageTasks, 1);
+      assert.equal(saved.loads[0].settledPlayback.activeImageTasks, 0); assert.equal(saved.loads[0].settleMs, 10);
+      assert.equal(saved.loads[0].loadMetrics.totalMs, 8); }
     if (['selection', 'source-changed', 'new-cache', 'wrong-budget', 'pending', 'wrong-frame', 'rss'].includes(fault)) assert.equal(reloads, 0);
     if (fault === 'rss' || fault === 'rss-after-reload') assert(saved.resourceStop.requested);
   }
   assert.equal(closes, 1); assert.equal(storeClosed, 1); assert.equal(observer, null);
 }
 (async () => {
-  for (const fault of [undefined, 'new-cache', 'wrong-budget', 'pending', 'wrong-frame', 'selection', 'source-changed', 'epoch', 'library', 'source', 'release', 'rss', 'rss-after-reload', 'close-release', 'cancel', 'save']) await check(fault);
-  console.log('Window reuse: 16 model cases passed; reload identity/complete cache/epoch/release/RSS/cancel/save guards; no Eagle or media.');
+  for (const fault of [undefined, 'new-cache', 'wrong-budget', 'pending', 'wrong-frame', 'selection', 'source-changed', 'epoch', 'library', 'source', 'release', 'rss', 'rss-after-reload', 'close-release', 'cancel', 'save', 'clock', 'prefetch', 'prefetch-timeout', 'prefetch-identity', 'prefetch-cancel']) await check(fault);
+  console.log('Window reuse: 21 model cases passed; reload/identity/release/RSS/cancel/save guards and separate bounded prefetch drain; no Eagle or media.');
 })().catch(error => { console.error(error.stack); process.exitCode = 1; });
