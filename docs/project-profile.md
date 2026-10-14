@@ -1,10 +1,12 @@
 # 项目说明
 
+当前开发候选A-06：RAM设置为512MiB及1～10GiB下拉/默认1GiB；侧栏缓存管理支持下次载入时清理1天未使用完整缓存、清除其他视频缓存并保护当前与活跃占用。空写锁由Windows独占句柄验证后恢复；真实Windows隔离检查及默认检查通过，当前Eagle候选待验证。原tests/host/window已准备performance/T2六轮，前台约2分钟，无需新插件目录；主线进度见[最新记录](progress.md#2026-10-14-恢复主线空锁固定ram档位与缓存清理)。以下A-05百分比与发布过程保留历史，发布包不会自动跟随开发源码更新。
+
 文档职责：根README面向使用者，介绍Eagle插件、两种体验包及快速开始；本文件承担工程目录、运行/检查入口和上下文恢复，进度与实验原始记录仍在docs/progress.md及其链接中。主页不累积实验流水账，也不把绿色展示版升级为正式开发主线。
 
 2026-10-14当前补充：用户已确认内存设置体验通过；下面“待设置人工验收”是交接时的历史状态。急用内测包采用scripts/package-beta.cjs冻结当前plugin到dist，不替换测试入口、不修改播放器。`node scripts/package-beta.cjs`首次生成唯一展示目录/ZIP，已有则拒绝覆盖；`--verify`只读复核快照与ZIP。输出总量≤4MiB（目录≤2MiB、ZIP≤2MiB），不自动堆积多版本；dist忽略入Git，保留本次快照而不清理用户运行数据。使用说明见[内测介绍](beta-preview.md)，当前阶段/交付结果见[进度](progress.md#2026-10-14-临时内测展示交付)。继续开发仍使用plugin及现有tests，不在dist里修代码。
 
-当前正式设置候选（A-05）：默认等效1GiB，按整机RAM百分比配置、JPEG池上限1/8，preferences.cjs仅管理plugin根本地配置，UI经session调用。下一体验入口由`node scripts/prepare-window-host.cjs --preferences`准备，复用中性目录/ID，标题“T2内存设置验收”，只记录就绪/配置，不自动拖动/长测。不要沿用下方旧RAM变体入口作为当前人工步骤；新设置操作尚未真实验收。保存仅memory-settings.json/next≤4KiB，Git忽略，原视频/磁盘缓存/标注不改；具体当前证据见[T2记录](experiments/T2/report.md#2026-10-14-1gib宿主通过及内存设置候选)。
+历史正式设置候选（A-05，已被A-06替代）：默认等效1GiB，按整机RAM百分比配置、JPEG池上限1/8，preferences.cjs仅管理plugin根本地配置，UI经session调用。其体验入口由`node scripts/prepare-window-host.cjs --preferences`准备，复用中性目录/ID，标题“T2内存设置验收”，只记录就绪/配置，不自动拖动/长测；原操作后来获用户人工确认。保存仅memory-settings.json/next≤4KiB，Git忽略，原视频/磁盘缓存/标注不改；具体历史证据见[T2记录](experiments/T2/report.md#2026-10-14-1gib宿主通过及内存设置候选)。
 
 1GiB宿主对照准备：`node scripts/prepare-window-host.cjs --ram-compare`复用tests/host/window，T2标题/ID不变，正文运行前核对指定喜多郁代及内存捕获预算；同一performance协议，仅显式1024/128MiB变体，原Player磁盘代码不改。候选源码SHA/原SHA另记launchContext，不能称与正式默认完全相同。普通无参数prepare恢复默认、清除诊断标记；resource/annotations模式拒绝此标记，T3许可不续期。真实Eagle原1.5GiB renderer观察线不变。
 
@@ -96,8 +98,8 @@ S1 的工作目录为 `prototypes/playback-clock/`：`node check-local.cjs` 保�
 | plugin/eagle.cjs | 唯一素材/标注 API 边界；独立读回，不直接写 metadata.json |
 | plugin/media.cjs | 只读源媒体、分析和 FFmpeg；通过缓存句柄受限写入，不自行淘汰目录 |
 | plugin/cache.cjs | 文件所有权、实际路径、预算、锁、完整提交、淘汰与清理；不操作 UI 或素材元数据 |
-| plugin/preferences.cjs | 物理RAM/百分比换算与本地原子设置保存；不访问素材库或清理媒体缓存 |
-| plugin/process-identity.cjs | 缓存内部只读Windows进程出生/后代证明；未知时保留，不主动终止进程，不调用Eagle API |
+| plugin/preferences.cjs | 固定RAM档位/物理上限与旧百分比只读转换、本地原子保存；不访问素材库或清理媒体缓存 |
+| plugin/process-identity.cjs | Windows进程出生/后代只读证明；独占句柄核对后接管空writer记录；未知时保留，不终止进程、不调用Eagle API |
 | plugin/frame-index.cjs | 纯时间/源帧映射；整数 PTS、呈现编号与源时间关系 |
 | plugin/player.js | Canvas、Web Audio 与调度；通过缓存读取/预算句柄取得资源，不调用标注 API |
 | tests/、scripts/check.cjs | 隔离测试与统一检查；正式代码不依赖 prototypes，开发检查不进入产品 UI |

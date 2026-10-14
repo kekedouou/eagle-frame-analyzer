@@ -30,6 +30,28 @@ async function demand(h) {
 }
 async function test(name, work) { await work(); count++; console.log('ok T2 lifecycle: ' + name); }
 async function main() {
+  await test('one-day expiration uses recorded non-use and protects current/active caches',async()=>{
+    const {h,list}=await three(),held=await reuse(h,3),at=Date.now()+1000;
+    for(const item of list){const n=h.nodes.get(path.join(item.cacheDir,'owner.json')),v=JSON.parse(n.data);v.lastUsedAt=at-86400000;n.data=Buffer.from(JSON.stringify(v));}
+    const tx=h.reboot({now:()=>at}).begin({sourceSha256:hash(2)});assert.equal(tx.cleanup.cleared,1);tx.close();
+    assert(!h.nodes.has(list[0].cacheDir));assert(h.nodes.has(list[1].cacheDir));assert(h.nodes.has(list[2].cacheDir));h.cache.release(held);
+  });
+  await test('recent/future/missing recency is not silently treated as expired',async()=>{
+    const {h,list}=await three(),at=Date.now()+1000;
+    for(const [i,item] of list.entries()){const n=h.nodes.get(path.join(item.cacheDir,'owner.json')),v=JSON.parse(n.data);
+      if(i===0)v.lastUsedAt=at-86400000+1;if(i===1)v.lastUsedAt=at+1000;if(i===2){delete v.lastUsedAt;delete v.useSequence;}n.data=Buffer.from(JSON.stringify(v));}
+    const tx=h.reboot({now:()=>at}).begin({sourceSha256:hash(4)});assert.equal(tx.cleanup.cleared,0);tx.close();list.forEach(i=>assert(h.nodes.has(i.cacheDir)));
+  });
+  await test('explicit other-cache clearing preserves current and every active lease',async()=>{
+    const {h,list}=await three(),held=await reuse(h,2);
+    const r=h.cache.clearOther({sourceSha256:hash(1)});assert.equal(r.cleared,1);assert(r.freedBytes>20000);
+    assert(h.nodes.has(list[0].cacheDir));assert(h.nodes.has(list[1].cacheDir));assert(!h.nodes.has(list[2].cacheDir));h.cache.release(held);
+    assert.equal(h.cache.clearOther({sourceSha256:hash(1)}).cleared,1);assert.equal(h.cache.clearOther({sourceSha256:hash(1)}).cleared,0);
+  });
+  await test('manual clearing cannot delete siblings when any cache contains unknown files',async()=>{
+    const {h,list}=await three();h.make(path.join(list[2].cacheDir,'unknown.txt'),'file','protect');
+    assert.throws(()=>h.cache.clearOther({sourceSha256:hash(1)}));list.forEach(i=>assert(h.nodes.has(i.cacheDir)));
+  });
   await test('persisted recency changes on reuse and is independent of metadata file modification time', async () => {
     const { h, list } = await three(), old = h.cache.inventory().caches.find(c => c.sourceSha256 === hash(1));
     const again = await reuse(h, 1); h.cache.release(again);

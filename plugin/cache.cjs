@@ -397,6 +397,35 @@ function createCache(options = {}) {
     }
     if (job.disk + bytes + reserve > diskBytes) fail('清理后空间不足；未执行超额写入。');
   }
+  function cleanOther(job, all) {
+    // begin/resumeCleanup already validated and accounted the entire root.
+    assertWriter(job);
+    const occupied = occupancy(), selected = [], at = (options.now || Date.now)();
+    if (!Number.isSafeInteger(at) || at < 1) fail('缓存清理时间无效。');
+    let reserved = 0;
+    for (const name of fs.readdirSync(root)) {
+      const match = /^media-([0-9a-f]{64})-([0-9a-f]{12})$/.exec(name); if (!match) continue;
+      const dir = path.join(root, name), owner = verifyOwner(dir, 'cache');
+      if (samePath(dir, job.target) || occupied.has(dir.toLowerCase())) continue;
+      // Missing/future recency never proves one day of non-use.
+      if (!all && (!Number.isSafeInteger(owner.lastUsedAt) || at - owner.lastUsedAt < 86400000)) continue;
+      const checked = inspectDirectory(dir, 'cache', match[1]), identity = directory(dir);
+      const plan = ownerValue('cleanup-plan', { token: nonce(), writerToken: job.token, directory: dir,
+        directoryIdentity: [identity.dev, identity.ino], cacheToken: owner.token,
+        reason: all ? 'user-clear-other-cache' : 'idle-one-day', createdAt: at,
+        files: checked.names.sort().map(leaf => leafSnapshot(path.join(dir, leaf))) });
+      const data = jsonBytes(plan); reserved += data.length + 4096;
+      if (job.disk + reserved > diskBytes) fail('无法预留全部清理清单和回执；未执行删除。');
+      selected.push({ plan, data });
+    }
+    for (const { plan } of selected) assertPlan(job, plan);
+    let freedBytes = 0;
+    for (const { plan, data } of selected) {
+      assertWriter(job); writeRecord(path.join(root, 'cleanup-' + plan.token + '.json'), data); job.disk += data.length;
+      deletePlanned(job, plan, data); freedBytes += plan.files.reduce((n, f) => n + f.bytes, 0);
+    }
+    return Object.freeze({ cleared: selected.length, freedBytes, occupiedProtected: occupied.size });
+  }
   function touch(job, dir) {
     assertWriter(job); const old = verifyOwner(dir, 'cache'), markerPath = path.join(dir, 'owner.json');
     const before = leafSnapshot(markerPath); let sequence = 0;
@@ -612,7 +641,7 @@ function createCache(options = {}) {
     if (job.closed) return false;
     assertWriter(job, true); fs.unlinkSync(path.join(root, 'writer.lock')); job.closed = true; activeRoots.delete(root); return true;
   }
-  function begin({ sourceSha256, signal } = {}) {
+  function begin({ sourceSha256, signal, clearOthers = false } = {}) {
     cancelled(signal);
     if (typeof sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sourceSha256)) fail('源内容指纹不正确。');
     if (activeRoots.has(root)) fail('同一缓存已有准备事务。');
@@ -627,21 +656,32 @@ function createCache(options = {}) {
     const job = { token, signal, closed: false, partial: null, published: false, disk: 0, initializing: true,
       target: path.join(root, 'media-' + sourceSha256 + '-' + recipeId),
       files: new Map(), streams: new Set(), closingStreams: new Set(), lockIdentity: null, lockSha: sha(lockData) };
-    const lockPath = path.join(root, 'writer.lock'); let fd;
+    const lockPath = path.join(root, 'writer.lock'); let fd, recoveredEmpty = null;
     try { fd = fs.openSync(lockPath, 'wx'); }
     catch (error) {
-      if (error.code === 'EEXIST') { error.message = '缓存已有占用记录，无法开始准备；未确认的写锁会保留。'; error.code = 'CACHE_BUSY'; }
-      throw error;
+      if (error.code !== 'EEXIST') throw error;
+      const prior = regular(lockPath);
+      if (prior.size === 0 && writer.processIdentity && typeof processIdentity.claimEmptyWriter === 'function' && processIdentity.claimEmptyWriter(lockPath, lockData)) {
+        recoveredEmpty = prior; fd = fs.openSync(lockPath, 'r+');
+      } else {
+        error.message = '另一个缓存任务仍在运行，或残留记录暂时无法安全恢复。请关闭其他视频分析窗口后重试。';
+        error.code = 'CACHE_BUSY'; throw error;
+      }
     }
-    let lockWritten = 0;
+    let lockWritten = recoveredEmpty ? lockData.length : 0, cleanup;
     try {
       job.lockIdentity = fs.fstatSync(fd);
+      if (recoveredEmpty && (!sameFile(recoveredEmpty, job.lockIdentity) || !fs.readFileSync(fd).equals(lockData))) fail('空锁接管后文件身份改变。');
       activeRoots.add(root);
-      job.disk = usage(job); charge(job, lockData.length);
-      writeAll(fd, lockData, 0, count => { lockWritten += count; }); fs.closeSync(fd);
+      // Publish ownership immediately, before expensive synchronous inventory.
+      // A renderer exit during inventory must not strand an anonymous empty lock.
+      if (!recoveredEmpty) writeAll(fd, lockData, 0, count => { lockWritten += count; });
+      fs.fsyncSync(fd); fs.closeSync(fd);
+      job.disk = usage(job); charge(job, 0);
       assertWriter(job);
       job.initializing = false;
       resumeCleanup(job);
+      cleanup = cleanOther(job, clearOthers);
     } catch (error) {
       try { fs.closeSync(fd); } catch (_) { /* Already closed. */ }
       try {
@@ -885,7 +925,7 @@ function createCache(options = {}) {
       for (const size of sizes.values()) job.disk -= size;
       job.partial = null; job.files.clear(); return true;
     }
-    return Object.freeze({ readComplete, writeAsset, openAsset, finish, abort, beforeSpawn, childStarted, childClosed,
+    return Object.freeze({ readComplete, writeAsset, openAsset, finish, abort, beforeSpawn, childStarted, childClosed, cleanup,
       close() {
         if (job.streams.size || job.closingStreams.size || writer.children.some(child => child.state !== 'closed')) fail('输出流或辅助进程仍未关闭，不能释放写锁。');
         closeLedger(); return releaseWriter(job);
@@ -985,7 +1025,11 @@ function createCache(options = {}) {
       JSON.stringify(names) !== JSON.stringify(fs.readdirSync(root).sort())) fail('盘点期间缓存根已变化，丢弃本次结果。');
     return frozenCopy({ ...base, exists: true, usedBytes, caches, leases });
   }
-  return Object.freeze({ root, begin, readAsset, release, inventory });
+  function clearOther(settings) {
+    const tx = begin({ ...settings, clearOthers: true });
+    try { return tx.cleanup; } finally { tx.close(); }
+  }
+  return Object.freeze({ root, begin, readAsset, release, inventory, clearOther });
 }
 
 module.exports = { createCache, OWNER, RECIPE, LIMITS };

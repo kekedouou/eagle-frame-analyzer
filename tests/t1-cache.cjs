@@ -117,6 +117,22 @@ async function prepared(h) {
 }
 async function test(name, body) { await body(); count++; console.log('ok T1 cache: ' + name); }
 async function main() {
+  await test('writer ownership is fully written before cache inventory begins', async () => {
+    const h=harness(), info=await prepared(h);h.cache.release(info);let observed=0;
+    const read=h.api;const original=h.nodes.get(win.join(h.root,'owner.json'));
+    h.state.afterOpen=({file,flags})=>{if(flags==='r' && file.endsWith('manifest.json')) {
+      const lock=h.nodes.get(win.join(h.root,'writer.lock'));assert(lock && JSON.parse(lock.data).kind==='writer');observed++;
+    }};
+    const tx=h.cache.begin({sourceSha256:SOURCE_SHA});tx.close();assert(observed>0);assert(original);
+  });
+  for(const claimed of [true,false]) await test('empty writer recovery requires successful exclusive Windows claim: '+claimed,async()=>{
+    const h=harness();let tx=h.cache.begin({sourceSha256:SOURCE_SHA});tx.close();
+    const lock=win.join(h.root,'writer.lock');h.make(lock,'file','');let calls=0;
+    const cache=h.reboot({processIdentity:{self:()=>({pid:4242,startTicks:'638958000000000000',image:'D:\\fixtures\\Eagle.exe'}),inspect:()=>({safe:false}),claimEmptyWriter(file,data){calls++;assert.equal(file,lock);if(claimed)h.nodes.get(lock).data=Buffer.from(data);return claimed;}}});
+    if(claimed){tx=cache.begin({sourceSha256:SOURCE_SHA});assert(JSON.parse(h.nodes.get(lock).data).kind==='writer');tx.close();assert(!h.nodes.has(lock));}
+    else{assert.throws(()=>cache.begin({sourceSha256:SOURCE_SHA}),e=>e.code==='CACHE_BUSY');assert.equal(h.nodes.get(lock).data.length,0);}
+    assert.equal(calls,1);
+  });
   await test('cache is lazy, non-C and isolated from T0', async () => {
     const h = harness(); assert.strictEqual(h.cache.root, 'D:\\fixtures\\plugin\\cache'); assert(!h.api.OWNER.includes('T0'));
     assert(!h.api.RECIPE.includes('T0')); assert(!h.api.OWNER.includes('S1')); assert.strictEqual(h.api.LIMITS.cacheBytes, 5 * 1024 ** 3);

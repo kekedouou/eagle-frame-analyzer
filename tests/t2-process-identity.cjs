@@ -30,6 +30,7 @@ test('complete known parent and child death is eligible without terminating anyt
 test('query failures are unknown; cached self identity does not invoke commands repeatedly', () => {
   let calls = 0; const provider = createIdentity({ pid: 10, query() { calls++; return [{ ...parent, parentPid: 1 }]; } });
   assert.deepStrictEqual(provider.self(), parent); provider.self(); assert.strictEqual(calls, 1);
+  assert(!provider.inspect({processIdentity:parent,children:[]}).safe);assert.strictEqual(calls,1);
   assert.strictEqual(provider.child(20), null);
   const failing = createIdentity({ query() { throw new Error('denied'); } }); assert.strictEqual(failing.self(), null); assert(!failing.inspect(record).safe);
 });

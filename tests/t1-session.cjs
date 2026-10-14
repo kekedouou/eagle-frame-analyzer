@@ -18,6 +18,7 @@ function harness(settings = {}) {
     return settings.prepare ? settings.prepare(value, options, h) : h.makeInfo(value);
   } };
   const cache = { async readAsset(info, file) { h.reads.push({ info, file }); return Buffer.from('registered asset'); },
+    clearOther: settings.clearOther,
     async release(info) { if (settings.release) await settings.release(info, h); h.released.push(info); h.events.push('release-' + info.source.id); } };
   function createPlayer(options) {
     const player = { options, info: null, disposed: false, disposeDone: false,
@@ -51,24 +52,38 @@ function harness(settings = {}) {
   return h;
 }
 async function main() {
+  await test('Manual cache clearing pauses and protects the loaded source rather than a new Eagle selection',async()=>{
+    let request;const h=harness({clearOther(value){request=value;return {cleared:2,freedBytes:400};}});
+    await h.session.loadSelected();await h.session.seek(2,{final:true});await h.session.toggle();h.selection=selected('B');
+    const r=await h.session.clearOtherCaches();assert.equal(request.sourceSha256,'a'.repeat(64));assert.equal(r.cleared,2);
+    assert.equal(h.session.snapshot().state,'paused');assert.equal(h.session.snapshot().playback.time,2);assert.equal(h.calls,1);await h.session.close();
+    await assert.rejects(()=>h.session.clearOtherCaches(),/等待视频/);
+  });
+  await test('Ready metrics separate media preparation and Player initialization without changing the readiness boundary',async()=>{
+    const h=harness({prepare(value,_options,model){model.clock+=20;return {...model.makeInfo(value),metrics:{reused:true,phaseMs:{existingCacheValidationMs:12}}};},
+      load(_p,_info,model){model.clock+=30;}});
+    const r=await h.session.loadSelected({startedAt:100});const m=r.snapshot.loadMetrics;
+    assert.equal(m.totalMs,50);assert.equal(m.mediaPrepareMs,20);assert.equal(m.playerLoadMs,30);
+    assert.deepEqual(m.mediaPhaseMs,{existingCacheValidationMs:12});assert(m.reused);await h.session.close();
+  });
   await test('RAM apply pins current source/position, pauses, persists and disposes before replacement', async () => {
-    let percent = 2.5, saves = 0;
-    const h = harness({ memoryPreferences: { snapshot: () => ({ percent }), preview(value) { if (!(value > 0)) throw new Error('invalid percent'); },
-      save(value) { percent = value; saves++; } } });
+    let ramMiB = 1024, saves = 0;
+    const h = harness({ memoryPreferences: { snapshot: () => ({ ramMiB }), preview(value) { if (!(value > 0)) throw new Error('invalid tier'); },
+      save(value) { ramMiB = value; saves++; } } });
     await h.session.loadSelected(); await h.session.seek(2, { final: true }); await h.session.toggle();
     const source = h.session.snapshot().source.id; h.selection = selected('B');
-    const result = await h.session.setMemoryPercent(5);
-    assert.equal(result.status, 'ready'); assert.equal(saves, 1); assert.equal(percent, 5);
+    const result = await h.session.setMemoryMiB(2048);
+    assert.equal(result.status, 'ready'); assert.equal(saves, 1); assert.equal(ramMiB, 2048);
     assert.equal(h.session.snapshot().source.id, source); assert.equal(h.session.snapshot().playback.time, 2);
     assert.equal(h.session.snapshot().state, 'paused'); assert.equal(h.players.length, 2); assert.equal(h.calls, 1);
     await h.session.close();
   });
-  await test('Invalid RAM percent or failed persistence cannot invalidate the current video', async () => {
-    const h = harness({ memoryPreferences: { snapshot: () => ({ percent: 2.5 }), preview(value) { if (!(value > 0)) throw new Error('invalid percent'); },
+  await test('Invalid RAM tier or failed persistence cannot invalidate the current video', async () => {
+    const h = harness({ memoryPreferences: { snapshot: () => ({ ramMiB: 1024 }), preview(value) { if (!(value > 0)) throw new Error('invalid tier'); },
       save() { throw new Error('disk refused'); } } });
     await h.session.loadSelected(); await h.session.seek(2, { final: true });
-    await assert.rejects(() => h.session.setMemoryPercent(0), /invalid percent/);
-    await assert.rejects(() => h.session.setMemoryPercent(5), /disk refused/);
+    await assert.rejects(() => h.session.setMemoryMiB(0), /invalid tier/);
+    await assert.rejects(() => h.session.setMemoryMiB(2048), /disk refused/);
     assert.equal(h.players.length, 1); assert.equal(h.session.snapshot().playback.time, 2);
     await h.session.close();
   });
@@ -76,7 +91,7 @@ async function main() {
     const gate = deferred(); let disposed = 0;
     const h = harness({ memoryPreferences: { snapshot: () => ({}), preview() {}, save() {} },
       async dispose() { if (!disposed++) await gate.promise; } });
-    await h.session.loadSelected(); const apply = h.session.setMemoryPercent(5); await flush();
+    await h.session.loadSelected(); const apply = h.session.setMemoryMiB(2048); await flush();
     assert.equal(h.players.length, 1); assert(h.players[0].disposed); assert.equal(h.released.length, 0);
     h.selection = selected('B'); const next = action === 'switch' ? h.session.loadSelected() : h.session.close();
     await flush(); assert.equal(h.players.length, 1); gate.resolve(); await Promise.all([apply, next]);
@@ -88,18 +103,18 @@ async function main() {
     const h = harness({ memoryPreferences: { snapshot: () => ({}), preview() {}, save() {} },
       load: async (_p, _info, model) => { if (model.players.length === 2 && reject) throw new Error('RAM insufficient'); } });
     await h.session.loadSelected(); await h.session.seek(2, { final: true });
-    assert.equal((await h.session.setMemoryPercent(.01)).status, 'error');
-    reject = false; assert.equal((await h.session.setMemoryPercent(5)).status, 'ready');
+    assert.equal((await h.session.setMemoryMiB(512)).status, 'error');
+    reject = false; assert.equal((await h.session.setMemoryMiB(2048)).status, 'ready');
     assert.equal(h.session.snapshot().playback.time, 2); assert.equal(h.session.snapshot().state, 'paused');
     await h.session.close();
   });
   await test('A selection made synchronously during RAM notification wins over the retained source', async () => {
-    let percent = 2.5, switching = null;
-    const h = harness({ memoryPreferences: { snapshot: () => ({ percent }), preview() {}, save(v) { percent = v; } },
-      onChange(value, model) { if (percent === 5 && !switching && value.state === 'paused') {
+    let ramMiB = 1024, switching = null;
+    const h = harness({ memoryPreferences: { snapshot: () => ({ ramMiB }), preview() {}, save(v) { ramMiB = v; } },
+      onChange(value, model) { if (ramMiB === 2048 && !switching && value.state === 'paused') {
         switching = true; model.selection = selected('B'); switching = model.session.loadSelected();
       } } });
-    await h.session.loadSelected(); assert.equal((await h.session.setMemoryPercent(5)).status, 'superseded');
+    await h.session.loadSelected(); assert.equal((await h.session.setMemoryMiB(2048)).status, 'superseded');
     await switching; assert.equal(h.session.snapshot().source.id, 'B'); await h.session.close();
   });
   await test('Read-only snapshots follow completed background work without UI notifications', async () => {

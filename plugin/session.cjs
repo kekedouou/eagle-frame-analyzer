@@ -89,10 +89,11 @@ function createSession(options) {
       if (!current(request)) return { status: 'superseded' };
       loadComments(request, selected); // Independent read; never add API work to the frame loop.
       owned = { epoch: request.epoch, info: null, player: null, dispose: null, released: false, ready: false }; owner = owned;
+      const mediaStartedAt = now();
       const info = await media.prepare(selected, { signal: request.controller.signal, onProgress: value => {
         if (current(request) && owner === owned) { progress = typeof value === 'object' && value ? { ...value } : { stage: 'media-prepare', message: String(value) }; notify(); }
       } });
-      owned.info = info;
+      const mediaReturnedAt = now(); owned.info = info;
       if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
       validatePrepared(info, selected);
       source = Object.freeze({ ...selected, sha256: info.source.sha256 }); duration = info.duration;
@@ -114,7 +115,7 @@ function createSession(options) {
         throw issue('PLAYER_INTERFACE_INVALID', '播放器接口不完整。');
       owned.player = player;
       if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
-      await player.load(info);
+      const playerStartedAt = now(); await player.load(info); const playerLoadedAt = now();
       if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
       let ready = player.snapshot();
       if (ready.state !== 'paused' || ready.frameId !== info.frames[0].id || ready.frameOrdinal !== 0)
@@ -132,7 +133,9 @@ function createSession(options) {
       // that initialization in P03, then expose metrics without redrawing UI.
       notify(); if (!current(request)) return { status: 'superseded' };
       const readyAt = now(); loadMetrics = { entryAt: request.startedAt, readyAt, totalMs: readyAt - request.startedAt,
-        reused: !!(info.metrics && info.metrics.reused), trigger: request.trigger };
+        reused: !!(info.metrics && info.metrics.reused), trigger: request.trigger,
+        mediaPrepareMs: mediaReturnedAt - mediaStartedAt, playerLoadMs: playerLoadedAt - playerStartedAt,
+        mediaPhaseMs: info.metrics && info.metrics.phaseMs ? { ...info.metrics.phaseMs } : null };
       return { status: 'ready', snapshot: snapshot() };
     } catch (failure) {
       try { await releaseOwner(owned || owner); }
@@ -159,17 +162,27 @@ function createSession(options) {
     return enqueue(() => runLoad(request));
   }
   function loadSelected(settings = {}) { return startLoad(settings); }
-  async function setMemoryPercent(percent) {
+  async function clearOtherCaches() {
+    if (closed || state === 'preparing' || comments.draft || !source || !owner || !owner.ready)
+      throw issue('CACHE_CLEAN_BUSY', '请等待视频就绪，并先保存或取消标注。');
+    if (typeof cache.clearOther !== 'function') throw issue('CACHE_CLEAN_UNAVAILABLE', '当前入口没有缓存清理接口。');
+    const token = epoch, retained = source;
+    await control('pause', [], ['paused', 'playing', 'seeking']);
+    if (closed || token !== epoch) return { status: 'superseded' };
+    const result = await cache.clearOther({ sourceSha256: retained.sha256 });
+    return closed || token !== epoch ? { status: 'superseded' } : { status: 'cleared', ...result };
+  }
+  async function setMemoryMiB(ramMiB) {
     const preferences = options.memoryPreferences;
     if (!preferences) throw issue('MEMORY_SETTINGS_UNAVAILABLE', '当前入口没有内存设置接口。');
-    preferences.preview(percent);
+    preferences.preview(ramMiB);
     if (closed || state === 'preparing' || comments.draft) throw issue('MEMORY_SETTINGS_BUSY', '请等待准备完成，并先保存或取消标注。');
     const token = epoch, retained = source;
     if (owner && owner.ready) await control('pause', [], ['paused', 'playing', 'seeking']);
     if (closed || token !== epoch) return { status: 'superseded' };
     const retainedTime = memoryResume && retained && memoryResume.id === retained.id && memoryResume.filePath === retained.filePath ? memoryResume.time : 0;
     const time = owner && owner.player ? owner.player.snapshot().time : retainedTime;
-    preferences.save(percent);
+    preferences.save(ramMiB);
     memoryResume = retained ? { id: retained.id, filePath: retained.filePath, time } : null;
     notify();
     if (closed || token !== epoch) return { status: 'superseded' };
@@ -327,7 +340,7 @@ function createSession(options) {
       const item = comments.items.find(value => value.id === id);
       return item && item.time <= duration ? control('seek', [item.time, { kind: 'annotation', final: true, inputAt: now() }], ['paused', 'playing', 'seeking']) : Promise.resolve({ status: 'ignored' });
     },
-    annotationHistory: () => Object.freeze(annotationReceipts.slice()), setMemoryPercent,
+    annotationHistory: () => Object.freeze(annotationReceipts.slice()), setMemoryMiB, clearOtherCaches,
     libraryChanged: () => clear('library-changed'), close: () => clear('closed'), snapshot, memorySnapshot });
 }
 module.exports = { createSession };

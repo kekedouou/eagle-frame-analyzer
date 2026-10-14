@@ -2,12 +2,13 @@
 // Local RAM preference only. No Eagle/library access or media/cache deletion.
 const fs = require('fs'), path = require('path'), os = require('os');
 const OWNER = 'eva-memory-preference-v1', DEFAULT_BYTES = 1024 ** 3, MAX_FILE = 4096;
-function memoryValue(total, percent, persisted = false) {
-  if (!Number.isSafeInteger(total) || total <= 0 || !Number.isFinite(percent) || percent <= 0 || percent > 100)
-    throw new Error('请输入大于0且不超过100的RAM百分比。');
-  const ramBytes = Math.floor(total * (percent / 100));
-  if (!Number.isSafeInteger(ramBytes) || ramBytes < 8 || ramBytes > total) throw new Error('RAM额度无效或太小。');
-  return Object.freeze({ percent, ramBytes, compressedRamBytes: Math.floor(ramBytes / 8), totalRamBytes: total, persisted });
+const OPTIONS = Object.freeze([512, ...Array.from({ length: 10 }, (_, i) => (i + 1) * 1024)]);
+function memoryValue(total, ramMiB, persisted = false) {
+  if (!Number.isSafeInteger(total) || total <= 0 || !OPTIONS.includes(ramMiB))
+    throw new Error('请选择512MB或1GB至10GB的缓存额度。');
+  const ramBytes = ramMiB * 1024 ** 2;
+  if (ramBytes > total) throw new Error('缓存额度不能超过本机物理内存。');
+  return Object.freeze({ ramMiB, ramBytes, compressedRamBytes: Math.floor(ramBytes / 8), totalRamBytes: total, persisted });
 }
 function createMemoryPreferences(options) {
   const io = options.io || fs, root = path.resolve(options.pluginRoot), total = options.totalRamBytes === undefined ? os.totalmem() : options.totalRamBytes;
@@ -29,13 +30,22 @@ function createMemoryPreferences(options) {
     const bytes = io.readFileSync(file);
     if (identity(before) !== identity(stat(file)) || bytes.length !== before.size) throw new Error('内存设置读取期间改变。');
     const value = JSON.parse(bytes.toString('utf8'));
-    if (value.owner !== OWNER || Object.keys(value).sort().join(',') !== 'owner,percent') throw new Error('内存设置格式无法识别；原件已保留。');
-    return memoryValue(total, value.percent, true);
+    if (value.owner !== OWNER) throw new Error('内存设置格式无法识别；原件已保留。');
+    if (Object.keys(value).sort().join(',') === 'owner,percent') {
+      if (!Number.isFinite(value.percent) || value.percent <= 0 || value.percent > 100) throw new Error('旧内存设置无效；原件已保留。');
+      // Read old percentages without rewriting; show the nearest available tier.
+      const oldMiB = total * (value.percent / 100) / 1024 ** 2;
+      const candidates = OPTIONS.filter(n => n * 1024 ** 2 <= total);
+      const tier = candidates.reduce((a, b) => Math.abs(b - oldMiB) < Math.abs(a - oldMiB) ? b : a, candidates[0]);
+      return Object.freeze({ ...memoryValue(total, tier, true), legacyConverted: true });
+    }
+    if (Object.keys(value).sort().join(',') !== 'owner,ramMiB') throw new Error('内存设置格式无法识别；原件已保留。');
+    return memoryValue(total, value.ramMiB, true);
   }
-  let current = read() || memoryValue(total, Math.min(DEFAULT_BYTES, total) / total * 100);
-  return Object.freeze({ snapshot: () => current, preview: percent => memoryValue(total, percent), save(percent) {
-    const next = memoryValue(total, percent, true); checkRoot(); read(); const before = identity(stat(file));
-    const bytes = Buffer.from(JSON.stringify({ owner: OWNER, percent }, null, 2));
+  let current = read() || memoryValue(total, DEFAULT_BYTES / 1024 ** 2);
+  return Object.freeze({ snapshot: () => current, preview: ramMiB => memoryValue(total, ramMiB), save(ramMiB) {
+    const next = memoryValue(total, ramMiB, true); checkRoot(); read(); const before = identity(stat(file));
+    const bytes = Buffer.from(JSON.stringify({ owner: OWNER, ramMiB }, null, 2));
     let fd = null, owned = null;
     try {
       fd = io.openSync(temp, 'wx'); owned = io.fstatSync(fd);
@@ -51,4 +61,4 @@ function createMemoryPreferences(options) {
     }
   } });
 }
-module.exports = { createMemoryPreferences, memoryValue, OWNER, DEFAULT_BYTES };
+module.exports = { createMemoryPreferences, memoryValue, OWNER, DEFAULT_BYTES, OPTIONS };

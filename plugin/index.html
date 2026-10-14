@@ -38,10 +38,21 @@
       <p id="memoryUsage" class="muted" title="当前视频由播放器管理的JPEG、解码图像、音频与在途预留；不包含浏览器、GPU或FFmpeg额外占用。">视频缓存 RAM：—</p>
       <details class="memory-settings">
         <summary>内存设置</summary>
-        <label for="memoryPercent">缓存最多使用本机RAM的</label>
-        <div class="memory-controls"><input id="memoryPercent" type="number" min="0" max="100" step="any" aria-label="缓存RAM百分比" disabled><span>%</span><button id="memoryApply" type="button" disabled>应用</button></div>
+        <label for="memoryMiB">视频缓存内存上限</label>
+        <div class="memory-controls"><select id="memoryMiB" aria-label="视频缓存内存上限" disabled>
+          <option value="512">512 MB</option><option value="1024">1 GB</option><option value="2048">2 GB</option>
+          <option value="3072">3 GB</option><option value="4096">4 GB</option><option value="5120">5 GB</option>
+          <option value="6144">6 GB</option><option value="7168">7 GB</option><option value="8192">8 GB</option>
+          <option value="9216">9 GB</option><option value="10240">10 GB</option>
+        </select><button id="memoryApply" type="button" disabled>应用</button></div>
         <p id="memoryAllowance" class="muted"></p>
         <p id="memoryStatus" class="muted" role="status"></p>
+      </details>
+      <details class="memory-settings">
+        <summary>缓存管理</summary>
+        <p class="muted">1天未使用的缓存在下次载入时清理；磁盘上限5GB。</p>
+        <button id="cacheClearOther" type="button" disabled>清除其他视频缓存</button>
+        <p id="cacheClearStatus" class="muted" role="status"></p>
       </details>
       <p id="status" class="status" role="status">等待素材</p>
       <p id="error" class="error" role="alert" hidden></p>

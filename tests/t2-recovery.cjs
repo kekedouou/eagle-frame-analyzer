@@ -58,7 +58,7 @@ async function main() {
   await test('legacy PID-only writer is retained even when the PID is absent', () => {
     const h = harness(), tx = h.cache.begin({ sourceSha256: hash(2) }), node = h.nodes.get(path.join(h.root, 'writer.lock'));
     const value = JSON.parse(node.data); delete value.processIdentity; delete value.children; node.data = Buffer.from(JSON.stringify(value));
-    const before = rootFiles(h), cache = boot(h, []); assert.throws(() => cache.begin({ sourceSha256: hash(2) }), /未确认的写锁/); assert.strictEqual(rootFiles(h), before);
+    const before = rootFiles(h), cache = boot(h, []); assert.throws(() => cache.begin({ sourceSha256: hash(2) }), e=>e.code==='CACHE_BUSY'); assert.strictEqual(rootFiles(h), before);
   });
   await test('unknown partial file and truncated ledger are preserved before lock deletion', async () => {
     for (const scenario of ['unknown', 'truncated', 'changed-inode']) {

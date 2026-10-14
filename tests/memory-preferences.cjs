@@ -22,21 +22,22 @@ function model() {
 }
 {
   const m = model(), p = m.create(); assert.equal(m.files.size, 0); assert.equal(p.snapshot().ramBytes, 1024 ** 3);
-  assert.equal(p.snapshot().percent, 2.5); assert.equal(p.snapshot().compressedRamBytes, 128 * 1024 ** 2);
-  p.save(5); assert.equal(p.snapshot().ramBytes, 2 * 1024 ** 3); assert(!m.files.has(temp));
-  assert.equal(m.create().snapshot().percent, 5); assert.equal(m.create(32 * 1024 ** 3).snapshot().ramBytes, Math.floor(32 * 1024 ** 3 * .05));
-  for (const x of [0, -1, 100.1, NaN, Infinity, '5']) assert.throws(() => p.save(x));
-  assert.equal(m.create().snapshot().percent, 5); assert.equal(memoryValue(8 * 1024 ** 3, 100).ramBytes, 8 * 1024 ** 3);
+  assert.equal(p.snapshot().ramMiB, 1024); assert.equal(p.snapshot().compressedRamBytes, 128 * 1024 ** 2);
+  p.save(2048); assert.equal(p.snapshot().ramBytes, 2 * 1024 ** 3); assert(!m.files.has(temp));
+  assert.equal(m.create().snapshot().ramMiB, 2048); assert.equal(m.create(32 * 1024 ** 3).snapshot().ramBytes, 2 * 1024 ** 3);
+  for (const x of [0, -1, 100.1, NaN, Infinity, '2048', 1536, 11264]) assert.throws(() => p.save(x));
+  for (const n of [512, ...Array.from({length:10},(_,i)=>(i+1)*1024)]) assert.equal(memoryValue(40 * 1024 ** 3,n).ramBytes,n * 1024 ** 2);
+  assert.throws(()=>memoryValue(4 * 1024 ** 3,5120),/物理内存/);
 }
 {
-  const m = model(), p = m.create(); p.save(2.5); const original = Buffer.from(m.files.get(file).data);
-  m.io.failRename = true; assert.throws(() => p.save(5), /rename failed/);
-  assert(m.files.get(file).data.equals(original)); assert(!m.files.has(temp)); assert.equal(p.snapshot().percent, 2.5);
+  const m = model(), p = m.create(); p.save(1024); const original = Buffer.from(m.files.get(file).data);
+  m.io.failRename = true; assert.throws(() => p.save(2048), /rename failed/);
+  assert(m.files.get(file).data.equals(original)); assert(!m.files.has(temp)); assert.equal(p.snapshot().ramMiB, 1024);
 }
 {
-  const m = model(), p = m.create(); p.save(2.5);
-  m.io.onWrite = () => m.put(file, JSON.stringify({ owner: OWNER, percent: 7 }));
-  assert.throws(() => p.save(5), /保存期间改变/); assert.equal(m.create().snapshot().percent, 7); assert(!m.files.has(temp));
+  const m = model(), p = m.create(); p.save(1024);
+  m.io.onWrite = () => m.put(file, JSON.stringify({ owner: OWNER, ramMiB: 3072 }));
+  assert.throws(() => p.save(2048), /保存期间改变/); assert.equal(m.create().snapshot().ramMiB, 3072); assert(!m.files.has(temp));
 }
 for (const kind of ['link', 'links', 'large', 'foreign', 'broken']) {
   const m = model(); m.put(file, JSON.stringify({ owner: OWNER, percent: 2.5 })); const item = m.files.get(file);
@@ -48,7 +49,12 @@ for (const kind of ['link', 'links', 'large', 'foreign', 'broken']) {
   assert.throws(() => m.create()); assert.equal(m.files.size, 1);
 }
 {
-  const m = model(), p = m.create(); m.put(temp, 'other writer'); assert.throws(() => p.save(5));
+  const m = model(), p = m.create(); m.put(temp, 'other writer'); assert.throws(() => p.save(2048));
   assert.equal(m.files.get(temp).data.toString(), 'other writer'); assert(!m.files.has(file));
 }
-console.log('Memory preference models: percentage/default/proportion, persistence/machine change, atomic failure/concurrent change, unsafe file and active-writer protection passed; no actual files written.');
+{
+  const m=model();m.put(file,JSON.stringify({owner:OWNER,percent:2.5}));const before=Buffer.from(m.files.get(file).data);
+  assert.equal(m.create(42551783424).snapshot().ramMiB,1024);assert(m.create().snapshot().legacyConverted);assert(m.files.get(file).data.equals(before));
+  const p=m.create();p.save(1024);assert.deepEqual(JSON.parse(m.files.get(file).data),{owner:OWNER,ramMiB:1024});assert(!m.create().snapshot().legacyConverted);
+}
+console.log('Memory preference models: fixed tiers/limits/proportion, legacy read-only conversion, persistence/machine change, atomic failure/concurrent change, unsafe file and active-writer protection passed; no actual files written.');

@@ -40,16 +40,21 @@ test('Space ignores repeat, composition, modifiers, text and focused controls', 
   assert(spaceAllowed({ key: ' ', target: target() }));
   for (const value of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { shiftKey: true }, { target: { isContentEditable: true } }, { target: { closest: () => ({}) } }]) assert(!spaceAllowed({ key: ' ', ...value }));
 });
-test('RAM form retains edited percentage across frame updates and only applies on click', () => {
-  const h = harness(), memory = { percent: 2.5, ramBytes: 1024 ** 3 };
+test('RAM form retains edited tier across frame updates and only applies on click', () => {
+  const h = harness(), memory = { ramMiB: 1024, ramBytes: 1024 ** 3 };
   h.ui.update({ ...h.state, memorySettings: memory });
-  h.el('memoryPercent').value = '5'; h.ui.update({ ...h.state, memorySettings: memory });
-  assert.equal(h.el('memoryPercent').value, '5'); assert.equal(h.el('memoryApply').disabled, false);
+  h.el('memoryMiB').value = '2048'; h.ui.update({ ...h.state, memorySettings: memory });
+  assert.equal(h.el('memoryMiB').value, '2048'); assert.equal(h.el('memoryApply').disabled, false);
   let requested = null;
-  h.ui.bindSession({ setMemoryPercent(value) { requested = value; return Promise.resolve({ status: 'applied' }); } });
-  h.ui.update({ ...h.state, memorySettings: memory }); h.el('memoryPercent').value = '5';
-  assert.equal(requested, null); h.el('memoryApply').fire('click'); assert.equal(requested, 5);
+  h.ui.bindSession({ setMemoryMiB(value) { requested = value; return Promise.resolve({ status: 'applied' }); } });
+  h.ui.update({ ...h.state, memorySettings: memory }); h.el('memoryMiB').value = '2048';
+  assert.equal(requested, null); h.el('memoryApply').fire('click'); assert.equal(requested, 2048);
   assert.equal(h.el('memoryApply').disabled, true); h.ui.destroy();
+});
+test('Other-cache clearing is disabled outside readiness and blocks duplicate clicks during cleanup',()=>{
+  const h=harness();let calls=0;h.ui.bindSession({clearOtherCaches(){calls++;return Promise.resolve({status:'cleared',cleared:1,freedBytes:1024});}});
+  h.ui.update({...h.state,memorySettings:{ramMiB:1024,ramBytes:1024**3}});
+  h.el('cacheClearOther').fire('click');h.el('cacheClearOther').fire('click');assert.equal(calls,1);assert(h.el('cacheClearOther').disabled);assert(h.el('memoryApply').disabled);h.ui.destroy();
 });
 test('Space toggles once after dragging leaves the custom timeline focused', () => {
   const h = harness(); h.el('timeline').fire('pointerdown', { clientX: 240 }); h.win.fire('pointerup', { clientX: 240, buttons: 0 });
