@@ -13,6 +13,12 @@
 | 阶段 3C 工程审查与计划 | 用户验收通过并结束，固定 phase3c-approved 工程文档节点 | 不代表产品实测通过或阶段 4 执行授权；具体收尾见下节 |
 | 阶段 4 MVP 开发 | T1限定验收通过；两组T2独立长测获认可；T3单素材关卡验收通过 | T2未整体验收/未建标签；同组重复性、宿主专项与T4全矩阵保留 |
 
+## 2026-10-14 一次性独立绿色展示
+
+用户授权制作无需Eagle的临时演示包，允许省略标注，明确不发展独立产品、不影响插件阶段开发。专用demos/standalone-preview只保存适配入口、打包/验证方法与[执行记录](../demos/standalone-preview/RECORD.md)；运行文件和证据在其忽略目录，唯一展示输出在dist。源码基础6693994，独立Electron/FFmpeg，可携带数据；正式plugin及中性测试入口不改。本次不代表T2/T4完成；交付后恢复原插件T2缺口/T4前置工作。目录预算、清理边界见[局部规则](../demos/standalone-preview/AGENTS.md)。
+
+已完成本地绿色包：`dist/video-analysis-standalone-preview-20261014.zip`（233.3MiB、105文件）。随包FFmpeg/ffprobe，无需Eagle，支持MP4/文件夹拖入及列表切换、自动720p缓存、播放/空格/逐帧/快拖和RAM设置，无标注/测试按钮。独立Electron实测三编码链路、设置重开与实际生成61帧时关窗清理通过；不冒充Eagle或主观体验验收。新版FFmpeg日志交错经展示副本单滤镜图适配，正式media不改。验证数据278文件/约9.4MiB已核对清理，包不含素材/旧缓存/设置。默认检查及ZIP逐文件核对通过；未公开发布，第三方全量许可证/源码审计仍待正式分发前处理。详见[展示说明](../demos/standalone-preview/README.md)与执行记录；当前T2/T4及原验收标签状态不变。
+
 ## 2026-10-14 临时内测展示交付
 
 用户要求急用完整体验、不要测试按钮、附适合GitHub展示的介绍，且不能改变当前开发阶段。以6693994的正式plugin为冻结源码，新增打包脚本与[内测介绍](beta-preview.md)，只改变副本manifest的名称/ID/关键词；正式plugin、tests/host/window入口和配置均保持不动。输出dist下独立目录及ZIP，独立插件ID为EVAVIDEOANALYSISBETA20261014；缓存/设置独立，Eagle素材标注仍共享。dist不入Git，不带真实素材、缓存、偏好或测试文件；无需额外缓存备份，冻结源码已在Git保全。不表示Eagle打包副本已验收。
