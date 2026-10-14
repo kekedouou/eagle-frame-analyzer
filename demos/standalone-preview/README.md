@@ -10,7 +10,7 @@
 
 从发行页下载video-analysis-standalone-0.1.0-win-x64.zip，整包解压到非C盘可写目录，双击 `VideoAnalysisPreview.exe`，拖入视频或文件夹。也可用右侧打开按钮。需要 Windows 10 22H2 或更新的64位Windows，无需安装Eagle、Node.js或FFmpeg。不要选择GitHub自动生成的Source code ZIP。
 
-详细随包操作、缓存保留与清理见 [USAGE.txt](USAGE.txt)。data与软件同盘，磁盘缓存5GiB；RAM额度按本机百分比设置，默认等效1GiB。不是整个程序内存硬上限。完整缓存复用仍需核验/准备RAM，不承诺秒开。
+详细操作、缓存保留与清理见 [0.1.0使用说明](../../docs/releases/standalone-v0.1.0.md)及公开ZIP中的README.txt。USAGE.txt仅保留初次冻结包的构建输入。data与软件同盘，磁盘缓存5GiB；RAM额度按本机百分比设置，默认等效1GiB。不是整个程序内存硬上限。完整缓存复用仍需核验/准备RAM，不承诺秒开。
 
 ## 文件职责与恢复
 
