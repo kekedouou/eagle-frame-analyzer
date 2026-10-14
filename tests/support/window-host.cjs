@@ -155,7 +155,8 @@ function run(options = {}) {
       launchContext.kind !== 'real-Eagle-formal-code-independent-entry' || !samePath(launchContext.mappedFormalRoot, pluginRoot) ||
       typeof options.verifyLaunch !== 'function'))
     throw new Error('独立宿主入口来源无效或超过16KiB。');
-  const origin = launchContext ? 'automatic-real-Eagle-independent-entry-formal-code' : 'user-started-real-Eagle-formal-window';
+  const origin = launchContext && launchContext.ramDiagnostic ? 'automatic-real-Eagle-in-memory-RAM-candidate' :
+    launchContext ? 'automatic-real-Eagle-independent-entry-formal-code' : 'user-started-real-Eagle-formal-window';
   const first = bridge.snapshot();
   if (!first || first.state !== 'paused' || !first.playback || !first.loadMetrics) throw new Error('请先等待正式视频首帧暂停就绪，再启动验证。');
   if (typeof first.pluginRoot !== 'string' || !path.isAbsolute(first.pluginRoot) || typeof pluginRoot !== 'string' || !samePath(first.pluginRoot, pluginRoot))

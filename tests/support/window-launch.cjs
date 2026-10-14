@@ -92,11 +92,28 @@ function install(options) {
       if (!plugin || typeof plugin.path !== 'string' || path.resolve(plugin.path).toLowerCase() !== prepared.host.toLowerCase())
         throw new Error('SDK提供的验证插件目录与准备记录不符。');
       safeToRecord = true;
+      let ramContext = null;
+      if (prepared.marker.ramDiagnostic) {
+        const fs = require('fs'), crypto = require('crypto'), sha = value => crypto.createHash('sha256').update(value).digest('hex');
+        let selectionTimer, selected;
+        try { selected = await Promise.race([require('../../plugin/eagle.cjs').createEagleAdapter(eagle).captureSelected(),
+          new Promise((_, reject) => { selectionTimer = win.setTimeout(() => reject(new Error('RAM对照选中核对超过10秒，未执行准备。')), 10000); })]); }
+        finally { win.clearTimeout(selectionTimer); }
+        if (selected.itemId !== 'MV6H7OK0MBGX2') throw new Error('本次1GiB对照请单选“喜多郁代”，未执行缓存或测量。');
+        const text = fs.readFileSync(path.join(prepared.plugin, 'player.js'), 'utf8');
+        if (sha(Buffer.from(text)) !== prepared.marker.sourceHashes['plugin/player.js']) throw new Error('Player changed before RAM capture.');
+        const captured = require('./ram-diagnostic.cjs').activate(win, text, 1024);
+        ramContext = { ...prepared.marker.ramDiagnostic, originalPlayerSha256: sha(Buffer.from(text)),
+          candidatePlayerSha256: sha(Buffer.from(captured.source)), transformations: captured.transformations,
+          boundary: 'Test-only in-memory Player capture. Formal default files unchanged. Real Eagle driver retains 1.5GiB renderer stop line.' };
+      }
       context = { kind: 'real-Eagle-formal-code-independent-entry', sdkPluginRoot: prepared.host,
+        ramDiagnostic: ramContext,
         annotationApproval: activeMode === 'annotations' ? prepared.marker.writeApproval || null : null,
         entryScheme: options.entryScheme || 'unspecified',
         mappedFormalRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
-        boundary: 'Real SDK/media/cache/UI/player; test entry maps create.path only. Not the formal manifest startup.', sdkCallbackAt: callbackAt };
+        boundary: ramContext ? 'Real SDK/media/cache/UI with explicitly captured in-memory RAM Player candidate; mapped root, not formal default startup.' :
+          'Real SDK/media/cache/UI/player; test entry maps create.path only. Not the formal manifest startup.', sdkCallbackAt: callbackAt };
       state = 'preparing';
       const aborted = new Promise((_, reject) => { cancelPreparation = reject; });
       // Consume a cancellation even if a synchronous callback throws first.
@@ -108,6 +125,11 @@ function install(options) {
       context.initialCreateResult = initial && initial.status || 'unspecified';
       if (stopping) throw new Error('准备阶段已取消，未执行测量。');
       const bridge = win.EVADiagnostics, snapshot = await waitReady(bridge, context, aborted);
+      if (ramContext && (!snapshot.sourceIdentity || snapshot.sourceIdentity.itemId !== 'MV6H7OK0MBGX2' ||
+          snapshot.sourceIdentity.sha256 !== 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658'))
+        throw new Error('1GiB对照素材在准备过程中改变或源SHA不符，不执行测量。');
+      if (ramContext && (snapshot.playback.budget.limit !== 1024 ** 3 || snapshot.playback.compressed.limitBytes !== 128 * 1024 ** 2))
+        throw new Error('实际Player预算与1GiB/128MiB对照配置不符，不执行测量。');
       clearTimer(); cancelPreparation = null;
       if (stopping) throw new Error('准备阶段已取消，未执行测量。');
       verify(repo);
@@ -117,7 +139,7 @@ function install(options) {
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
       context.readyEpoch = snapshot.epoch;
       context.readyTrigger = snapshot.loadMetrics.trigger;
-      state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : 'T2 自动测量 · 请保持前台，约2分钟';
+      state = 'measuring'; doc.title = activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · 1GiB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
       const runner = activeMode === 'annotations' && !options.run ? require('./window-annotations.cjs').run : activeMode === 'resource' && !options.run ? require('./window-resource.cjs').run : start;
       job = runner({ bridge, document: doc, window: win, pluginRoot: prepared.plugin, launchContext: context,
         verifyLaunch: () => verify(repo), eagle,

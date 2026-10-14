@@ -8,7 +8,8 @@ const OUTPUTS = ['index.local.html', 'manifest.json', 'logo.local.png'];
 const SOURCES = ['plugin/manifest.json', 'plugin/index.html', 'plugin/styles.css', 'plugin/logo.png',
   ...['app.js', 'ui.js', 'player.js', 'frame-index.cjs', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs'].map(n => 'plugin/' + n),
   'scripts/prepare-window-host.cjs', 'tests/host/window/bootstrap.js', 'tests/support/window-launch.cjs', 'tests/support/window-host.cjs',
-  'tests/support/window-resource.cjs', 'tests/support/window-annotations.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs'];
+  'tests/support/window-resource.cjs', 'tests/support/window-annotations.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs', 'tests/support/t2-evidence.cjs',
+  'tests/support/ram-diagnostic.cjs'];
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 function same(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
 function directory(dir, io) {
@@ -50,7 +51,12 @@ function validApproval(value) {
     typeof value.text === 'string' && value.text.trim() && Number.isFinite(value.time) && value.time >= 0 &&
     typeof value.userQuote === 'string' && value.userQuote.trim() && value.addOnce === true && typeof value.allowDelete === 'boolean';
 }
-function generated(root, io, mode = 'performance', writeApproval = null) {
+function validRam(value) {
+  return value == null || value.schema === 'T2-ram-host-v1' && value.ramMiB === 1024 && value.compressedMiB === 128 &&
+    Object.keys(value).sort().join(',') === 'compressedMiB,ramMiB,schema';
+}
+function generated(root, io, mode = 'performance', writeApproval = null, ramDiagnostic = null) {
+  if (!validRam(ramDiagnostic) || ramDiagnostic && mode !== 'performance') throw new Error('RAM candidate requires the bounded performance protocol.');
   if (!['performance', 'resource', 'annotations'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
     throw new Error('Unknown measurement protocol or annotation approval.');
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
@@ -63,6 +69,7 @@ function generated(root, io, mode = 'performance', writeApproval = null) {
   const marker = { schema: SCHEMA, mode, hostRoot: p.host, pluginRoot: p.plugin, sourceHashes: hashes,
     files: Object.fromEntries(OUTPUTS.map(n => [n, sha(files[n])])) };
   if (mode === 'annotations') marker.writeApproval = writeApproval;
+  if (ramDiagnostic) marker.ramDiagnostic = ramDiagnostic;
   files['prepared.local.json'] = Buffer.from(JSON.stringify(marker, null, 2));
   const bytes = Object.values(files).reduce((n, data) => n + data.length, 0);
   if (bytes > LIMIT) throw new Error('Generated test entry exceeds 256KiB.');
@@ -76,8 +83,10 @@ function verify(repo, io = fs, verifySources = true) {
   // source list. Actual launch verification always requires the complete list.
   const preceding = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-resource.cjs').sort());
   const beforeAnnotations = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-annotations.cjs').sort());
-  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations);
-  if (marker.mode !== undefined && !['performance', 'resource', 'annotations'].includes(marker.mode) || !validApproval(marker.writeApproval)) throw new Error('Unknown measurement protocol.');
+  const beforeRam = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/ram-diagnostic.cjs').sort());
+  const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations || keys === beforeRam);
+  if (marker.mode !== undefined && !['performance', 'resource', 'annotations'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
+      !validRam(marker.ramDiagnostic) || marker.ramDiagnostic && marker.mode !== 'performance') throw new Error('Unknown measurement protocol.');
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
       !knownSourceList || Object.values(marker.sourceHashes).some(value => !/^[0-9a-f]{64}$/.test(value))) throw new Error('Unknown test entry ownership or file list.');
@@ -89,8 +98,8 @@ function verify(repo, io = fs, verifySources = true) {
     throw new Error('正式代码或测试驱动已变化，请由Codex重新准备验证入口。');
   return { ...p, marker, bytes };
 }
-function prepare(repo, io = fs, mode = 'performance', writeApproval = null) {
-  const value = generated(repo, io, mode, writeApproval), names = [...OUTPUTS, 'prepared.local.json'];
+function prepare(repo, io = fs, mode = 'performance', writeApproval = null, ramDiagnostic = null) {
+  const value = generated(repo, io, mode, writeApproval, ramDiagnostic), names = [...OUTPUTS, 'prepared.local.json'];
   if (names.some(n => io.existsSync(path.join(value.host, n)))) verify(repo, io, false);
   for (const name of names) {
     const file = path.join(value.host, name);
@@ -99,7 +108,8 @@ function prepare(repo, io = fs, mode = 'performance', writeApproval = null) {
   return verify(repo, io);
 }
 if (require.main === module) {
-  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance'); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
+  try { const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
+    process.argv.includes('--ram-compare') ? { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 } : null); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

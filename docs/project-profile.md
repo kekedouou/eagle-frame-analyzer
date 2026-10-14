@@ -1,5 +1,7 @@
 # 项目说明
 
+1GiB宿主对照准备：`node scripts/prepare-window-host.cjs --ram-compare`复用tests/host/window，T2标题/ID不变，正文运行前核对指定喜多郁代及内存捕获预算；同一performance协议，仅显式1024/128MiB变体，原Player磁盘代码不改。候选源码SHA/原SHA另记launchContext，不能称与正式默认完全相同。普通无参数prepare恢复默认、清除诊断标记；resource/annotations模式拒绝此标记，T3许可不续期。真实Eagle原1.5GiB renderer观察线不变。
+
 2026-10-14新增受限对照入口：`node scripts/verify-t1-browser.cjs --ram-compare --ram-mib=512|1024`。虽复用历史浏览器工具文件，RAM模式明确为T2证据、固定喜多郁代，使用仅内存捕获的预算变体，正式Player默认不变；参数是二选一，不能把竖线原样作为shell命令。各命令独立生成有界诊断和清理自身scratch，不生成/删除原源或完整缓存、不操作Eagle。边界见[计划](development-plan.md#当前获批范围内的生命周期补验)。
 
 ## 身份与入口

@@ -35,6 +35,16 @@ function fileModel() {
   return { root, host, files, links, hardlinks, io, writes };
 }
 function fileTests() {
+  {
+    const ram = fileModel(), config = { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 };
+    const prepared = entry.prepare(ram.root, ram.io, 'performance', null, config);
+    assert.deepStrictEqual(prepared.marker.ramDiagnostic, config);
+    assert.throws(() => entry.prepare(ram.root, ram.io, 'resource', null, config));
+    assert.throws(() => entry.prepare(ram.root, ram.io, 'performance', null, { ...config, ramMiB: 2048 }));
+    assert.throws(() => entry.prepare(ram.root, ram.io, 'performance', null, { ...config, extra: true }));
+    const reset = entry.prepare(ram.root, ram.io); assert.strictEqual(reset.marker.ramDiagnostic, undefined);
+    ok('RAM candidate is explicitly bounded, isolated from long/annotation modes and cleared by ordinary preparation');
+  }
   const m = fileModel(), result = entry.prepare(m.root, m.io);
   assert(result.bytes <= entry.LIMIT); assert.strictEqual(m.writes.length, 4);
   const html = m.files.get(path.join(m.host, 'index.local.html')).toString();

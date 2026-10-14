@@ -268,6 +268,7 @@ async function auditHost(runId) {
   try {
     const result = store.save('audit', { protocol: 't2-saved-host-audit-v2', runId, receiptSha256: saved.sha256, source: summary.source,
       evidenceIntegrityPassed: true, complete: summary.complete, earlyRegressionPassed: summary.earlyRegressionPassed, error: summary.error || null,
+      ramDiagnostic: summary.launchContext && summary.launchContext.ramDiagnostic || null,
       currentSourceMatches, sourceShaVerified: true, manifestSha256: manifest.manifestSha256, allAssetHashesVerified: false,
       rounds, interruptedTraceEvents: interrupted ? interrupted.length : 0,
       interruptedDraws: interrupted ? interrupted.filter(e => e.type === 'draw').length : 0,

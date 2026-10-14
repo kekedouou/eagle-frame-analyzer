@@ -12,7 +12,8 @@ const pinned = RAM_DIAGNOSTIC ? require('./verify-t2-close.cjs')._test.selectedI
 const SHA = pinned ? pinned.sha256 : 'aabf057017744c38737f65c4e7a983a1f8d9e5258c178bcc3e723dcdb56ccc53';
 const SOURCE = pinned ? pinned.file : process.env.EVA_T1_DIAGNOSTIC_SOURCE;
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const MIB = 1024 ** 2, SCRATCH_LIMIT = 64 * MIB, RSS_LIMIT = 1.5 * 1024 ** 3;
+const MIB = 1024 ** 2, SCRATCH_LIMIT = 64 * MIB,
+  RSS_LIMIT = require('../tests/support/ram-diagnostic.cjs').rssLimit(process.argv);
 const nonce = crypto.randomBytes(12).toString('hex'), scratch = path.join(repo, 'verification-runs', 'browser-scratch-' + nonce);
 const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
@@ -221,7 +222,7 @@ async function main() {
         else rows.push({ atMs: performance.now(), chromeRss: rss.bytes, nodeRss: process.memoryUsage().rss,
           missedExitedProcessIds: rss.missedExitedProcessIds });
       }
-      if (observed >= RSS_LIMIT) stop(new Error('Owned process observed 1.5GiB RSS stop line reached.'));
+      if (observed >= RSS_LIMIT) stop(new Error('Owned process observed ' + RSS_LIMIT / 1024 ** 3 + 'GiB RSS stop line reached.'));
     } catch (error) { stop(error); } finally { monitoring = false; }
   }, 1000);
   const settingsList = RAM_DIAGNOSTIC ? [1, 2, 3].map(n => ({ name: 'whole-video-cold-decoded-' + n,
