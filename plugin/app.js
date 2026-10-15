@@ -77,6 +77,12 @@
     closed = true;
     try { closeTask = Promise.resolve(session ? session.close() : null); }
     catch (error) { closeTask = Promise.reject(error); }
+    // Opt-in observation only: the actual cleanup result, not a close request
+    // or the session's early "closed" state. No subscriber means no recording.
+    closeTask.then(result => { if (diagnostics) diagnostics.publish('close-result', result); }, failure => {
+      if (diagnostics) diagnostics.publish('close-result', { status: 'error', error: {
+        message: String(failure && failure.message || failure).slice(0, 1024) } });
+    });
     closeTask.catch(() => {});
     ui.destroy(); return closeTask;
   }

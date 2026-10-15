@@ -119,13 +119,13 @@ function fileTests() {
   let installed = null;
   const win = { location: { href: pathToFileURL(path.join(m.host, 'index.local.html')).href + '?cache=1#test' } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: win, document: {}, eagle: {},
-    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v2", install(options) { installed = options; return {}; } } : require(name); } });
+    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v3", install(options) { installed = options; return {}; } } : require(name); } });
   assert.strictEqual(installed.hostRoot, m.host); assert(win.EVAWindowAutomatic);
   installed = null;
   const eagleUrl = pathToFileURL(path.join(m.host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAWINDOWVERIFY20261013/') + '?theme=DARK&locale=zh_CN#test';
   const eagleWin = { location: { href: eagleUrl } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: eagleWin, document: {}, eagle: {},
-    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v2", install(options) { installed = options; return {}; } } : require(name); } });
+    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v3", install(options) { installed = options; return {}; } } : require(name); } });
   assert.strictEqual(installed.hostRoot, m.host); assert.strictEqual(installed.entryScheme, 'eagleplugin:'); assert(eagleWin.EVAWindowAutomatic);
   ok('Windows Eagle main-process eagleplugin URL reaches the test launcher with Chinese/space paths');
   for (const address of ['https://invalid.test', 'eagleplugin://id/remote/path']) {
@@ -177,14 +177,14 @@ function launchModel(settings = {}) {
     run(args) { driverCalls++; options.lastDriver = args; if (settings.startFailure) throw new Error('controlled driver setup failure');
       return { done: jobDone.promise, cancel() { stopCalls++; }, unsavedEvidence: () => 'retained-driver-evidence' }; },
     createStore() { return { start(value) { assert.strictEqual(value.reserveBytes, 64 * 1024); },
-      save(kind, value) { if (settings.saveFailure) throw new Error('controlled evidence full');
+      save(kind, value) { if (settings.saveFailure || settings.closeSaveFailure && value.schema === 'window-lifecycle-cleanup-result-v1') throw new Error('controlled evidence full');
         saved.push({ kind, value }); return { file: 'memory-failure' }; }, close() { storeCloses++; } }; }
   };
   let controller;
   if (settings.bootstrap) {
     win.location = { href: pathToFileURL(path.join(host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAWINDOWVERIFY20261013/') + '?theme=DARK&locale=zh_CN' };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: win, document: doc, eagle,
-      require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v2", install: input => install({ ...options, ...input }) } : require(name); } });
+      require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v3", install: input => install({ ...options, ...input }) } : require(name); } });
     controller = win.EVAWindowAutomatic;
     if (settings.expectBootstrapFailure) assert.equal(controller, undefined); else assert(controller);
   } else controller = install(options);
@@ -192,10 +192,10 @@ function launchModel(settings = {}) {
     const ui = { canvas: {}, bindSession() {}, update() {}, destroy() {} };
     win.EVAUI = { createUI: () => ui };
     win.EVAPlayer = { Player: function () { return { async load() {},
-      snapshot: () => ({ state: 'paused', frameId: 0, frameOrdinal: 0, time: 0 }),
+      snapshot: () => ({ state: 'paused', frameId: 0, frameOrdinal: 0, time: 0, budget: { used: 0, limit: 1024 ** 3 } }),
       async dispose() {}, async play() {}, async pause() {}, async seek() {}, async step() {} }; } };
     const modules = {
-      'cache.cjs': { createCache: () => ({ readAsset() {}, release() {} }) },
+      'cache.cjs': { createCache: () => ({ readAsset() {}, release() { return settings.releaseGate ? settings.releaseGate.promise : undefined; } }) },
       'eagle.cjs': { createEagleAdapter: () => ({ captureSelected: () => ({ id: 'selected', filePath: path.join(plugin, '中文 视频.mp4') }),
         discoverTools: () => ({ ffmpeg: 'memory-only' }) }) },
       'media.cjs': { createMedia: () => ({ async prepare(value) { await mediaReady.promise; clock += 100;
@@ -214,6 +214,7 @@ function launchModel(settings = {}) {
   return { win, doc, nodes, options, controller, timers, saved, host, plugin, jobDone, mediaReady,
     runSDK: () => runCallback(),
     publish(value) { settings.snapshot = value; for (const callback of [...observers]) callback({ type: 'load-result' }); },
+    emit(type, value) { for (const callback of [...observers]) callback({ type, value }); },
     launch: () => sdkCallback({ path: settings.wrongSdkPath ? path.resolve('unrelated') : host, extra: 'unchanged' }),
     fire(ms) { const found = [...timers].find(([, t]) => t.ms === ms); assert(found, 'expected timer ' + ms);
       timers.delete(found[0]); found[1].cb(); },
@@ -349,6 +350,49 @@ async function launchTests() {
   assert.equal(windowCheck.saved[1].value.state, 'paused'); assert.equal(windowCheck.saved[1].value.nativeWindowDestroyedVerified, false);
   windowCheck.unload(); assert.equal(windowCheck.saved.length, 2);
   ok('Window witness retains one unload observer after readiness, records one request, never claims native destruction or starts workload');
+  for (const status of ['closed', 'error']) {
+    const settings = { mode: 'window-checks', snapshot: settingsReady };
+    const observed = launchModel(settings); await observed.launch(); observed.unload();
+    settings.snapshot = { state: 'closed', error: status === 'error' ? { message: 'release failed' } : null };
+    assert.equal(observed.saved.filter(x => x.value.schema === 'window-lifecycle-cleanup-result-v1').length, 0);
+    observed.emit('close-result', { status, error: settings.snapshot.error });
+    const result = observed.saved.at(-1).value;
+    assert.equal(result.schema, 'window-lifecycle-cleanup-result-v1');
+    assert.equal(result.sessionCleanupCompleted, status === 'closed'); assert.equal(result.nativeWindowDestroyedVerified, false);
+    assert.equal(result.unloadRequestObserved, true);
+    const countBefore = observed.saved.length; observed.emit('close-result', { status: 'closed' });
+    assert.equal(observed.saved.length, countBefore); assert.equal(observed.counts().observers, 0);
+  }
+  ok('Close witness waits for actual settled result, preserves errors once, and never treats early closed state as cleanup or native destruction');
+  const saveStopped = launchModel({ mode: 'window-checks', snapshot: settingsReady, closeSaveFailure: true }); await saveStopped.launch();
+  saveStopped.unload(); saveStopped.emit('close-result', { status: 'closed' });
+  assert.match(saveStopped.nodes.error.textContent, /清理结果记录未保存/);
+  const storesBefore = saveStopped.counts().storeCloses; saveStopped.emit('close-result', { status: 'closed' });
+  assert.equal(saveStopped.counts().storeCloses, storesBefore);
+  ok('Close result persistence failure is visible and not retried or mislabeled as saved');
+  const releaseGate = deferred(), actualClose = launchModel({ formal: true, mode: 'window-checks', releaseGate });
+  const actualReady = actualClose.launch(); actualClose.mediaReady.resolve(); await actualReady;
+  assert.equal(actualClose.saved[0].value.schema, 'window-lifecycle-ready-v1');
+  actualClose.unload(); await tick(); await tick();
+  assert.equal(actualClose.win.EVADiagnostics.snapshot().state, 'closed');
+  assert(!actualClose.saved.some(x => x.value.schema === 'window-lifecycle-cleanup-result-v1'));
+  assert.equal(actualClose.counts().closes, 0);
+  releaseGate.resolve(); await tick(); await tick();
+  const actualReceipt = actualClose.saved.find(x => x.value.schema === 'window-lifecycle-cleanup-result-v1');
+  assert(actualReceipt); assert.equal(actualReceipt.value.sessionCleanupCompleted, true);
+  assert.equal(actualReceipt.value.nativeWindowDestroyedVerified, false);
+  actualClose.fire(0); assert.equal(actualClose.counts().closes, 1);
+  ok('Actual app/session and witness integration cannot save cleanup success or request native exit while cache release is gated');
+  const cancelledClose = launchModel({ formal: true, mode: 'window-checks' });
+  const cancelledReady = cancelledClose.launch(); await tick(); await tick();
+  cancelledClose.unload(); await cancelledReady;
+  assert(!cancelledClose.saved.some(x => x.value.schema === 'window-lifecycle-cleanup-result-v1'));
+  cancelledClose.mediaReady.resolve(); await tick(); await tick(); await tick();
+  const cancelledReceipt = cancelledClose.saved.find(x => x.value.schema === 'window-lifecycle-cleanup-result-v1');
+  assert(cancelledReceipt); assert.equal(cancelledReceipt.value.sessionCleanupCompleted, true);
+  assert.equal(cancelledClose.counts().driverCalls, 0);
+  assert(cancelledClose.saved.some(x => x.value.schema === 'window-lifecycle-unload-request-v1' && x.value.state === 'preparing'));
+  ok('Actual preparing session records cleanup only after the cancelled media task settles; late media cannot restart playback or measurement');
   const gatePreparation = deferred(), beforeReady = launchModel({ mode: 'window-checks', snapshot: { state: 'preparing', progress: { stage: 'decode' } }, prepare: gatePreparation });
   const preparingDone = beforeReady.launch(); await tick(); beforeReady.unload(); await preparingDone;
   assert.equal(beforeReady.counts().driverCalls, 0);
@@ -361,6 +405,11 @@ async function launchTests() {
   assert.equal(startObserved.saved[0].value.sdkCreateObserved, false); assert.equal(startObserved.counts().preparedCalls, 0);
   await startObserved.launch(); assert.equal(startObserved.saved[1].value.schema, 'window-lifecycle-ready-v1');
   startObserved.unload(); assert.equal(startObserved.saved[2].value.schema, 'window-lifecycle-unload-request-v1');
+  const witness = startObserved.saved[0].value.witnessId;
+  assert.match(witness, /^[0-9a-f]{20}$/);
+  assert(startObserved.saved.every(x => x.value.witnessId === witness));
+  const otherLaunch = launchModel({ bootstrap: true, mode: 'window-checks', snapshot: settingsReady });
+  assert.notEqual(otherLaunch.saved[0].value.witnessId, witness, 'Independent windows must not share a witness identity');
   assert.equal(startObserved.counts().driverCalls, 0);
   ok('Real bootstrap model saves window startup before SDK create, then ready/close separately; performance mode adds no startup writes');
   const startFailed = launchModel({ bootstrap: true, mode: 'window-checks', snapshot: settingsReady, saveFailure: true, expectBootstrapFailure: true });

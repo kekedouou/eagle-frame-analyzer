@@ -6,7 +6,7 @@ const entry = require('../../scripts/prepare-window-host.cjs');
 const driver = require('./window-host.cjs');
 const { createStore } = require('./t2-evidence.cjs');
 const PREPARE_MS = 120000, WORK_MS = 180000, RESOURCE_MS = 72 * 60000;
-const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v2';
+const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v3';
 function install(options) {
   const { window: win, document: doc, eagle, hostRoot } = options;
   if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T2独立自动验证入口。');
@@ -16,15 +16,18 @@ function install(options) {
   let timer = null, done = Promise.resolve(), receipts = [], failureSaved = false, safeToRecord = false, closeScheduled = false;
   let cancelPreparation = null, runCallback = null, exitCallback = null, activeMode = 'performance';
   let activeContext = null, windowUnloadObserved = false;
+  let cleanupObserver = null, cleanupObserved = false, witnessId = null;
   if (options.observeStartup) {
     const prepared = verify(repo);
     if (prepared.marker.mode === 'window-checks') {
       activeMode = 'window-checks'; safeToRecord = true;
+      witnessId = require('crypto').randomBytes(10).toString('hex');
       const store = storeFactory(repo, { stage: 'T2' });
       try {
         store.start({ reserveBytes: 64 * 1024 });
         receipts.push(store.save('host', { schema: 'window-lifecycle-start-v2', stage: 'T2', at: new Date().toISOString(),
           origin: 'real-Eagle-independent-window-observation', pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION,
+          witnessId,
           sdkCreateObserved: false, hostRoot: prepared.host, pluginRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
           note: 'Entry installed before SDK create. Not proof of readiness, closure or cleanup.' }));
       } catch (error) { throw new Error('窗口验收入口启动记录未保存，本项未启动：' + String(error.message).slice(0, 512)); }
@@ -50,6 +53,7 @@ function install(options) {
       store = storeFactory(repo, { stage: activeMode === 'annotations' ? 'T3' : 'T2' }); store.start({ reserveBytes: 64 * 1024 });
       receipts.push(store.save('host', { schema: 'window-automatic-entry-failure-v1', stage: activeMode === 'annotations' ? 'T3' : 'T2', origin: 'real-Eagle-independent-test-entry',
         complete: false, earlyRegressionPassed: false, at: new Date().toISOString(), state, context,
+        witnessId: activeMode === 'window-checks' ? witnessId : null,
         error: { message: String(error && error.message || error).slice(0, 2048) } }));
     } catch (saving) { message('验证失败且回执未保存：' + String(saving.message).slice(0, 512), true); }
     finally { if (store) { try { store.close(); } catch (_) {} } }
@@ -63,6 +67,28 @@ function install(options) {
       itemId: value.sourceIdentity && value.sourceIdentity.itemId, progress: value.progress, error: value.error,
       loadMetrics: value.loadMetrics } : null;
     return value;
+  }
+  function observeCleanup(bridge, context) {
+    if (activeMode !== 'window-checks' || !bridge || typeof bridge.subscribe !== 'function') return;
+    cleanupObserver = bridge.subscribe(event => {
+      if (!event || event.type !== 'close-result' || cleanupObserved) return;
+      cleanupObserved = true;
+      if (cleanupObserver) { cleanupObserver(); cleanupObserver = null; }
+      let store;
+      try {
+        verify(repo);
+        const result = event.value, snapshot = bridge.snapshot();
+        store = storeFactory(repo, { stage: 'T2' }); store.start({ reserveBytes: 64 * 1024 });
+        receipts.push(store.save('host', { schema: 'window-lifecycle-cleanup-result-v1', stage: 'T2', at: new Date().toISOString(),
+          origin: 'real-Eagle-independent-window-observation', launchContext: context,
+          pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, witnessId, unloadRequestObserved: windowUnloadObserved,
+          result, state: snapshot && snapshot.state, error: snapshot && snapshot.error,
+          sessionCleanupCompleted: !!(result && result.status === 'closed' && snapshot && snapshot.state === 'closed' && !snapshot.error),
+          nativeWindowDestroyedVerified: false,
+          note: 'Actual formal session.close promise settled. Not proof of native destruction, post-close disk state, physical memory return or forced-exit recovery.' }));
+      } catch (error) { message('资源清理结果记录未保存：' + String(error.message).slice(0, 512), true); }
+      finally { if (store) { try { store.close(); } catch (_) {} } }
+    });
   }
   async function waitReady(bridge, context, aborted) {
     if (!bridge || typeof bridge.snapshot !== 'function') throw new Error('正式播放器诊断接口未初始化，未执行测量。');
@@ -97,6 +123,7 @@ function install(options) {
           origin: 'real-Eagle-independent-window-observation', launchContext: activeContext, state: value && value.state,
           sourceIdentity: value && value.sourceIdentity, progress: value && value.progress, loadMetrics: value && value.loadMetrics,
           pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, nativeWindowDestroyedVerified: false, cleanupVerified: false,
+          witnessId,
           note: 'Observed beforeunload request only. Product may defer closure for cleanup; user confirmation and post-close file checks remain required.' }));
       } catch (error) { message('关闭请求记录未保存：' + String(error.message).slice(0, 512), true); }
       finally { if (store) { try { store.close(); } catch (_) {} } }
@@ -120,6 +147,7 @@ function install(options) {
     let context = null; const callbackAt = win.performance.now();
     try {
       state = 'preflight'; const prepared = verify(repo); activeMode = prepared.marker.mode || 'performance';
+      if (activeMode === 'window-checks' && !witnessId) witnessId = require('crypto').randomBytes(10).toString('hex');
       if (!plugin || typeof plugin.path !== 'string' || path.resolve(plugin.path).toLowerCase() !== prepared.host.toLowerCase())
         throw new Error('SDK提供的验证插件目录与准备记录不符。');
       safeToRecord = true;
@@ -157,7 +185,9 @@ function install(options) {
       timer = win.setTimeout(() => { stopping = true;
         cancelPreparation(new Error('准备超过120秒，未执行测量。'));
         message('准备超过120秒，未开始测量；正在请求正常关闭。', true); win.close(); }, PREPARE_MS);
-      const initial = await Promise.race([callback({ ...plugin, path: prepared.plugin }), aborted]);
+      const initialTask = callback({ ...plugin, path: prepared.plugin });
+      observeCleanup(win.EVADiagnostics, context);
+      const initial = await Promise.race([initialTask, aborted]);
       context.initialCreateResult = initial && initial.status || 'unspecified';
       if (stopping) throw new Error('准备阶段已取消，未执行测量。');
       const bridge = win.EVADiagnostics, snapshot = await waitReady(bridge, context, aborted);
@@ -185,7 +215,8 @@ function install(options) {
             at: new Date().toISOString(), launchContext: context, state: snapshot.state, sourceIdentity: snapshot.sourceIdentity,
             memorySettings: snapshot.memorySettings, playback: snapshot.playback ? { frameId: snapshot.playback.frameId,
               time: snapshot.playback.time, budget: snapshot.playback.budget } : null, loadMetrics: snapshot.loadMetrics,
-            pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, settingsInteractionVerified: false, performanceVerified: false }));
+            pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, witnessId: activeMode === 'window-checks' ? witnessId : null,
+            settingsInteractionVerified: false, performanceVerified: false }));
         } catch (error) { failureSaved = true; throw new Error('内存设置就绪证据未保存：' + error.message); }
         finally { store.close(); }
         state = 'saved';

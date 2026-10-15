@@ -181,6 +181,31 @@ async function main() {
     console.log('T1 app: pre-aborted entry and discovery failure retry passed');
   }
   {
+    let finish;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const h = harness({ closeSession: () => pending });
+    await h.hooks.onPluginCreate({ path: h.root });
+    const observed = [];
+    h.win.EVADiagnostics.subscribe(event => { if (event.type === 'close-result') observed.push(event); });
+    const closing = h.hooks.onPluginBeforeExit(); await tick();
+    assert.equal(observed.length, 0, 'A close request/pending cleanup cannot be reported as completed');
+    finish({ status: 'closed' }); await closing; await tick();
+    assert.equal(observed.length, 1, 'Actual cleanup completion must be observable before native exit');
+    assert.equal(observed[0].value.status, 'closed');
+    await h.hooks.onPluginBeforeExit(); assert.equal(observed.length, 1, 'Repeated close must not emit another result');
+    assert.equal(h.windowState().destroyed, false, 'Cleanup result alone is not native window destruction');
+    console.log('T2 close observation: real app publishes only settled cleanup once, independently of native destruction passed');
+  }
+  for (const rejects of [false, true]) {
+    const h = harness({ closeSession: () => rejects ? Promise.reject(new Error('controlled close failure')) : Promise.resolve({ status: 'error', error: { message: 'controlled release failure' } }) });
+    await h.hooks.onPluginCreate({ path: h.root }); const observed = [];
+    h.win.EVADiagnostics.subscribe(event => { if (/^close-/.test(event.type)) observed.push(event); });
+    await h.hooks.onPluginBeforeExit().catch(() => {}); await tick();
+    assert.equal(observed.length, 1); assert.equal(observed[0].value.status, 'error');
+    assert.match(observed[0].value.error.message, /controlled/);
+    console.log('T2 close observation: '+(rejects ? 'rejected' : 'error result')+' cleanup preserved without success passed');
+  }
+  {
     const h = harness({ realSession: true });
     const loading = h.hooks.onPluginCreate({ path: h.root });
     await tick(); assert.strictEqual(h.counts().discovered, 1);
