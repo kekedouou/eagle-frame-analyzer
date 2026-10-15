@@ -74,6 +74,20 @@ launcher模型另证明：清理未结算仍显示关闭中，真正结算后才
 
 本轮最终统一检查通过107份脚本、全部纯/接线模型、28份文档246本地链接及9546B入口/构建指纹；[完整stdout及只读缓存盘点](../../../verification-runs/t4/slot-013/record.json) SHA 2d7d63967693ed9361d9dbf21ae3689a5933b53e65b694034520552034c65cd3，含当前32份来源及4份新增/修改检查源码摘要、实际Eagle Node16.17.1。正式plugin相对bd7481f无改动。事后只读缓存盘点1份完整缓存、20795331B、0lease，未发现writer/partial导致盘点拒绝；它不是素材完整SHA或新的性能通过证据。T4现14槽/124499B，低于原32MiB；末次补记只复核文档/Diff，不重跑媒体或历史实验。真实Eagle修正版回归尚待用户打开同一入口，不创建T2/T4完整验收标签。
 
+### 再次真实加载中止：辅助进程用途登记遗漏
+
+用户再次截图，slot-014～019显示两次真实入口均以owned-process-role-unclassified停止。分别10个样本，未开始拖动；唯一未知项为worker调用的powershell.exe（pid18868/30108），集合RSS峰值436797440B/444981248B，均未达1610612736B停止线。两次observationCleanup.status=completed、result.status=closed，与截图的“资源已释放”相符；上次查询修正和停止提示已实际运行，但不能据此宣称当前回归通过。原件保留，最新轨迹SHA 9f07aa0354a6c8ec3578d8eea88308d52a6818cd5677b1f71489358eb10559df，摘要SHA d3f7890c20a3cef7c570f0ff8e9b7bf0d6555466256142f95b25fd291cfec709。
+
+生产代码调用清单已审查：task-client启动guard，guard启动Eagle Node worker；process-identity调用Windows PowerShell核对身份/恢复；media启动ffprobe、FFmpeg及PowerShell RSS观察；旧空writer恢复的Add-Type可能调用.NET csc/cvtres。此前假worker只做ping，不执行真实身份查询，7组局部通过不能覆盖这条生产调用链。这是测试工具的覆盖遗漏，不归因于用户重开或RAM额度。
+
+本轮限测试工具补齐：对实际系统目录的Windows PowerShell及其既定.NET编译辅助程序单列system-helper，仍计入插件总RAM/停止线；其他路径或未知用途仍停止，新增完整映像路径便于核对。隔离子进程在先观察后初始化时直接调用当前生产process-identity，并保留原启动边界/退出用例。所有写入/读取端按新增可选字段和角色一起核对，不删旧记录、不改播放器和产品架构。运行结果随后追加。
+
+实际Eagle Node模式Windows检查通过8组，[原始输出及输入源码摘要](../../../verification-runs/t4/slot-020/record.json) SHA 42556e34b1a539597e1fddc73738cd2baaa91f520076511cb89e5d8b6077d5e0。16个样本观察到C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe且归类system-helper，生产self查询成功返回才允许子进程以0退出；暂缓初始化及8个worker启动/退出的原用例仍通过。生成35732B隔离产物后按原精确身份/摘要定点清完。系统辅助RAM在纯检查中能触发同一插件集合停止线，不是排除其占用后通过；未知角色仍能触发停止。
+
+本机采样器20992B，源码SHA d456b004cf0b53c426a52dba40b912c1c574bacc554b40f5d03bcbbfbe98c186，EXE SHA ae22d5adadc2fb1f558e17b8d469081f3bf0f6a89c235ef7da7109a493e0294c。同一tests/host/t4入口/ID已重新准备9546B，偏好仍1024MiB。旧空writer编译恢复仅静态审查既有csc/cvtres调用及准确系统路径，本次未实际执行；本次8组也不代替真正的视频准备/绘制或完整P-04。真实窗口需关闭后重开同一入口，不能把隔离通过当新六轮成绩。
+
+最终统一检查通过107份脚本、全部纯/接线模型、28份文档249本地链接及9546B入口指纹；[完整输出与当前源码/只读盘点](../../../verification-runs/t4/slot-021/record.json) SHA 23f9ff444f4299217735212c878a754a0ddc605caa76d28c548efe04238de33a。正式plugin相对bd7481f仍无改动，现有缓存1份/20795331B、0lease；临时目录已清，未删真实缓存或素材。T4当前22槽/176022B，仍在32MiB内；末次补记只查文档和Diff，未重跑旧媒体实验或发布。真实修正版性能结果继续待验。
+
 ### 尚未通过
 
 当前需要首次真实Eagle入口接线及默认1GiB下“索尼克”六轮回归。其后仍有全编码/独立帧参考、P-03首次及复用各3轮、新进程长时资源、必要异常宿主证据。原T3素材写入授权已关闭，真实Eagle强退未授权；不能用本轮隔离进程结果代填。完整执行方式/有限记录/人工加载见[计划](plan.md)。本轮不发布、推送或创建T2/T4完整验收标签。

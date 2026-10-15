@@ -1,7 +1,7 @@
 'use strict';
 // Pure analysis of external Windows samples. No files, timers or process control.
-const ROLES = Object.freeze(['renderer', 'task-guard', 'task-worker', 'console-host', 'ffmpeg', 'ffprobe', 'observer', 'observer-child', 'owned-unclassified']);
-const PLUGIN = new Set(['renderer', 'task-guard', 'task-worker', 'console-host', 'owned-unclassified']);
+const ROLES = Object.freeze(['renderer', 'task-guard', 'task-worker', 'console-host', 'system-helper', 'ffmpeg', 'ffprobe', 'observer', 'observer-child', 'owned-unclassified']);
+const PLUGIN = new Set(['renderer', 'task-guard', 'task-worker', 'console-host', 'system-helper', 'owned-unclassified']);
 function approvedLimits(ramBytes) {
   if (![512 * 1024 ** 2, 1024 ** 3, 2 * 1024 ** 3].includes(ramBytes)) throw new Error('No approved process stop line for this RAM test tier.');
   return Object.freeze({ pluginRssStopBytes: (ramBytes === 2 * 1024 ** 3 ? 3 : 1.5) * 1024 ** 3,
@@ -26,7 +26,8 @@ function sample(value) {
   for (const row of value.processes) {
     identity(row);
     if (pids.has(row.pid) || !roots.has(row.root) || !ROLES.includes(row.role) || !Number.isSafeInteger(row.rssBytes) || row.rssBytes < 0 ||
-        !Number.isFinite(row.cpuMs) || row.cpuMs < 0 || typeof row.image !== 'string' || row.image.length > 260)
+        !Number.isFinite(row.cpuMs) || row.cpuMs < 0 || typeof row.image !== 'string' || row.image.length > 260 ||
+        row.imagePath !== undefined && (typeof row.imagePath !== 'string' || row.imagePath.length > 32768 || !/^[A-Za-z]:\\/.test(row.imagePath)))
       throw new Error('Invalid/duplicate resource process.');
     const declared = roots.get(identity(row)), owner = roots.get(row.root);
     if (declared && (row.root !== identity(row) || row.role !== declared.role) ||

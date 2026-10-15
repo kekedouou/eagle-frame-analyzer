@@ -70,6 +70,13 @@ class ResourceSampler {
     string name=Path.GetFileName(image).ToLowerInvariant();
     if(parentRole=="observer" || parentRole=="observer-child") return "observer-child";
     if(name=="conhost.exe" && String.Equals(image,Path.Combine(Environment.SystemDirectory,"conhost.exe"),StringComparison.OrdinalIgnoreCase)) return "console-host";
+    string windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+    if(name=="powershell.exe" && (parentRole=="renderer" || parentRole=="task-worker") &&
+       (String.Equals(image,Path.GetFullPath(Path.Combine(Environment.SystemDirectory,"WindowsPowerShell/v1.0/powershell.exe")),StringComparison.OrdinalIgnoreCase) ||
+        String.Equals(image,Path.GetFullPath(Path.Combine(windows,"SysWOW64/WindowsPowerShell/v1.0/powershell.exe")),StringComparison.OrdinalIgnoreCase))) return "system-helper";
+    if(parentRole=="system-helper" && (name=="csc.exe" || name=="cvtres.exe") &&
+       (String.Equals(image,Path.GetFullPath(Path.Combine(windows,"Microsoft.NET/Framework64/v4.0.30319",name)),StringComparison.OrdinalIgnoreCase) ||
+        String.Equals(image,Path.GetFullPath(Path.Combine(windows,"Microsoft.NET/Framework/v4.0.30319",name)),StringComparison.OrdinalIgnoreCase))) return "system-helper";
     if(parentRole=="renderer" && name=="task-host.local.exe") return "task-guard";
     if(name=="ffmpeg.exe") return "ffmpeg";
     if(name=="ffprobe.exe") return "ffprobe";
@@ -125,7 +132,7 @@ class ResourceSampler {
       try { using(var process=Process.GetProcessById(member.pid)) {
         if(Identity(process)!=Key(member.pid,member.ticks)) continue;
         rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
-          image=Path.GetFileName(member.image),rssBytes=process.WorkingSet64,cpuMs=process.TotalProcessorTime.TotalMilliseconds});
+          image=Path.GetFileName(member.image),imagePath=member.image,rssBytes=process.WorkingSet64,cpuMs=process.TotalProcessorTime.TotalMilliseconds});
       } } catch(ArgumentException) { } catch(InvalidOperationException) { }
       catch(Exception e) { errors.Add(Error(member.pid,e,"resource-counters")); }
     }

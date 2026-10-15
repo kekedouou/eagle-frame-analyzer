@@ -71,7 +71,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
       owned.set(fixtureExe, { bytes: bytes.length, sha256: sha(bytes), ino: stat.ino.toString(), dev: stat.dev.toString() });
     }
     if (compiled.error || compiled.status !== 0) throw new Error('Owned startup fixture compilation failed: ' + compiled.stdout + compiled.stderr);
-    const fixtureEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }; delete fixtureEnv.NODE_OPTIONS;
+    const fixtureEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', EVA_TEST_IDENTITY_MODULE: path.join(repo, 'plugin/process-identity.cjs') }; delete fixtureEnv.NODE_OPTIONS;
     fixture = spawn(fixtureExe, ['G:\\Assets\\Eagle\\Eagle.exe'], { env: fixtureEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     let fixtureError = ''; fixture.stderr.on('data', b => { fixtureError = (fixtureError + b.toString()).slice(-4096); });
     const fixtureDone = new Promise((resolve, reject) => { fixture.once('error', reject); fixture.once('close', code => code === 0 ? resolve() : reject(Error('Owned startup fixture failed: ' + fixtureError))); });
@@ -85,14 +85,16 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
       fixture.once('error', e => { clearTimeout(deadline); reject(e); });
       fixture.once('close', () => { clearTimeout(deadline); reject(Error('Owned fixture exited before its identity.')); });
     });
-    const suspendedRows = await observe(suspendedRoot, 500, () => fixture.stdin.write('resume\n'));
+    const suspendedRows = await observe(suspendedRoot, 1800, () => fixture.stdin.write('resume\n'));
     fixture.stdin.end(); await fixtureDone;
     const suspendedAggregate = createAggregation(); for (const row of suspendedRows) suspendedAggregate.add(row);
     const preLoader = { oldMainModuleNull: suspendedRoot.oldMainModuleNull, oldError: suspendedRoot.oldError,
-      childPid: suspendedRoot.childPid, rows: suspendedRows, observer: suspendedAggregate.summary() };
+      childPid: suspendedRoot.childPid, rows: suspendedRows, observer: suspendedAggregate.summary(),
+      productionIdentityModuleSha256: sha(fs.readFileSync(fixtureEnv.EVA_TEST_IDENTITY_MODULE)) };
     assert(preLoader.oldMainModuleNull || preLoader.oldError === 'Win32Exception', 'Fixture must reach an unavailable main-module boundary.');
     if (!captureStartup) {
       assert(suspendedRows[0].processes.some(p => p.pid === suspendedRoot.childPid && p.role === 'task-worker'), 'Suspended worker image must be observed before resume.');
+      assert(suspendedRows.some(row => row.processes.some(p => p.role === 'system-helper' && p.image.toLowerCase() === 'powershell.exe')), 'Real production identity helper must be observed.');
       assert.deepStrictEqual(preLoader.observer.stopReasons, []);
     }
     let startupTask; const starts = [];
@@ -150,7 +152,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
     console.log(JSON.stringify({ schema: 'mvp-real-windows-observer-check-v1', passed: true,
       cases: ['real-guard-worker-observed-separately', 'observer-overhead-separated', 'wrong-creation-time-excluded',
         'renderer-proxy-descendants-discovered', 'owned-task-closes-while-observer-stays-open', 'observer-before-eight-worker-starts-and-exits',
-        'suspended-child-image-readable-before-mainmodule-is-available'],
+        'suspended-child-image-readable-before-mainmodule-is-available', 'real-production-identity-powershell-observed-and-budgeted'],
       observer: result, dynamicObserver: dynamicAggregate.summary(), preLoader, startup, scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0),
       productCacheTouched: false, realEagleGuiExecuted: false, mediaGenerated: false,
       limitation: 'Short isolated processes, including a Node renderer proxy and eight worker startups; not real-player RSS, peak FFmpeg, long-run P-04 or performance acceptance.' }));
