@@ -6,7 +6,7 @@ const entry = require('../../scripts/prepare-window-host.cjs');
 const driver = require('./window-host.cjs');
 const { createStore } = require('./t2-evidence.cjs');
 const PREPARE_MS = 120000, WORK_MS = 180000, RESOURCE_MS = 72 * 60000;
-const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v4';
+const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v5';
 function install(options) {
   const { window: win, document: doc, eagle, hostRoot } = options;
   if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T2独立自动验证入口。');
@@ -15,6 +15,7 @@ function install(options) {
   let state = 'waiting', job = null, stopping = false, closeRequested = false, allowUnload = false, completed = false;
   let timer = null, done = Promise.resolve(), receipts = [], failureSaved = false, safeToRecord = false, closeScheduled = false;
   let cancelPreparation = null, runCallback = null, exitCallback = null, activeMode = 'performance';
+  let preparationStopError = null;
   let activeContext = null, windowUnloadObserved = false;
   let cleanupObserver = null, cleanupObserved = false, witnessId = null;
   let windowCloseIntent = false, windowClosing = false, windowCloseTask = null;
@@ -58,6 +59,9 @@ function install(options) {
       return registration.call(eagle, name === 'onPluginBeforeExit' ? (...args) => {
         if (activeMode === 'window-checks') {
           windowCloseIntent = true;
+          // Cancel the readiness wait before the formal callback publishes
+          // "closed". A requested close is not a failed preparation.
+          stop('window-close');
           if (!windowExitNotice) {
             try {
               const value = win.EVADiagnostics && win.EVADiagnostics.snapshot();
@@ -96,8 +100,15 @@ function install(options) {
     } catch (saving) { message('验证失败且回执未保存：' + String(saving.message).slice(0, 512), true); }
     finally { if (store) { try { store.close(); } catch (_) {} } }
   }
-  function stop() { if (completed) return; stopping = true;
-    if (cancelPreparation) cancelPreparation(new Error('准备阶段已取消，未执行测量。'));
+  function stop(reason) { if (completed) return; stopping = true;
+    if (cancelPreparation) {
+      const error = new Error('准备阶段已取消，未执行测量。');
+      if (activeMode === 'window-checks' && reason === 'window-close') {
+        error.name = 'AbortError'; error.code = 'WINDOW_CLOSE_REQUESTED';
+      }
+      if (!preparationStopError) preparationStopError = error;
+      cancelPreparation(error);
+    }
     if (job) job.cancel(); }
   function observe(bridge, context) {
     const value = bridge && bridge.snapshot();
@@ -155,7 +166,7 @@ function install(options) {
       windowCloseIntent = true;
       if (windowClosing) return;
       windowClosing = true;
-      captureWindowUnload(); closeRequested = true; stop();
+      captureWindowUnload(); closeRequested = true; stop('window-close');
       win.setTimeout(() => { windowCloseTask = finishWindowClose(); windowCloseTask.catch(error => {
         // Keep the failure visible, but a completed formal cleanup permits the
         // user to close this test error window. Never retry a partial batch.
@@ -254,13 +265,14 @@ function install(options) {
       // Consume a cancellation even if a synchronous callback throws first.
       aborted.catch(() => {});
       timer = win.setTimeout(() => { stopping = true;
-        cancelPreparation(new Error('准备超过120秒，未执行测量。'));
+        preparationStopError = new Error('准备超过120秒，未执行测量。');
+        cancelPreparation(preparationStopError);
         message('准备超过120秒，未开始测量；正在请求正常关闭。', true); win.close(); }, PREPARE_MS);
       const initialTask = callback({ ...plugin, path: prepared.plugin });
       observeCleanup(win.EVADiagnostics, context);
       const initial = await Promise.race([initialTask, aborted]);
       context.initialCreateResult = initial && initial.status || 'unspecified';
-      if (stopping) throw new Error('准备阶段已取消，未执行测量。');
+      if (stopping) throw preparationStopError || new Error('准备阶段已取消，未执行测量。');
       const bridge = win.EVADiagnostics, snapshot = await waitReady(bridge, context, aborted);
       if (ramContext && (!snapshot.sourceIdentity || snapshot.sourceIdentity.itemId !== 'MV6H7OK0MBGX2' ||
           snapshot.sourceIdentity.sha256 !== 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658'))
@@ -268,7 +280,7 @@ function install(options) {
       if (ramContext && (snapshot.playback.budget.limit !== ramContext.ramMiB * 1024 ** 2 || snapshot.playback.compressed.limitBytes !== ramContext.compressedMiB * 1024 ** 2))
         throw new Error('实际Player预算与本轮RAM对照配置不符，不执行测量。');
       clearTimer(); cancelPreparation = null;
-      if (stopping) throw new Error('准备阶段已取消，未执行测量。');
+      if (stopping) throw preparationStopError || new Error('准备阶段已取消，未执行测量。');
       verify(repo);
       context.callbackToReadyMs = snapshot.loadMetrics.readyAt - callbackAt;
       if (!Number.isFinite(context.callbackToReadyMs) || context.callbackToReadyMs < 0)
@@ -310,6 +322,17 @@ function install(options) {
       return result;
     } catch (error) {
       try { observe(win.EVADiagnostics, context); } catch (_) { /* Preserve original failure. */ }
+      if (activeMode === 'window-checks' && windowCloseIntent && error.code === 'WINDOW_CLOSE_REQUESTED') {
+        clearTimer(); state = 'cancelled';
+        rememberWindowRecord({ schema: 'window-lifecycle-preparation-cancelled-v1', stage: 'T2',
+          origin: 'real-Eagle-independent-window-observation', at: new Date().toISOString(),
+          witnessId, observerVersion: WINDOW_OBSERVER_VERSION, expected: true,
+          reason: 'user-requested-window-close', preparationCompleted: false,
+          cleanupVerified: false, nativeWindowDestroyedVerified: false, context,
+          note: 'Preparation stopped for a requested window close. Cleanup is recorded separately; this is neither a failure nor a readiness pass.' });
+        message('正在关闭，已取消视频准备。');
+        return { complete: false, cancelled: true, reason: 'user-requested-window-close', receipts };
+      }
       clearTimer(); message('自动验证未通过：' + String(error.message || error).slice(0, 1024), true);
       if (!job) saveFailure(error, context); // The driver owns persistence once started; never retry its failed save.
       state = 'failed'; return { complete: false, earlyRegressionPassed: false, error: String(error.message || error), receipts };
