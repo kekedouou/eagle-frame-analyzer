@@ -1,9 +1,11 @@
 // Test-only external observer. Never opens a Job/mutex or terminates a process.
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 
@@ -22,12 +24,36 @@ class ResourceSampler {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool Process32FirstW(IntPtr snapshot, ref Entry entry);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool Process32NextW(IntPtr snapshot, ref Entry entry);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageNameW(IntPtr handle, uint flags, StringBuilder name, ref int size);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr handle, out long creation, out long exit, out long kernel, out long user);
   class Member { public int pid; public long ticks; public string role, root, image; }
   class Root : Member { }
   static readonly Dictionary<string,Member> known=new Dictionary<string,Member>();
   static readonly JavaScriptSerializer json=new JavaScriptSerializer();
   static string Key(int pid,long ticks) { return pid+":"+ticks; }
   static string Identity(Process process) { return Key(process.Id,process.StartTime.ToUniversalTime().Ticks); }
+  // MainModule can be null before the child's loader has initialized. Query the
+  // kernel's executable identity instead, with only limited-query permission.
+  static string Image(Process process) {
+    long expected=process.StartTime.ToUniversalTime().Ticks;
+    var handle=OpenProcess(0x1000,false,process.Id);
+    if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"OpenProcess limited query failed.");
+    try {
+      long creation,exit,kernel,user;
+      if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) throw new Win32Exception(Marshal.GetLastWin32Error(),"Process identity query failed.");
+      if(DateTime.FromFileTimeUtc(creation).Ticks!=expected) throw new InvalidOperationException("Process identity disappeared or changed.");
+      var name=new StringBuilder(32768); int size=name.Capacity;
+      if(!QueryFullProcessImageNameW(handle,0,name,ref size)) throw new Win32Exception(Marshal.GetLastWin32Error(),"Process image query failed.");
+      if(size<1) throw new IOException("Process image query returned an empty name.");
+      return name.ToString();
+    } finally { CloseHandle(handle); }
+  }
+  static object Error(int pid,Exception error,string operation) {
+    var native=error as Win32Exception;
+    return new {pid=pid,reason=error.GetType().Name,operation=operation,message=error.Message,
+      nativeErrorCode=native==null ? (int?)null : native.NativeErrorCode};
+  }
   static Dictionary<int,int> Parents() {
     var result=new Dictionary<int,int>(); var handle=CreateToolhelp32Snapshot(2,0);
     if(handle==new IntPtr(-1)) throw new IOException("Process topology snapshot failed.");
@@ -43,6 +69,7 @@ class ResourceSampler {
   static string Role(string image,string parentRole) {
     string name=Path.GetFileName(image).ToLowerInvariant();
     if(parentRole=="observer" || parentRole=="observer-child") return "observer-child";
+    if(name=="conhost.exe" && String.Equals(image,Path.Combine(Environment.SystemDirectory,"conhost.exe"),StringComparison.OrdinalIgnoreCase)) return "console-host";
     if(parentRole=="renderer" && name=="task-host.local.exe") return "task-guard";
     if(name=="ffmpeg.exe") return "ffmpeg";
     if(name=="ffprobe.exe") return "ffprobe";
@@ -58,12 +85,12 @@ class ResourceSampler {
       try {
         using(var process=Process.GetProcessById(root.pid)) {
           if(Identity(process)==Key(root.pid,root.ticks)) {
-            if(!String.Equals(process.MainModule.FileName,root.image,StringComparison.OrdinalIgnoreCase)) throw new IOException("Root image changed.");
+            if(!String.Equals(Image(process),root.image,StringComparison.OrdinalIgnoreCase)) throw new IOException("Root image changed.");
             alive=true; members.Add(root.pid,root); known[Key(root.pid,root.ticks)]=root;
           }
         }
       } catch(ArgumentException) { } catch(InvalidOperationException) { }
-      catch(Exception e) { errors.Add(new {pid=root.pid,reason=e.GetType().Name}); }
+      catch(Exception e) { errors.Add(Error(root.pid,e,"root-identity")); }
       statuses.Add(new {pid=root.pid,startTicks=root.ticks.ToString(),role=root.role,alive=alive});
     }
     // Retain already verified descendants after parent exit, until their exact
@@ -74,7 +101,7 @@ class ResourceSampler {
       try { using(var process=Process.GetProcessById(member.pid)) {
         if(Identity(process)==pair.Key) members.Add(member.pid,member); else known.Remove(pair.Key);
       } } catch(ArgumentException) { known.Remove(pair.Key); } catch(InvalidOperationException) { known.Remove(pair.Key); }
-      catch(Exception e) { errors.Add(new {pid=member.pid,reason=e.GetType().Name}); }
+      catch(Exception e) { errors.Add(Error(member.pid,e,"retained-identity")); }
     }
     bool changed=true; int iterations=0;
     while(changed && ++iterations<=32) {
@@ -85,11 +112,11 @@ class ResourceSampler {
         try { using(var process=Process.GetProcessById(pair.Key)) {
           long ticks=process.StartTime.ToUniversalTime().Ticks;
           if(ticks<parent.ticks) continue;
-          string image=process.MainModule.FileName;
+          string image=Image(process);
           var child=new Member {pid=pair.Key,ticks=ticks,image=image,role=Role(image,parent.role),root=parent.root};
           members.Add(child.pid,child); known[Key(child.pid,child.ticks)]=child; changed=true;
         } } catch(ArgumentException) { } catch(InvalidOperationException) { }
-        catch(Exception e) { errors.Add(new {pid=pair.Key,reason=e.GetType().Name}); }
+        catch(Exception e) { errors.Add(Error(pair.Key,e,"child-image")); }
       }
     }
     if(changed || members.Count>64 || errors.Count>64) throw new IOException("Owned process observation exceeds boundary.");
@@ -100,7 +127,7 @@ class ResourceSampler {
         rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
           image=Path.GetFileName(member.image),rssBytes=process.WorkingSet64,cpuMs=process.TotalProcessorTime.TotalMilliseconds});
       } } catch(ArgumentException) { } catch(InvalidOperationException) { }
-      catch(Exception e) { errors.Add(new {pid=member.pid,reason=e.GetType().Name}); }
+      catch(Exception e) { errors.Add(Error(member.pid,e,"resource-counters")); }
     }
     return new {schema="mvp-process-sample-v1",atMs=elapsed,sampleDurationMs=sampling.Elapsed.TotalMilliseconds,processes=rows,roots=statuses,errors=errors};
   }
@@ -117,7 +144,7 @@ class ResourceSampler {
           using(var self=Process.GetCurrentProcess()) using(var parent=Process.GetProcessById(pid)) {
             var parents=Parents();
             if(!parents.ContainsKey(self.Id) || parents[self.Id]!=pid || parent.StartTime.ToUniversalTime().Ticks>self.StartTime.ToUniversalTime().Ticks ||
-                !String.Equals(parent.MainModule.FileName,image,StringComparison.OrdinalIgnoreCase)) throw new IOException("Observer parent identity mismatch.");
+                !String.Equals(Image(parent),image,StringComparison.OrdinalIgnoreCase)) throw new IOException("Observer parent identity mismatch.");
             ticks=parent.StartTime.ToUniversalTime().Ticks;
           }
         } else ticks=Int64.Parse(args[i+1]);
@@ -127,7 +154,7 @@ class ResourceSampler {
       }
       // Self resources are separate observation overhead, never plugin RSS.
       using(var self=Process.GetCurrentProcess()) roots.Add(new Root {pid=self.Id,ticks=self.StartTime.ToUniversalTime().Ticks,
-        image=self.MainModule.FileName,role="observer",root=Identity(self)});
+        image=Image(self),role="observer",root=Identity(self)});
       var input=new Thread(delegate() { try { while(Console.ReadLine()!=null) {} } catch(IOException) {} finally { stopping=true; } });
       input.IsBackground=true; input.Start();
       var clock=Stopwatch.StartNew(); long outputBytes=0; int count=0;

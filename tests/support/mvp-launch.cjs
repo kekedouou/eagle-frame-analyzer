@@ -13,6 +13,7 @@ function install(options) {
   const now = () => win.performance.now();
   let store = null, monitor = null, driver = null, timer = null, closing = false, disabled = null, prepared = null, runId = null;
   let formalClose = null, started = false, finished = false, sourceAtStart = null, observerIssue = null, expectedRamBytes = null;
+  let observationCleanup = null;
   const title = text => { if (!closing) doc.title = '阶段4验收 · ' + text; };
   const snapshot = () => win.EVADiagnostics && win.EVADiagnostics.snapshot();
   function context() {
@@ -33,7 +34,14 @@ function install(options) {
   function stopForObservation(error) {
     observerIssue = observerIssue || String(error.message || error);
     if (driver) driver.cancel();
-    if (formalClose && !closing) { try { Promise.resolve(formalClose()).catch(() => {}); } catch (_) {} }
+    if (formalClose && !closing && !observationCleanup) {
+      try {
+        observationCleanup = Promise.resolve(formalClose()).then(result => {
+          if (result && result.status === 'error') throw new Error(result.error && result.error.message || '资源释放失败。');
+          return { requested: true, status: 'completed', result };
+        }).catch(failure => ({ requested: true, status: 'failed', error: String(failure.message || failure) }));
+      } catch (failure) { observationCleanup = Promise.resolve({ requested: true, status: 'failed', error: String(failure.message || failure) }); }
+    }
   }
   // Path mapping is installed even when recording setup fails. SDK registration
   // is restored immediately; no selection or annotation API is replaced.
@@ -79,7 +87,16 @@ function install(options) {
   }
   async function finalize(outcome, error) {
     const resources = await monitor.stop();
+    const cleanup = observationCleanup ? await observationCleanup : null;
     if (closing) return; // Actual product close never waits for late records.
+    if (cleanup && typeof doc.getElementById === 'function') {
+      // Test entry only: formalClose has destroyed the UI subscription. Replace
+      // its last "closing" text only after the real cleanup Promise settles.
+      const message = cleanup.status === 'completed' ? '验收已停止，资源已释放。请关闭本窗口。' : '验收已停止，资源清理失败。';
+      for (const id of ['status', 'notice']) { const element = doc.getElementById(id); if (element) { element.textContent = message; element.hidden = false; } }
+      const alert = doc.getElementById('error');
+      if (alert) { alert.textContent = cleanup.status === 'failed' ? cleanup.error : '资源观察未完成，本轮没有有效的性能成绩。'; alert.hidden = false; }
+    }
     const references = [];
     try {
       let sourceStable = true;
@@ -91,6 +108,7 @@ function install(options) {
       store.save('host', { schema: 'mvp-current-runtime-regression-summary-v1', stage: 'T4', runId,
         source: sourceAtStart, sourceHashes: prepared.marker.sourceHashes, sourceStable, currentRegressionPassed,
         error: error || observerIssue || resources.issue, performance: outcome, observer: resources.observer, resourceChunks: references,
+        observationCleanup: cleanup,
         limitations: resources.limitations.concat(['One selected video; no automatic cache reset or settings/library write.',
           'Not complete P-03 repetition, independent frame-reference verification or two long resource rounds.',
           'Prepared independent SDK path mapping, not the normal product manifest startup.']),

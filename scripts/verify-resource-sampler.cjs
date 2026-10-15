@@ -35,11 +35,13 @@ async function observe(root, duration = 1500, onStarted = null) {
   });
 }
 async function main() {
+  const captureStartup = process.argv.includes('--capture-startup');
+  if (process.argv.slice(2).some(arg => arg !== '--capture-startup')) throw new Error('Unknown observer check option.');
   if (fs.existsSync(scratch)) throw new Error('Previous observer scratch retained; inspect before retry.');
   const host = path.dirname(scratch);
   if (!fs.existsSync(host)) fs.mkdirSync(host);
   if (!scratch.startsWith(repo + path.sep) || fs.realpathSync(host) !== host || fs.lstatSync(host).isSymbolicLink()) throw new Error('Observer scratch boundary invalid.');
-  const owned = new Map(); let complete = false, client;
+  const owned = new Map(); let complete = false, client, fixture;
   fs.mkdirSync(scratch); fs.mkdirSync(path.join(scratch, 'native'));
   function write(name, data) {
     const bytes = Buffer.from(data), file = path.join(scratch, name);
@@ -57,6 +59,68 @@ const send=v=>process.stdout.write(JSON.stringify(v)+'\n');
 readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='ping')send({type:'response',id:m.id,result:{pid:process.pid,taskOwner}});else if(m.method==='close'){send({type:'response',id:m.id,result:{status:'closed'}});process.stdout.write('',()=>process.exit(0));}}).on('close',()=>process.exit(0));
 send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
 `);
+    // Deterministic pre-loader boundary, unlike a probabilistic timing loop.
+    write('startup-fixture.cs', fs.readFileSync(path.join(repo, 'tests/native/resource-startup-fixture.cs')));
+    const fixtureExe = path.join(scratch, 'native/startup-fixture.local.exe');
+    const compiler = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+    const compiled = spawnSync(compiler, ['/nologo', '/optimize+', '/target:exe', '/reference:System.Web.Extensions.dll',
+      '/out:' + fixtureExe, path.join(scratch, 'startup-fixture.cs')], { windowsHide: true, shell: false, encoding: 'utf8', timeout: 10000, maxBuffer: 32768 });
+    if (fs.existsSync(fixtureExe)) {
+      const bytes = fs.readFileSync(fixtureExe), stat = fs.lstatSync(fixtureExe, { bigint: true });
+      if (bytes.length > 32 * 1024 || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) throw new Error('Owned startup fixture exceeds boundary.');
+      owned.set(fixtureExe, { bytes: bytes.length, sha256: sha(bytes), ino: stat.ino.toString(), dev: stat.dev.toString() });
+    }
+    if (compiled.error || compiled.status !== 0) throw new Error('Owned startup fixture compilation failed: ' + compiled.stdout + compiled.stderr);
+    const fixtureEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }; delete fixtureEnv.NODE_OPTIONS;
+    fixture = spawn(fixtureExe, ['G:\\Assets\\Eagle\\Eagle.exe'], { env: fixtureEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    let fixtureError = ''; fixture.stderr.on('data', b => { fixtureError = (fixtureError + b.toString()).slice(-4096); });
+    const fixtureDone = new Promise((resolve, reject) => { fixture.once('error', reject); fixture.once('close', code => code === 0 ? resolve() : reject(Error('Owned startup fixture failed: ' + fixtureError))); });
+    fixtureDone.catch(() => {});
+    const suspendedRoot = await new Promise((resolve, reject) => {
+      let text = ''; const deadline = setTimeout(() => reject(Error('Owned fixture startup deadline exceeded.')), 5000);
+      fixture.stdout.on('data', b => {
+        text += b.toString(); if (text.length > 8192) { clearTimeout(deadline); reject(Error('Owned fixture output exceeds boundary.')); }
+        const newline = text.indexOf('\n'); if (newline >= 0) { clearTimeout(deadline); try { resolve(JSON.parse(text.slice(0, newline))); } catch (e) { reject(e); } }
+      });
+      fixture.once('error', e => { clearTimeout(deadline); reject(e); });
+      fixture.once('close', () => { clearTimeout(deadline); reject(Error('Owned fixture exited before its identity.')); });
+    });
+    const suspendedRows = await observe(suspendedRoot, 500, () => fixture.stdin.write('resume\n'));
+    fixture.stdin.end(); await fixtureDone;
+    const suspendedAggregate = createAggregation(); for (const row of suspendedRows) suspendedAggregate.add(row);
+    const preLoader = { oldMainModuleNull: suspendedRoot.oldMainModuleNull, oldError: suspendedRoot.oldError,
+      childPid: suspendedRoot.childPid, rows: suspendedRows, observer: suspendedAggregate.summary() };
+    assert(preLoader.oldMainModuleNull || preLoader.oldError === 'Win32Exception', 'Fixture must reach an unavailable main-module boundary.');
+    if (!captureStartup) {
+      assert(suspendedRows[0].processes.some(p => p.pid === suspendedRoot.childPid && p.role === 'task-worker'), 'Suspended worker image must be observed before resume.');
+      assert.deepStrictEqual(preLoader.observer.stopReasons, []);
+    }
+    let startupTask; const starts = [];
+    const startupRows = await observe({ pid: process.pid, startTicks: 'parent', image: process.execPath, role: 'renderer' }, 6500, () => {
+      startupTask = (async () => {
+        for (let i = 0; i < 8; i++) {
+          client = createTaskClient({ pluginRoot: scratch, runtime: 'G:\\Assets\\Eagle\\Eagle.exe', discoverTools: async () => ({}) });
+          const active = await client.ping(); starts.push({ guardPid: active.taskOwner.guardPid, workerPid: active.pid });
+          await new Promise(resolve => setTimeout(resolve, 80)); await client.close();
+          await new Promise(resolve => setTimeout(resolve, 70));
+        }
+      })(); startupTask.catch(() => {});
+    });
+    await startupTask;
+    const startupAggregate = createAggregation(); for (const row of startupRows) startupAggregate.add(row);
+    const startup = { starts, observer: startupAggregate.summary(), rows: startupRows,
+      workerStartsObserved: starts.filter(start => startupRows.some(row => row.processes.some(p => p.pid === start.workerPid && p.role === 'task-worker'))).length,
+      errors: startupRows.flatMap(row => row.errors.map(error => ({ atMs: row.atMs, ...error }))),
+      executableSha256: sha(fs.readFileSync(verify())) };
+    if (captureStartup) {
+      complete = true;
+      console.log(JSON.stringify({ schema: 'mvp-real-windows-startup-observer-check-v1', passed: startup.observer.stopReasons.length === 0 && preLoader.observer.stopReasons.length === 0,
+      preLoader, startup, productCacheTouched: false, realEagleGuiExecuted: false, mediaGenerated: false,
+        scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0), limitation: 'Isolated guard/worker startup diagnostic, not real-player performance or long-run P-04.' }));
+      return;
+    }
+    assert.strictEqual(startup.starts.length, 8); assert(startup.workerStartsObserved >= 4, 'Startup observer must actually see workers.');
+    assert.deepStrictEqual(startup.observer.stopReasons, []);
     client = createTaskClient({ pluginRoot: scratch, runtime: 'G:\\Assets\\Eagle\\Eagle.exe', discoverTools: async () => ({}) });
     const active = await client.ping(), root = rootIdentity(active.taskOwner.guardPid);
     assert.strictEqual(path.resolve(root.image).toLowerCase(), path.join(scratch, 'native/task-host.local.exe').toLowerCase());
@@ -85,11 +149,13 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
     complete = true;
     console.log(JSON.stringify({ schema: 'mvp-real-windows-observer-check-v1', passed: true,
       cases: ['real-guard-worker-observed-separately', 'observer-overhead-separated', 'wrong-creation-time-excluded',
-        'renderer-proxy-descendants-discovered', 'owned-task-closes-while-observer-stays-open'],
-      observer: result, dynamicObserver: dynamicAggregate.summary(), scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0),
+        'renderer-proxy-descendants-discovered', 'owned-task-closes-while-observer-stays-open', 'observer-before-eight-worker-starts-and-exits',
+        'suspended-child-image-readable-before-mainmodule-is-available'],
+      observer: result, dynamicObserver: dynamicAggregate.summary(), preLoader, startup, scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0),
       productCacheTouched: false, realEagleGuiExecuted: false, mediaGenerated: false,
-      limitation: 'About 3.5 seconds on isolated processes, including a Node renderer proxy; not real-player RSS, peak FFmpeg, long-run P-04 or performance acceptance.' }));
+      limitation: 'Short isolated processes, including a Node renderer proxy and eight worker startups; not real-player RSS, peak FFmpeg, long-run P-04 or performance acceptance.' }));
   } finally {
+    if (fixture && !fixture.stdin.destroyed) fixture.stdin.end();
     if (client && !client.stopped) await client.close();
     if (complete) {
       for (const [file, expected] of owned) {

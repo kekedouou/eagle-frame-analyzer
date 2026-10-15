@@ -10,6 +10,7 @@
 - 自动准备/复用后首帧暂停，再执行原协议正常快速拖动3×30秒、独立随机定位3×200；需要前台且不操作窗口，通常约2～3分钟。首次准备120秒保护；独立资源观察总时限3分钟，期满未结束则停止本轮并留失败，不继续无限循环。
 - P-01/P-02口径和计量算法复用既有window-host/t0-protocol；包含过期、复用、取消及未完成请求，测drawImage提交，不冒充物理呈现或人工鼠标手感。本次只记录一次实际载入的P-03，不替代首次/复用各3轮。
 - 外部Windows采样约100ms观察窗口、后台守护/worker、FFmpeg/ffprobe和采样器。创建时间为精确字符串，按同一次轮询汇总RSS，CPU用累计时间差；单个历史峰值不相加。启动/传输延迟、轮询跨度与漏采单列，共享Eagle/GPU不擅自归属。
+- 启动边界采用Windows QueryFullProcessImageName查询映像，不依赖尚未加载完的MainModule。自有进程树中的Windows系统conhost明确分列并计入插件集合，不忽略其RAM；其他未知角色或真正的访问/身份错误仍停止验证。观察失败后等待正式清理Promise完成，再在独立验收窗口显示停止/释放结果，用户关闭窗口的正常流程不受测量记录阻塞。
 - 用户2026-10-15批准：默认1GiB档插件自有集合RSS到1.5GiB停止；2GiB档窗口＋守护＋worker合计到3GiB停止，FFmpeg仍每进程1GiB。更高档和新画质未获测试停止线授权。当前实际档位和停止线写入记录，变化则本轮失败。
 - 用户随时关闭即可取消：观察者只请求自有采样程序结束，不在SDK退出/beforeunload中写文件、等待或阻止退出。已保存的启动记录与不完整结果保留，不把关闭解释成“准备失败”。记录准备失败只禁用测量，仍正确映射正式路径并允许播放器使用。
 
@@ -33,6 +34,8 @@
 | tests/support/t4-evidence.cjs | 有界追加记录、分片/摘要和只读还原；不被正式播放器引用 |
 
 由Codex执行：`node scripts/build-resource-sampler.cjs`、`node scripts/prepare-mvp-host.cjs`；当前统一检查仍`node scripts/check.cjs --without-prepared-host`。显式`node scripts/verify-resource-sampler.cjs`只启动隔离自有后台组及采样器；`node scripts/verify-t4-records.cjs`只生成少量隔离记录验证并发/截断后继续保存。二者不启动真实Eagle界面、不属于默认检查。
+
+资源显式自检现包含“先观察、再连续启动/退出8组worker”，以及tests/native/resource-startup-fixture.cs生成的一个自有、暂缓初始化的Eagle Node子进程。后者用已有编译器在原resource-scratch≤2MiB范围构建，先取得未初始化阶段样本，再放行并等它退出；只控制自己创建的测试进程句柄，不控制现有Eagle界面。成功按原身份/摘要清理，失败保留并记录后处理；它验证读取边界，不能代替真实窗口性能。测试源码和既有记录格式保持可追溯，新增console-host角色/错误详情/observationCleanup字段由当前mvp-resource、monitor、launcher及通用T4读写端接收，旧记录无这些字段仍可读。
 
 ## 后续关卡
 

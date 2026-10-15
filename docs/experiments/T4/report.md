@@ -51,6 +51,29 @@ FFmpeg SHA256 `ba242553f0ff60ad788069d5d376c1b4f7a2f3a3566416e0ed950ca7920da5fa`
 
 Codex尝试只读检查Windows可操作控件：Eagle主窗口存在，控件树只有窗体及一个不可操作窗格；当前工具也没有可用桌面控制能力。未点击、未载入、未修改Eagle配置；不能据窗口存在声称宿主接线通过。需要用户关闭其他视频分析窗口，在Eagle载入包含manifest.json的整个tests/host/t4目录，选中索尼克后打开新入口。打开后由现有工具自动计量，用户不必输入命令；取得记录后再核对真实性、指标和限制。
 
+### 首次真实加载中止：观察工具启动边界遗漏
+
+用户截图显示资源观察停止、窗口停在“正在关闭”。只读验证slot-003～005的封装及内容摘要通过：真实Eagle pid18532，默认1GiB，选择MV3FZJJ7AC1CI。仅3个资源样本，第三个在205.3491ms发现guard/worker，worker pid31708出现NullReferenceException；同一轮稍后已经读到该worker的172683264B RSS。插件集合观测峰值393359360B，低于1610612736B停止线；performance=null，未执行拖动，不记为播放器性能失败或内存超限。启动/轨迹/摘要SHA依次450c0f9d3e331c220e62eec4e4af0853401acbcfe9a86ec8ce93f22a32b34433、b2b1d4dce0abcfcedc412ed51b1228306756711812a8e171d76c6d08bfa0a3d2、c8461ace98cb43c9f94d4bbf4ca1ccabfaab5aa04e970d3577d8d8d364f4acba；原件保留。
+
+代码中进程映像通过Process.MainModule.FileName读取，该模块列表在进程刚启动时可能尚不可用；具体异常栈未记录，因此空值位置按源码及同轮恢复证据定位，后续用原实现与修正版启动压力对照。原Windows自检先等worker就绪再观察，漏掉了真实入口“先观察、后启动worker”的顺序。另有独立测试入口缺陷：观察失败直接请求formalClose，只等清理却未显示完成状态，造成“正在关闭”停留，不把它归因于正式窗口退出架构。
+
+本轮修复限测试工具：改用Windows进程映像查询接口并保留身份/访问错误检查，补充先观察后启动/退出的隔离回归；清理结算后明确显示“测量已停止/清理完成”或失败。原测量门槛、停止线、正式plugin和设置不改，不靠忽略错误或扩大RAM使测试通过。
+
+依据：[微软MainModule说明](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.mainmodule?view=netframework-4.8.1)明确未加载完时可以返回null；[QueryFullProcessImageName](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew)可用有限查询权限取得映像名称。实现另外用该句柄的GetProcessTimes核对创建时间，避免PID复用错认；真实访问错误仍停止，并补充operation/message/nativeErrorCode，未吞掉原错误。
+
+修正后的真实Windows7组自检通过，包括先观察再启动/退出8个worker，以及一个由测试句柄控制、尚未初始化的Eagle Node子进程。该子进程的旧MainModule查询实际抛Win32Exception，新查询在放行执行前已正确识别；它重现了“初始化前旧信息不可用”的边界，不伪称再次捕获完全相同的NullReferenceException。8次普通启动在原Eagle Node观察器下也曾全部通过，因此随机短循环不足以排除本次问题。Node24检查中额外发现其自有Windows conhost被当作未知程序；只对系统目录的conhost明确分列并计入插件总RSS，未知程序仍失败。生产端/分析端与模型同步，新角色和可选错误/清理字段不改变旧T4封装/摘要，原记录仍可读。
+
+| 原始记录 | 实际结果与限制 |
+| --- | --- |
+| [真实入口失败摘要](../../../verification-runs/t4/slot-005/record.json)、[3个资源样本](../../../verification-runs/t4/slot-004/record.json) | 仅证明本轮准备及观察中止，performance=null，非P-01/P-02成绩 |
+| [Node24 Windows修正版检查](../../../verification-runs/t4/slot-011/record.json) | 7组通过、8/8 worker可见、启动/暂缓初始化样本无停止原因；SHA c249e51f1d9a25fdfe2a7f399a9f37e433ae066c533e4a36063e63c37428a105 |
+| [Eagle内置Node修正版检查](../../../verification-runs/t4/slot-012/record.json) | 资源分析/协调/监控3份模型及真实Windows7组通过，非GUI复测；SHA ad4c47f51b474c596f99208b75ec7597b07d6ad338ac556709979def1af52db3 |
+| [自检断言失败](../../../verification-runs/t4/slot-008/record.json)、[隔离原件与清理计划](../../../verification-runs/t4/slot-009/record.json)、[清理结果](../../../verification-runs/t4/slot-010/record.json) | 最初断言过度限定只能为null，实际为Win32Exception；先保留全部原件，再按清单/精确身份定点清7文件。本机后续成功轮次生成34750B，按同一规则清完 |
+
+launcher模型另证明：清理未结算仍显示关闭中，真正结算后才显示资源已释放；拒绝时显示清理失败；用户真实关闭后不晚到写证据。当前新观察器19968B，源码SHA a19f0fd133b7900a138782f0f3b8fee411dfa8ebb80318667224eb486f5ddc6f，EXE SHA a3d6e23d3368995383265857c829fafcfd383dd33b8fe410511d008e8f85df82。入口同路径/ID重新准备9546B，无需再次导入；旧截图所对应窗口需关闭后再开。测试临时目录已清，无自有观察/fixture/guard残留，正式设置仍1024MiB。原始和隔离失败均保留，未扩额度或自动复跑真实视频。
+
+本轮最终统一检查通过107份脚本、全部纯/接线模型、28份文档246本地链接及9546B入口/构建指纹；[完整stdout及只读缓存盘点](../../../verification-runs/t4/slot-013/record.json) SHA 2d7d63967693ed9361d9dbf21ae3689a5933b53e65b694034520552034c65cd3，含当前32份来源及4份新增/修改检查源码摘要、实际Eagle Node16.17.1。正式plugin相对bd7481f无改动。事后只读缓存盘点1份完整缓存、20795331B、0lease，未发现writer/partial导致盘点拒绝；它不是素材完整SHA或新的性能通过证据。T4现14槽/124499B，低于原32MiB；末次补记只复核文档/Diff，不重跑媒体或历史实验。真实Eagle修正版回归尚待用户打开同一入口，不创建T2/T4完整验收标签。
+
 ### 尚未通过
 
 当前需要首次真实Eagle入口接线及默认1GiB下“索尼克”六轮回归。其后仍有全编码/独立帧参考、P-03首次及复用各3轮、新进程长时资源、必要异常宿主证据。原T3素材写入授权已关闭，真实Eagle强退未授权；不能用本轮隔离进程结果代填。完整执行方式/有限记录/人工加载见[计划](plan.md)。本轮不发布、推送或创建T2/T4完整验收标签。
