@@ -203,6 +203,7 @@ function launchModel(settings = {}) {
       'session.cjs': require('../plugin/session.cjs'), 'diagnostics.cjs': require('../plugin/diagnostics.cjs'), 'frame-index.cjs': {}
     };
     modules['preferences.cjs'] = { createMemoryPreferences: () => ({ snapshot: () => ({ ramBytes: 1024 ** 3, compressedRamBytes: 128 * 1024 ** 2, percent: 2.5 }) }) };
+    modules['task-client.cjs'] = { createTaskClient: options => require('./support/task-client-model.cjs').createModel(modules, options) };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugin/app.js'), 'utf8'), {
       window: win, eagle, performance: win.performance, Promise, setTimeout: win.setTimeout,
       require(name) { if (name === 'path') return path; if (name === 'fs') return { realpathSync: value => value };

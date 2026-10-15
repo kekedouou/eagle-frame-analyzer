@@ -1,6 +1,10 @@
 # 项目说明
 
-2026-10-15当前：用户已授权A-07关闭/交接结构整改，按L-01～L-03连续开发，人工停顿目标≤3次。已记录流程、卡点、预算与回退；先修可信清理结果，再验证独立任务负责人/系统占用/辅助进程退出并接入主线。原T2自动测量入口继续停止；本专项尚未实测通过，T2/T4整体验收未变。
+2026-10-15当前：A-07关闭/交接整改已接入主线，L-01及L-02本地/真实Windows/真实媒体隔离验证通过，L-03待第一次主线人工体验；此前人工停顿0次，目标≤3次。原T2自动测量入口继续停止；本专项不等于实际Eagle窗口或T2/T4整体验收通过。结果与限制见[T2整改记录](experiments/T2/report.md#a-07-实现与隔离验证2026-10-15)。
+
+当前入口和检查以此段为准，下面旧宿主入口说明保留为历史：使用`plugin/manifest.json`既有“视频分析”入口，无需重新导入T2插件。`task-client.cjs`发送控制请求，`native/task-host.cs`用Windows系统互斥/进程组持有本会话任务，`task-worker.cjs`复用media/cache准备和清理；Player直接在本地读帧，Eagle/标注API不迁移。本机11776B守护产物及构建指纹已就绪、Git忽略；源码变更/新检出由Codex执行`node scripts/build-task-host.cjs`构建，无需用户安装依赖或输入命令。
+
+当前统一检查为`node scripts/check.cjs --without-prepared-host`：保留全部正式代码、纯/接线模型、文档及manifest检查，仅不核对已经停用且源码过时的T2准备入口。显式Windows/媒体检查入口及副作用见[专项验证](verification.md#生命周期整改验证-l-01l-03)。不执行旧自动测量、不清真实库、不改旧展示包；新的发行包必须包含新增运行模块与守护产物，旧白名单未更新时脚本明确拒绝新打包。
 
 文档职责：根README面向使用者，介绍Eagle插件、两种体验包及快速开始；本文件承担工程目录、运行/检查入口和上下文恢复，进度与实验原始记录仍在docs/progress.md及其链接中。主页不累积实验流水账，也不把绿色展示版升级为正式开发主线。
 
@@ -21,7 +25,7 @@
 - T0 核心与测试入口：plugin/frame-index.cjs、plugin/player.js；tests/host/t0/manifest.json为独立宿主测试入口。[T0计划](experiments/T0/plan.md)固定输入、预算与验证边界。正式入口已获用户T1阶段体验认可，尚非完整MVP或全项技术验收版本。
 - T0 当前结果与人工步骤见 [执行记录](experiments/T0/report.md)；默认检查 `node scripts/check.cjs`，保存新本地检查证据 `node scripts/verify-t0.cjs record-checks`。后者只新增有界证据，不重新生成媒体或执行历史实验。
 - A-04选定`compressed-ram`（JPEG池≤64MiB，包含在512MiB内，仍仅rAF提交）。T0修正版完整复验18轮已核对，正常79～81次提交/秒、最长约49ms、P95约9ms；首次3轮约22秒，102点独立源JPEG指纹匹配、1490帧PTS一致。六次首备/复用含选中读取，实验重置单记，不包含插件创建；旧超时/取消记录保留。压力仍有约1秒停顿，不推广到全编码或长期稳定。T1分层入口用户体验及正式代码六轮真实宿主早期回归已通过，快拖67～73次提交/秒、最长67.3ms、随机P95约10～11ms；T4全矩阵/长期资源仍待验，不能以T0数据代替。[T0收尾证据与边界](experiments/T0/report.md#完整复验核对与独立源帧收尾)。
-- 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node 内置模块、现有 FFmpeg/ffprobe，无新增依赖。
+- 框架：HTML/CSS/JavaScript、Eagle Plugin API、Node内置模块、现有FFmpeg/ffprobe；A-07新增小型Windows C#守护源码，使用已有.NET Framework编译器/运行时，无新增安装依赖。
 - 已验收 Eagle 运行时：Node 16.17.1 / Chrome 108；本机检查 Node 24.20.0。代码必须兼容实际插件运行时。
 
 

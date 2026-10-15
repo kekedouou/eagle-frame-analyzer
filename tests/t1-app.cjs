@@ -19,13 +19,14 @@ function harness(settings = {}) {
   };
   const modules = {
     'cache.cjs': { createCache(options) { assert.strictEqual(options.pluginRoot, root); return { readAsset() {}, release() {} }; } },
-    'eagle.cjs': { createEagleAdapter() { return adapter; } },
+    'eagle.cjs': { createEagleAdapter() { return Object.freeze(adapter); } },
     'preferences.cjs': { createMemoryPreferences() { return { snapshot: () => ({ ramBytes: 1024 ** 3, compressedRamBytes: 128 * 1024 ** 2, percent: 2.5 }) }; } },
     'session.cjs': { createSession(options) { config = options; return settings.realSession ? require('../plugin/session.cjs').createSession(options) : session; } },
     'diagnostics.cjs': { createDiagnostics: require('../plugin/diagnostics.cjs').createDiagnostics },
     'media.cjs': { createMedia(options) { assert.strictEqual(options.tools.ffmpeg, 'existing-only'); return { prepare(snapshot, options) { prepared++; assert.strictEqual(snapshot.id, 'fixed'); return { snapshot, options }; } }; } },
     'frame-index.cjs': {}
   };
+  modules['task-client.cjs'] = { createTaskClient: options => require('./support/task-client-model.cjs').createModel(modules, options) };
   const eagle = Object.fromEntries(['onPluginCreate', 'onPluginRun', 'onLibraryChanged', 'onPluginBeforeExit'].map(name => [name, callback => { hooks[name] = callback; }]));
   function requestClose() {
     closeAttempts++;
@@ -73,6 +74,16 @@ async function bounded(pending) {
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
 async function main() {
+  {
+    let finish; const pending = new Promise(resolve => { finish = resolve; });
+    const h = harness({ closeSession: () => pending, deferNativeAck: true });
+    await h.hooks.onPluginCreate({ path: h.root }); h.requestClose();
+    const first = h.hooks.onPluginRun(), latest = h.hooks.onPluginRun();
+    finish({ status: 'closed' }); await Promise.all([first, latest]); await h.flushNativeTasks();
+    assert.equal(h.windowState().destroyed, false, 'Explicit reopening supersedes pending native exit');
+    assert.equal(h.log.filter(x => x.type === 'selected').length, 2, 'Only the newest opening is initialized after cleanup');
+    console.log('Task handover: repeated open during closing retains latest request and prevents stale native exit');
+  }
   for (const fastResult of [null, { status: 'closed' }]) {
     const h = harness({ deferNativeAck: true, closeSession: () => Promise.resolve(fastResult) });
     await h.hooks.onPluginCreate({ path: h.root }); h.requestClose();
@@ -142,7 +153,7 @@ async function main() {
   await h.hooks.onLibraryChanged(); assert.strictEqual(h.log[2].type, 'library');
   await h.hooks.onPluginBeforeExit(); h.hooks.pagehide();
   assert.strictEqual(h.counts().closed, 1); assert.strictEqual(h.counts().destroyed, 1);
-  await h.hooks.onPluginRun(); assert.strictEqual(h.log.length, 3); assert.strictEqual(h.updates.length, 0);
+  await h.hooks.onPluginRun(); assert.strictEqual(h.log.length, 4); assert.strictEqual(h.updates[0].state, 'closing');
   console.log('T1 app: lifecycle/selected-entry/tool-discovery/assembly/close simulation passed');
 
   for (const lateReject of [false, true]) {
@@ -211,7 +222,7 @@ async function main() {
     await tick(); assert.strictEqual(h.counts().discovered, 1);
     await bounded(h.hooks.onPluginBeforeExit()); await bounded(loading);
     assert.strictEqual(h.counts().prepared, 0); assert.strictEqual(h.counts().destroyed, 1);
-    assert.strictEqual(h.updates.at(-1).state, 'closed');
+    assert.strictEqual(h.updates.at(-1).state, 'closing');
     console.log('T1 app: real session closes while SDK discovery never returns passed; Eagle not executed');
   }
 }

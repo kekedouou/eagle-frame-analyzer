@@ -28,3 +28,5 @@
 /tests/host/t2/cache-scratch/
 
 /tests/host/t2/lock-quarantine/
+/plugin/native/task-host.local.exe
+/plugin/native/task-host.local.json

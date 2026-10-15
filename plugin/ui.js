@@ -219,11 +219,12 @@
       const messages = { empty: '等待素材', preparing: '正在准备视频', paused: '已暂停', playing: '播放中', seeking: '正在定位', error: '无法继续', closed: '已关闭' };
       const progress = state.progress && Number.isSafeInteger(state.progress.frames) ? '（' + state.progress.frames + ' 帧）' : '';
       const emptyMessage = state.state === 'empty' && state.progress && state.progress.message;
-      set(el.status, 'textContent', emptyMessage || (messages[state.state] || '等待素材') + (state.state === 'preparing' ? progress : ''));
+      const handover = state.state === 'preparing' && state.progress && state.progress.stage === 'handover' && state.progress.message;
+      set(el.status, 'textContent', emptyMessage || handover || (state.state === 'closing' ? '正在关闭…' : messages[state.state] || '等待素材') + (state.state === 'preparing' ? progress : ''));
       set(el.error, 'hidden', !state.error); set(el.error, 'textContent', state.error ? state.error.message : '');
       set(el.retry, 'hidden', !session || state.state !== 'error');
       set(el.notice, 'hidden', ready || !!(state.playback && Number.isSafeInteger(state.playback.frameId)));
-      set(el.notice, 'textContent', emptyMessage || (state.state === 'preparing' ? '正在准备视频…' : state.state === 'error' ? '视频未就绪' : '在 Eagle 中单选 MP4 后打开插件'));
+      set(el.notice, 'textContent', emptyMessage || handover || (state.state === 'closing' ? '正在关闭…' : state.state === 'preparing' ? '正在准备视频…' : state.state === 'error' ? '视频未就绪' : '在 Eagle 中单选 MP4 后打开插件'));
       if (!gesture) thumb(time);
       if (hintEpoch !== null) hint(time); // Includes final release settlement; only actual submitted frame time.
       updateComments();

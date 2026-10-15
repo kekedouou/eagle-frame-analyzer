@@ -103,7 +103,8 @@ function createCache(options = {}) {
   directory(plugin);
   const live = new WeakMap();
   const processIdentity = options.processIdentity || createIdentity();
-  const ownerValue = (kind, extra) => ({ schema: 1, owner: OWNER, recipe: RECIPE, root, kind, ...extra });
+  const ownerValue = (kind, extra) => ({ schema: 1, owner: OWNER, recipe: RECIPE, root, kind,
+    ...(['writer', 'lease'].includes(kind) && options.taskOwner ? { taskOwner: options.taskOwner } : {}), ...extra });
   function verifyRoot() {
     const pluginStat = directory(plugin), rootStat = directory(root);
     // directory(root) already established that its real path equals root.
@@ -186,7 +187,7 @@ function createCache(options = {}) {
       if (stat.isDirectory() && !stat.isSymbolicLink()) {
         if (pending.has(file)) {
           const plan = pending.get(file); directory(file);
-          if (stat.dev !== plan.directoryIdentity[0] || stat.ino !== plan.directoryIdentity[1]) fail('待恢复清理目录身份已变化。');
+          if (!sameDirectoryIdentity(file, stat, plan.directoryIdentity)) fail('待恢复清理目录身份已变化。');
           const expected = new Map(plan.files.map(item => [item.file, item]));
           for (const leaf of fs.readdirSync(file)) {
             if (!expected.has(leaf)) fail('待恢复清理目录含未知文件。');
@@ -257,12 +258,14 @@ function createCache(options = {}) {
           leafSnapshot(path.join(root, planName)).sha256 !== value.planSha256) fail('清理回执缺少对应原始清单。');
       }
     } else {
+      const ownedPartial = value.reason === 'owned-job-stopped-interrupted-output' && value.writerToken === value.cacheToken &&
+        value.directory === path.join(root, 'partial-' + value.cacheToken) && /^[0-9a-f]{64}$/.test(value.taskKey || '');
       if (typeof value.directory !== 'string' || !path.isAbsolute(value.directory) || !samePath(path.dirname(value.directory), root) ||
         !(new RegExp('^media-[0-9a-f]{64}-' + recipeId + '$').test(path.basename(value.directory)) ||
-          /^partial-[0-9a-f]{24}$/.test(path.basename(value.directory)) && value.reason === 'orphaned-incomplete-cache') ||
+          /^partial-[0-9a-f]{24}$/.test(path.basename(value.directory)) && (value.reason === 'orphaned-incomplete-cache' || ownedPartial)) ||
         !Array.isArray(value.directoryIdentity) || value.directoryIdentity.length !== 2 ||
-        !value.directoryIdentity.every(Number.isSafeInteger) || !/^[0-9a-f]{24}$/.test(value.cacheToken) ||
-        !Array.isArray(value.files) || !value.files.length || !value.files.some(item => item.file === 'owner.json') ||
+        !value.directoryIdentity.every(n => Number.isSafeInteger(n) || typeof n === 'string' && /^(?:0|[1-9][0-9]{0,19})$/.test(n)) || !/^[0-9a-f]{24}$/.test(value.cacheToken) ||
+        !Array.isArray(value.files) || !ownedPartial && (!value.files.length || !value.files.some(item => item.file === 'owner.json')) ||
         new Set(value.files.map(item => item.file)).size !== value.files.length || value.files.some(item => {
           safeName(item.file); return !Number.isSafeInteger(item.bytes) || item.bytes < 0 || !/^[0-9a-f]{64}$/.test(item.sha256) ||
             !Array.isArray(item.identity) || item.identity.length !== 4 || item.identity.some(n => !Number.isFinite(n));
@@ -271,6 +274,11 @@ function createCache(options = {}) {
     return value;
   }
   function stamp(stat) { return [stat.dev, stat.ino, stat.size, stat.mtimeMs]; }
+  function sameDirectoryIdentity(dir, stat, identity) {
+    if (identity.some(n => typeof n === 'string')) { const exact = fs.lstatSync(dir, { bigint: true });
+      return exact.dev.toString() === String(identity[0]) && exact.ino.toString() === String(identity[1]); }
+    return stat.dev === identity[0] && stat.ino === identity[1];
+  }
   function leafSnapshot(file) {
     const before = regular(file), fd = fs.openSync(file, 'r'), hash = crypto.createHash('sha256');
     try {
@@ -309,10 +317,13 @@ function createCache(options = {}) {
     if ((!allowMissing && samePath(plan.directory, job.target) && plan.reason !== 'damaged-cache') || occupancy().has(plan.directory.toLowerCase())) fail('当前或已占用缓存不能删除。');
     if (!fs.existsSync(plan.directory)) { if (allowMissing) return []; fail('清理目录已变化。'); }
     const dir = directory(plan.directory);
-    if (dir.dev !== plan.directoryIdentity[0] || dir.ino !== plan.directoryIdentity[1]) fail('清理目录身份已变化。');
+    if (!sameDirectoryIdentity(plan.directory, dir, plan.directoryIdentity)) fail('清理目录身份已变化。');
     const names = fs.readdirSync(plan.directory), expected = new Map(plan.files.map(item => [item.file, item]));
     if (names.some(name => !expected.has(name)) || (!allowMissing && names.length !== expected.size)) fail('清理目标出现未知或缺失文件。');
-    if (names.includes('owner.json')) {
+    const ownedInterrupted = options.taskOwner && plan.reason === 'owned-job-stopped-interrupted-output' &&
+      plan.directory === path.join(root, 'partial-' + plan.cacheToken);
+    if (ownedInterrupted) { /* Exact current-file snapshots replace an interrupted owner/ledger. */ }
+    else if (names.includes('owner.json')) {
       const owner = verifyOwner(plan.directory, plan.targetKind || 'cache'); if (owner.token !== plan.cacheToken) fail('清理缓存所有权已改变。');
     } else if (names.length) fail('清理目录缺少所有权标记。');
     for (const name of names) {
@@ -487,6 +498,23 @@ function createCache(options = {}) {
     return value;
   }
   function orphanPartialPlan(dir, writer) {
+    if (options.taskOwner && writer.taskOwner && writer.taskOwner.schema === 'eva-task-owner-v1' &&
+        writer.taskOwner.key === options.taskOwner.key && writer.taskOwner.epoch !== options.taskOwner.epoch &&
+        dir === path.join(root, 'partial-' + writer.token)) {
+      // The OS guard has already stopped the entire previous task group. This
+      // directory name was reserved by its immutable ownership record BEFORE
+      // creation, so interruption within file/ledger/owner writes is recoverable.
+      directory(dir); const identity = fs.lstatSync(dir, { bigint: true }), names = fs.readdirSync(dir).sort();
+      const captured = names.map(name => {
+        if (!/^(?:owner\.json|transaction\.log|manifest\.json|audio\.wav|\d{6}\.jpg)$/.test(name)) fail('中断任务含未知文件，保留原件。');
+        const stat = regular(path.join(dir, name));
+        if (stat.size > (name.endsWith('.json') || name === 'transaction.log' ? LIMITS.metadataBytes : LIMITS.assetBytes)) fail('中断任务文件越界，保留原件。');
+        return leafSnapshot(path.join(dir, name));
+      });
+      return ownerValue('cleanup-plan', { token: nonce(), writerToken: writer.token, directory: dir,
+        directoryIdentity: [identity.dev.toString(), identity.ino.toString()], cacheToken: writer.token, targetKind: 'partial', taskKey: options.taskOwner.key,
+        reason: 'owned-job-stopped-interrupted-output', createdAt: Date.now(), files: captured });
+    }
     const marker = readJSON(path.join(dir, 'owner.json'));
     if (marker.schema !== 1 || marker.owner !== OWNER || marker.recipe !== RECIPE || marker.root !== root ||
       !['partial', 'cache'].includes(marker.kind) || marker.token !== writer.token) fail('残留临时目录所有权不符。');
@@ -544,21 +572,28 @@ function createCache(options = {}) {
       if (!processIdentity.inspect(value).safe) continue;
       records.push({ file: leafSnapshot(file), ownerRecord: value });
       if (name === 'writer.lock') for (const child of names.filter(name => /^partial-[0-9a-f]{24}$/.test(name))) {
-        const plan = orphanPartialPlan(path.join(root, child), value);
+        const dir = path.join(root, child);
         const prior = names.filter(name => /^cleanup-[0-9a-f]{24}\.json$/.test(name)).map(verifyCleanupRecord)
-          .find(old => old.directory === plan.directory && !fs.existsSync(path.join(root, 'cleanup-' + old.token + '.result.json')));
+          .find(old => old.directory === dir && !fs.existsSync(path.join(root, 'cleanup-' + old.token + '.result.json')));
         if (prior) {
-          if (prior.cacheToken !== plan.cacheToken || JSON.stringify(prior.files) !== JSON.stringify(plan.files)) fail('已有残留清理计划与当前文件不符。');
-        } else partialPlans.push(plan);
+          // A later cleanup worker may have died while deleting an older
+          // task's partial. Its writer token is not that partial's token.
+          if (!sameDirectoryIdentity(dir, directory(dir), prior.directoryIdentity) ||
+              prior.reason === 'owned-job-stopped-interrupted-output' && prior.taskKey !== options.taskOwner?.key ||
+              fs.readdirSync(dir).some(leaf => !prior.files.some(old => JSON.stringify(old) === JSON.stringify(leafSnapshot(path.join(dir, leaf))))))
+            fail('已有残留清理计划与当前文件不符。');
+        } else partialPlans.push(orphanPartialPlan(dir, value));
       }
     }
     if (names.includes('writer.lock') && !records.some(item => item.file.file === 'writer.lock')) return;
     if (!records.length && !pending.length) return;
     const token = nonce(), guardData = jsonBytes(ownerValue('recovery', { token, pid: process.pid, processIdentity: processIdentity.self(), children: [] }));
-    const guardFd = fs.openSync(guardPath, 'wx'), guardIdentity = fs.fstatSync(guardFd); let guardWritten = 0;
+    const guarded = !!options.taskOwner;
+    const guardFd = guarded ? null : fs.openSync(guardPath, 'wx'), guardIdentity = guarded ? null : fs.fstatSync(guardFd); let guardWritten = 0;
     function ownGuard() {
-      verifyRoot(); const stat = regular(guardPath);
-      if (!sameFile(guardIdentity, stat) || !fs.readFileSync(guardPath).equals(guardData)) fail('恢复锁身份已改变。');
+      verifyRoot();
+      if (!guarded) { const stat = regular(guardPath);
+        if (!sameFile(guardIdentity, stat) || !fs.readFileSync(guardPath).equals(guardData)) fail('恢复锁身份已改变。'); }
       const writer = path.join(root, 'writer.lock');
       if (fs.existsSync(writer)) {
         const captured = records.find(item => item.file.file === 'writer.lock');
@@ -566,18 +601,20 @@ function createCache(options = {}) {
       }
     }
     try {
-      writeAll(guardFd, guardData, 0, n => { guardWritten += n; }); fs.fsyncSync(guardFd); fs.closeSync(guardFd);
+      if (!guarded) { writeAll(guardFd, guardData, 0, n => { guardWritten += n; }); fs.fsyncSync(guardFd); fs.closeSync(guardFd); }
       ownGuard();
       // Validate and account every current leaf before any delete. No recursive
       // remove, links, unknown root entries or anonymous partial are accepted.
       let used = 0;
+      const interruptedCleanup = new Set(names.filter(name => /^cleanup-[0-9a-f]{24}\.json$/.test(name) &&
+        !fs.existsSync(path.join(root, name.replace(/\.json$/, '.result.json')))).map(name => verifyCleanupRecord(name).directory));
       for (const name of fs.readdirSync(root)) {
         const file = path.join(root, name), stat = fs.lstatSync(file);
         if (stat.isDirectory()) {
           if (!new RegExp('^media-[0-9a-f]{64}-' + recipeId + '$').test(name) && !partialPlans.some(plan => plan.directory === file) &&
             !fs.readdirSync(root).some(leaf => /^cleanup-[0-9a-f]{24}\.json$/.test(leaf) && verifyCleanupRecord(leaf).directory === file)) fail('恢复根含未知目录。');
           directory(file);
-          if (name.startsWith('media-')) inspectDirectory(file, 'cache', name.slice(6, 70));
+          if (name.startsWith('media-') && !interruptedCleanup.has(file)) inspectDirectory(file, 'cache', name.slice(6, 70));
           for (const leaf of fs.readdirSync(file)) used += regular(path.join(file, leaf)).size;
         } else {
           if (!['owner.json', 'writer.lock', 'recovery.lock'].includes(name) && !/^lease-[0-9a-f]{24}\.json$/.test(name) &&
@@ -617,11 +654,11 @@ function createCache(options = {}) {
           jsonBytes(ownerValue('reap-result', { token: reap.plan.token, status: 'completed', freedBytes, planSha256: sha(reap.data), completedAt: Date.now() })));
       }
     } finally {
-      try { fs.closeSync(guardFd); } catch (_) { /* Already closed. */ }
-      const current = regular(guardPath);
-      if (!sameFile(guardIdentity, current) || current.size !== guardWritten || !fs.readFileSync(guardPath).equals(guardData.subarray(0, guardWritten)))
-        fail('恢复锁身份未知；保留。');
-      fs.unlinkSync(guardPath);
+      if (!guarded) { try { fs.closeSync(guardFd); } catch (_) { /* Already closed. */ }
+        const current = regular(guardPath);
+        if (!sameFile(guardIdentity, current) || current.size !== guardWritten || !fs.readFileSync(guardPath).equals(guardData.subarray(0, guardWritten)))
+          fail('恢复锁身份未知；保留。');
+        fs.unlinkSync(guardPath); }
     }
   }
   async function hashFile(file, signal) {
@@ -705,6 +742,7 @@ function createCache(options = {}) {
     const target = path.join(root, 'media-' + sourceSha256 + '-' + recipeId);
     let candidate = null, candidatePinned = null, finished = null;
     function updateWriter() {
+      if (options.taskOwner) return; // Child ownership is atomic in the OS group; keep this record immutable.
       assertWriter(job, true); const data = jsonBytes(writer), current = regular(lockPath), oldBytes = current.size;
       if (data.length > oldBytes) charge(job, data.length - oldBytes);
       const out = fs.openSync(lockPath, 'r+');
@@ -753,7 +791,7 @@ function createCache(options = {}) {
       assertWriter(job);
       if (candidate || job.published) fail('完整缓存不能作为临时写入目标。');
       if (!job.partial) {
-        const dir = path.join(root, 'partial-' + nonce()), data = jsonBytes(ownerValue('partial', { token: job.token }));
+        const dir = path.join(root, 'partial-' + (options.taskOwner ? job.token : nonce())), data = jsonBytes(ownerValue('partial', { token: job.token }));
         charge(job, data.length); fs.mkdirSync(dir); job.partial = dir;
         fs.writeFileSync(path.join(dir, 'owner.json'), data, { flag: 'wx' });
         const ledgerFd = fs.openSync(path.join(dir, 'transaction.log'), 'wx+');
@@ -944,7 +982,32 @@ function createCache(options = {}) {
   function leaseFor(info) {
     const lease = info && live.get(info);
     if (!lease || !lease.active || info.cacheDir !== lease.cacheDir || info.leaseId !== lease.id) fail('需要本缓存实例登记的原始有效句柄。');
-    verifyRoot(); verifyOwner(lease.cacheDir, 'cache'); return lease;
+    verifyRoot(); verifyOwner(lease.cacheDir, 'cache');
+    if (lease.remote && (!sameFile(lease.markerIdentity, regular(lease.file)) || sha(fs.readFileSync(lease.file)) !== lease.markerSha)) fail('远端占用记录已改变。');
+    return lease;
+  }
+  // A worker pins and owns the lease; the window reads validated local assets.
+  // Frame bytes never cross the control pipe. Detaching cannot delete a lease.
+  function adoptReadLease(info, expectedTaskOwner) {
+    if (!info || live.has(info) || !/^[0-9a-f]{24}$/.test(info.leaseId || '') || !/^[0-9a-f]{64}$/.test(info.source && info.source.sha256 || '')) fail('远端缓存句柄无效。');
+    const target = path.join(root, 'media-' + info.source.sha256 + '-' + recipeId);
+    if (info.cacheDir !== target) fail('远端缓存目录不符。');
+    verifyRoot(); const inspected = inspectDirectory(target, 'cache', info.source.sha256);
+    function content(value) { const copy = { ...value }; for (const key of ['source', 'metrics', 'cacheDir', 'leaseId']) delete copy[key]; return JSON.stringify(copy); }
+    if (content(info) !== content(inspected.info)) fail('远端缓存清单与磁盘不符。');
+    const file = path.join(root, 'lease-' + info.leaseId + '.json'), before = regular(file), data = fs.readFileSync(file), marker = JSON.parse(data);
+    if (!sameFile(before, regular(file)) || data.length !== before.size) fail('接入期间远端占用已改变。');
+    if (marker.owner !== OWNER || marker.recipe !== RECIPE || marker.root !== root || marker.kind !== 'lease' ||
+        marker.token !== info.leaseId || marker.cacheDir !== target || marker.sourceSha256 !== info.source.sha256 || !marker.taskOwner) fail('远端缓存占用身份不符。');
+    if (expectedTaskOwner && ['key', 'epoch', 'guardPid'].some(key => marker.taskOwner[key] !== expectedTaskOwner[key])) fail('远端占用不属于当前任务负责人。');
+    live.set(info, { active: true, remote: true, id: info.leaseId, file, cacheDir: target, source: frozenCopy(info.source),
+      markerSha: sha(data), markerIdentity: regular(file), map: inspected.map, reads: 0 });
+    return info;
+  }
+  function detachReadLease(info) {
+    const lease = info && live.get(info); if (!lease || !lease.active) return false;
+    if (!lease.remote || lease.reads) fail('本地读取未结束，不能交还远端占用。');
+    lease.active = false; return true;
   }
   async function readAsset(info, file) {
     const lease = leaseFor(info); safeName(file);
@@ -964,6 +1027,7 @@ function createCache(options = {}) {
   }
   function release(info) {
     const lease = info && live.get(info); if (!lease || !lease.active) return false;
+    if (lease.remote) fail('远端占用只能由任务负责人释放。');
     if (lease.reads) fail('缓存读取尚未结束，不能释放占用记录。');
     leaseFor(info); const stat = regular(lease.file);
     if (!sameFile(lease.markerIdentity, stat) || sha(fs.readFileSync(lease.file)) !== lease.markerSha) fail('占用记录身份已改变；未执行删除。');
@@ -1039,7 +1103,7 @@ function createCache(options = {}) {
     const tx = begin({ ...settings, clearOthers: true });
     try { return tx.cleanup; } finally { tx.close(); }
   }
-  return Object.freeze({ root, begin, readAsset, release, inventory, clearOther });
+  return Object.freeze({ root, begin, readAsset, release, inventory, clearOther, adoptReadLease, detachReadLease });
 }
 
 module.exports = { createCache, OWNER, RECIPE, LIMITS };

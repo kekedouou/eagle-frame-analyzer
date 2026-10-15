@@ -563,3 +563,48 @@ T2尚未验收。后续在本预检基础上依次完成排他清理事务与回
 用户批准整改流程落实后直接开发，目标人工停顿不超过3次，见development-plan L-01～L-03。基线ac59e28；正式545B writer父PID19956不存在、子starting/identity=null，SHA5119d1bcaa189723f3f7212dfbed056ecc040eedd08b1b2231ba79c35e91058e；只读系统快照无FFmpeg，原恢复判missing-process-birth-or-child-registration。此为不可恢复分支的实际证据，尚不能断言旧renderer具体为何结束。本轮先记设计与权限，再实施；未重跑旧自动测量、未清原视频/素材库/完整缓存、未强退Eagle。
 
 L-01已完成本地定位：新增准备取消+清理失败断言先在旧session复现superseded!=error，修正后29组session和28组media纯/模拟检查通过，含abort/close清理失败与重复关闭。中途media补丁作用域错误在本地立即暴露并修正，未交付用户。Eagle二进制fuse只读显示RunAsNode已开启，独立命令实际输出Node16.17.1/Electron22.3.7并退出0，未打开Eagle界面或插件；现有系统csc.exe存在，无需安装工具。上述不是L-02或实际Eagle关窗通过。
+
+## A-07 实现与隔离验证（2026-10-15）
+
+范围：基于`750087d`连续完成L-02及L-03主线接入，没有再要求用户运行旧T2入口。Windows守护持系统命名互斥/Job，Eagle Node16工作程序复用媒体和缓存；窗口只发请求并本地读取经过身份验证的lease。关闭请求先启动独立15秒期限，session/Player读句柄释放后再释放工作程序占用；正常退出等待子程序和管道，异常退出下一负责人先确认旧Job为空再恢复。无新增安装、原视频/素材库/标注写入、真实Eagle强退、推送或发行。
+
+本机环境：Windows、Node24.20.0执行检查；工作程序实际Eagle Node16.17.1/Electron22.3.7；系统已有Framework64/v4.0.30319/csc.exe构建11776B守护EXE。构建产物和本机指纹Git忽略，源码/构建入口入Git。最终源码/EXE指纹：
+
+| 文件 | SHA256（运行时字节） |
+| --- | --- |
+| plugin/native/task-host.cs | 2899360a36ef3b9e1330544dca6d2a396062b65d001be5833a44d53acbcc0977 |
+| plugin/native/task-host.local.exe | b0fd6c0f6377d431849e7992fd810268311e0bd021f6195fa66e178eb48c9e09 |
+| plugin/task-client.cjs | 0c918c314443007c30fec5b26eaf903826b8ba99fdf3fd31b3d5261d18cffcdf |
+| plugin/task-worker.cjs | 0ea0bd791df0b232bd354964d9555b0eab3194e24a3d0261406457c2cbb26cfb |
+| plugin/cache.cjs | e475e5ea92918c0cceadf1eb9937ee3755e8c96112fb4d1ca0e8ea3c2b7eb2c3 |
+| plugin/app.js | b352045c8d6613c34d327633f4f094aef5879eb2e147ef077fb1893dee666e51 |
+
+测试脚本指纹：verify-task-host.cjs为`bd461537bb13a198f924dda118d4046a7dbe97598a557d01256221cf8d377ca9`，verify-task-media.cjs为`5d16a0e0b0b388e43ed213498d1b225ea5b634d2a559c9eb1e9133d63ab8f3e7`。具体本地提交由Git日志关联本节，不新增验收标签。
+
+`node scripts/verify-task-host.cjs`实际输出（精简原字段）：
+
+```json
+{"protocol":"eva-real-windows-guard-v1","passed":true,"cases":["two-owned-instances-wait-and-handover","guard-death-stops-descendant-and-next-owner-recovers","worker-death-stops-descendant-and-next-owner-recovers","client-disconnect-ends-unresponsive-owned-group-without-Eagle-kill","connected-close-ends-unresponsive-owned-group-without-Eagle-kill","twenty-rapid-real-process-open-close-cycles"],"eagleGuiExecuted":false,"cacheOrLibraryTouched":false,"sourceSha256":"2899360a36ef3b9e1330544dca6d2a396062b65d001be5833a44d53acbcc0977","scratchBytes":22047}
+```
+
+真实系统检查仅复制本轮守护/控制worker到tests/host/t2/lifecycle-scratch，启动Eagle.exe的Node模式及自有Node后代；强制中断目标均经父子/可执行路径确认，不含Eagle界面进程。断连和主动关闭均测试“工作程序不响应”并断言14～22秒退出，避免把父程序立即回收当守护成功。两实例确实等待交接，20次是真实进程循环，不是20次模拟事件。22047B临时产物核对创建身份/摘要后删除，事后scratch不存在，未触及素材库。
+
+本地纠错记录：未detached时父Node退出会提前回收守护，新计时断言暴露该问题，改为detached后才通过。无控制台的隐藏程序设置Console.InputEncoding会invalid handle，改为直接UTF8标准流；子程序stdin默认系统编码曾使中文路径ENOENT，改为UTF8原字节。模型适配器由可写改为与实际一致的Object.freeze，发现并修正继承后覆写只读属性。以上均是开发中失败/修复，不能称为最初方案即通过，也不加入未来成功流程。
+
+`tests/task-cache.cjs`12项纯模型通过：远端只读/本地不能删除worker lease、错误任务身份/清单拒绝、启动子程序前后writer字节不变、坏/缺失owner或账本、未登记输出/空半成品、完整缓存与半成品清理中断后继续，以及已变化/未知文件保留。新清理中断模型先复现“残留临时目录所有权不符”：后一次负责清理的writer token不能冒充较早半成品token。修正为优先验证原清理计划的目录身份/剩余文件快照，再继续；不放宽未知文件删除。原35项缓存安全模型仍通过，L-01的29组session/28组media模型及主线关闭中多次重开保留最新请求/防旧关窗任务等接线检查纳入统一检查。
+
+`node scripts/verify-task-media.cjs`最终候选实际输出：
+
+```json
+{"protocol":"eva-real-guard-media-v1","passed":true,"results":[{"case":"existing-complete-local-read","reused":true,"frames":828,"firstFrameSha256":"4c0938e973dd8cbe3980f058a45a1b6f87624035d64e8a80f989ed32ec1fb7ac"},{"case":"decode-cancel-waits-real-tool-and-write-exit","peakObservedTemporaryBytes":0},{"case":"verify-cancel-waits-real-tool-and-write-exit","peakObservedTemporaryBytes":825316},{"case":"worker-interrupted-during-media-next-owner-recovers","reused":true}],"originalsUnchanged":true,"completeCachesPreserved":7,"transientAbsent":true,"eagleGuiOrLibraryExecuted":false,"boundary":"Real owned Windows guard, Eagle Node16, FFmpeg and disk cache; no actual Eagle window or performance acceptance."}
+```
+
+同一已登记VP9原素材复用828帧完整缓存，首帧本地读取摘要与manifest一致；已有3秒H.264合成输入分别解码/最终校验阶段取消，没有新造源素材。另中断已握手核实归属的Node worker，下一工作程序自动恢复半成品并复用原完整缓存。原输入前后SHA/精确文件ID/mtime一致，7份旧完整缓存目录和容量相同，事后无writer/lease/partial/recovery。本轮250ms采样得到0B及825316B，0B表示取消太快而未捕获临时输出，不表示实际峰值为零；先前一次同协议观测12435B/1125789B，说明该采样只适合有界观察，不能作精确资源或准备性能结果。没有进行新Canvas、主观手感或声音判断。
+
+旧正式545B writer已由有界旧格式迁移自动恢复：需原renderer及直系子程序均不存在、无partial、无观察到FFmpeg/probe，再核对原内容/身份。原字节及SHA5119d1bcaa189723f3f7212dfbed056ecc040eedd08b1b2231ba79c35e91058e保存在plugin/cache/reap-4dedabd640bf7981e7d2abf7.json及对应结果。未借迁移清空完整缓存；旧verification-runs测试记录锁未作为产品门禁，也未为写新测试回执扩大16MiB配额。本次短技术结果保存在本已有报告，不新增相似报告/无用副本。
+
+限制及待验：没有操作真实Eagle窗口、没有运行Canvas/拖动计量或重新验音画，不能由进程循环推断Eagle窗口已通过。已知未知/被替换文件、任意硬盘损坏、无法证明来源的旧记录仍会明确报错并保留；尚未实际强退Eagle（无此授权），亦未执行新进程结构的长期P-04/完整T4性能矩阵。前次成绩按原边界保留，不宣称本轮提高性能。新增worker/守护进程开销须与renderer、FFmpeg分列，1GiB仍指管理的缓存数据预算，不是全部进程内存硬上限。
+
+统一检查最终通过：`node scripts/check.cjs --without-prepared-host`核对91份脚本语法/正式代码依赖边界、全部纯/接线模型、正式manifest/assets、26份文档210条本地链接；只排除明确停用的旧T2准备入口指纹，不跳过正式模块或新回归。文档追加尚未完成时曾并行触发“Missing heading”，补齐文档后顺序复查通过；属于写作顺序问题，无改判或豁免。`git diff --check`通过。工作区只包含本专项源码、测试/脚本、6份已有文档及2条构建忽略规则；原Player/需求规格/素材/发布包未改，最终以本地提交保存，未推送或建验收标签。
+
+交付待验：已有主线“视频分析”入口和本机构建已就绪；用户只集中体验预缓存中关闭/快速重开与换视频、就绪后关闭/复用、正常播放暂停/拖动/声音/已有标注读取，不输入命令、不用T2测量按钮、不新增测试标注。本次为计划中的第一次必要人工停顿，此前0次。人工反馈到来前，L-03、本专项最终验收及T2/T4整体均保持待验。

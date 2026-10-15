@@ -65,6 +65,8 @@ function verify() {
     realEaglePackagedCopyVerified: false, frozenRuntime: true, noRuntimeOrPrivateData: true };
 }
 function build() {
+  assert(!fs.readFileSync(path.join(root, 'plugin/app.js'), 'utf8').includes('task-client.cjs') || runtime.includes('task-client.cjs'),
+    'Lifecycle runtime changed; update a new release package allowlist before packaging. Existing frozen snapshots remain verifiable.');
   directory(root); directory(path.join(root, 'plugin'));
   assert(process.platform === 'win32' && !/^c:/i.test(root), 'Preview must be created on a non-C Windows drive.');
   if (!fs.existsSync(dist)) fs.mkdirSync(dist); directory(dist);

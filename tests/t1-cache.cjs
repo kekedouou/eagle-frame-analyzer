@@ -79,7 +79,8 @@ function memoryFileSystem() {
       if (nodes.has(b)) { if (nodeFor(b).kind !== 'file' || nodeFor(a).kind !== 'file') error('EEXIST'); nodes.delete(b); }
       for (const [file, value] of [...nodes]) if (file === a || file.startsWith(a + '\\')) { nodes.delete(file); nodes.set(b + file.slice(a.length), value); }
     },
-    unlinkSync(file) { const value = nodeFor(file); if (value.kind === 'dir') error('EISDIR'); nodes.delete(normal(file)); deleted.push(normal(file)); },
+    unlinkSync(file) { const value = nodeFor(file); if (value.kind === 'dir') error('EISDIR');
+      if (state.beforeUnlink) state.beforeUnlink(normal(file)); nodes.delete(normal(file)); deleted.push(normal(file)); },
     rmdirSync(file) { if (api.readdirSync(file).length) error('ENOTEMPTY'); nodes.delete(normal(file)); deleted.push(normal(file)); }
   };
   api.promises = { async open(file, flags) {

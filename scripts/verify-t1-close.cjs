@@ -73,6 +73,9 @@ async function run(mode, result, selected = defaults().input, settings = {}) {
     for (const name of ['play', 'pause', 'seek', 'step']) this[name] = () => {};
   } }, close: nativeClose, addEventListener(type, fn) { hooks[type] = fn; } };
   vm.runInNewContext(code, { window: win, eagle, performance, Promise, setTimeout, require(name) {
+    if (name === path.join(root, 'task-client.cjs')) return { createTaskClient: options => ({ cache: capability,
+      media: { async prepare(snapshot, settings) { return require('../plugin/media.cjs').createMedia({ tools: await options.discoverTools(), cache: capability }).prepare(snapshot, settings); } },
+      beginClose() {}, close: async () => ({ status: 'closed' }) }) }; // Model only; real OS guard has its own explicit checks.
     if (name === path.join(root, 'cache.cjs')) return { createCache: () => capability };
     if (name === path.join(root, 'eagle.cjs')) return { createEagleAdapter: () => ({
       captureSelected: async () => ({ id: selected.itemId || 'registered-h264-cfr', itemId: selected.itemId || 'registered-h264-cfr', name: selected.name || 'registered H.264', ext: 'mp4', filePath: selected.file }),

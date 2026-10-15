@@ -67,7 +67,7 @@ if (fs.existsSync(productManifest)) {
   console.log('Product manifest/assets checked; real Eagle not executed');
 }
 checkDocs();
-if (fs.existsSync(path.join(root, 'tests/host/window/prepared.local.json'))) {
+if (!process.argv.includes('--without-prepared-host') && fs.existsSync(path.join(root, 'tests/host/window/prepared.local.json'))) {
   const prepared = require('./prepare-window-host.cjs').verify(root);
   console.log('Window automatic entry ownership/source hashes checked: ' + prepared.bytes + ' bytes; Eagle not executed');
 }
