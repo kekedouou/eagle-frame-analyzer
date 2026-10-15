@@ -6,7 +6,15 @@ const { spawnSync } = require('child_process'), { createCache } = require('../pl
 const { publish, reuse, hash } = require('../tests/t2-lifecycle.cjs');
 const root = path.resolve(__dirname, '../tests/host/t2/maintenance-scratch');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-if (process.argv[2] === '--read-child') {
+if (process.argv[2] === '--interrupt-recency-child') {
+  (async () => {
+    const cache = createCache({ pluginRoot: root }), target = cache.inventory().caches.find(c => c.sourceSha256 === hash(2)).directory;
+    const tx = cache.begin({ sourceSha256: hash(2) }); assert(await tx.readComplete());
+    const cacheRoot = path.join(root, 'cache'), writer = JSON.parse(fs.readFileSync(path.join(cacheRoot, 'writer.lock')));
+    fs.writeFileSync(path.join(target, 'owner.next-' + writer.token + '.json'), '{interrupted', { flag: 'wx' });
+    process.stdout.write('staged\n', () => process.exit(0)); // Deliberately skip tx.close; this owned test process only.
+  })().catch(error => { console.error(error.stack); process.exitCode = 1; });
+} else if (process.argv[2] === '--read-child') {
   const cache = createCache({ pluginRoot: root }); const before = cache.inventory();
   const tx = cache.begin({ sourceSha256: hash(2) }); tx.close();
   console.log(JSON.stringify({ caches: before.caches.length, leases: before.leases.length }));
@@ -37,6 +45,13 @@ async function main() {
     current = boot(); const reused = await reuse(current, 2); current.cache.release(reused);
   }
   results.push('three-manual-clear-complete-fresh-process-read-and-reuse-cycles');
+  const immutable = ['owner.json', 'manifest.json', '000000.jpg'].map(name => [name, sha(fs.readFileSync(path.join(retained.cacheDir, name)))]);
+  const interrupted = spawnSync(process.execPath, [__filename, '--interrupt-recency-child'], { windowsHide: true, shell: false, encoding: 'utf8', timeout: 20000 });
+  assert(!interrupted.error && interrupted.status === 0 && interrupted.stdout.trim() === 'staged', interrupted.stderr || String(interrupted.error));
+  current = boot(); const repairedMetadata = current.cache.begin({ sourceSha256: hash(2) }); assert(await repairedMetadata.readComplete()); repairedMetadata.close();
+  for (const [name, digest] of immutable) assert.equal(sha(fs.readFileSync(path.join(retained.cacheDir, name))), digest);
+  assert(!fs.readdirSync(retained.cacheDir).some(name => name.startsWith('owner.next'))); childRead();
+  results.push('real-process-exit-during-recency-write-recovers-only-temp-preserving-complete-assets');
   const cacheRoot = path.join(root, 'cache'), plans = fs.readdirSync(cacheRoot).filter(n => /^cleanup-[0-9a-f]{24}\.json$/.test(n));
   for (const name of plans) assert(JSON.parse(fs.readFileSync(path.join(cacheRoot, name))).directoryIdentity.every(n => typeof n === 'string'));
   const planPath = path.join(cacheRoot, plans[0]), resultPath = planPath.replace('.json', '.result.json');

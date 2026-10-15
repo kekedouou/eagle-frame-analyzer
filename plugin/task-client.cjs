@@ -23,6 +23,7 @@ function createTaskClient(options) {
   let host = null, ready = null, serial = 0, closing = null, ended = false, failure = null, guardFinished = false;
   let readyResolve, readyReject, exitResolve;
   let taskOwner = null;
+  let guardCancelled = false;
   const exited = new Promise(resolve => { exitResolve = resolve; });
   const pending = new Map(), leases = new Set();
   function failed(error) {
@@ -52,6 +53,10 @@ function createTaskClient(options) {
               taskOwner = value.taskOwner; readyResolve(value);
             }
             else if (value.type === 'guard' && value.event === 'waiting') { if (options.onWaiting) options.onWaiting(); }
+            else if (value.type === 'guard' && value.event === 'cancelled') {
+              if (taskOwner || pending.size) throw new Error('任务取消发生在错误阶段。');
+              guardCancelled = true; guardFinished = true; readyReject(issue('MEDIA_CANCELLED', '视频准备已取消。'));
+            }
             else if (value.type === 'guard' && value.event === 'finished') guardFinished = value.exitCode === 0;
             else if (value.type === 'progress') { const request = pending.get(value.id); if (request && request.onProgress) request.onProgress(value.value); }
             else if (value.type === 'response') {
@@ -97,9 +102,11 @@ function createTaskClient(options) {
     if (closing) return closing;
     closing = (async () => {
       if (!host && !ready) return { status: 'closed' };
+      beginClose();
       for (const info of leases) local.detachReadLease(info);
       leases.clear();
       try { if (!failure && !ended) await ask('close'); }
+      catch (error) { if (!guardCancelled) throw error; }
       finally { if (host && !ended) host.stdin.end(); await exited; }
       if (failure) throw failure; return { status: 'closed' };
     })(); closing.catch(() => {}); return closing;

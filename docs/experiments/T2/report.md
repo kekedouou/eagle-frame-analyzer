@@ -644,3 +644,44 @@ tests/t2-lifecycle.cjs现29组维护模型通过。`node scripts/verify-cache-ma
 ## 2026-10-15 用户局部验收与继续授权
 
 来源为本对话用户反馈：“‘清理→关闭→换视频打开’没有任何问题。另外准备中关闭重开也顺便测试没有问题。其余的尚未测试。”对应上一交付2c349e4，仅这两项记录用户人工验收通过；不是Codex亲自执行，不补造轨迹/时间/资源证据，不替代其余L-03及T2/T4。用户要求先保存进度，连续完善到本轮固定候选再集中全方位高强度体验，验收后告知下一步；当前继续现有720p/1GiB主线稳定性和交付核对，不新增画质/标注写入/发布。
+
+## 2026-10-15 稳定性最终验收候选
+
+用户反馈先保存为本地`f09056e`，再连续完善；本轮固定现有主线plugin及Git作为关闭/缓存稳定性最终候选，不复制新测试插件或更改旧发行包。它不是已通过T4的正式MVP，用户全方位高强度体验尚待进行。两项2c349e4人工通过保持原来源/范围，不自动升级为新版本全项通过。
+
+新增问题及修复均先复现再改：真实Windows中等待上一Mutex交接时关闭，旧代码2.5秒内未结算，新守护取消自己的等待、客户端结算MEDIA_CANCELLED而正常结束关闭，原持有者继续运行。缓存模型中完整缓存复用留owner.next时旧代码报“缓存包含未登记文件”；新临时标记绑定writer token，依据旧任务终止证明、目录精确ID、owner/manifest/临时文件指纹保存原reap计划，再仅删除匹配临时文件。完整、截断和空标记可恢复，原完整owner/manifest/资产保留；旧固定标记仅内容完整且不可变字段一致才兼容。错误token/缺writer/变更文件/越界计划拒绝，恢复自己中断仍沿原计划继续。cleanup/reap写出均用自身读规则复核，未增加全局缓存清空或忽略未知数据分支。
+
+当前模型结果：task-cache23项（新增11项元数据恢复及保护）、session31项（新增清理与定位晚到结果不恢复关闭UI），维护29项、旧恢复14项及既有UI/RAM/标注模型继续纳入统一检查。新代码未写Eagle标注；标注保存关闭的既有测试为模拟宿主，RAM应用换片/关闭亦为模型。实际窗口跨功能结果由用户集中体验补充，不能用这些检查冒充。
+
+真实Windows守护检查输出：
+
+```json
+{"protocol":"eva-real-windows-guard-v1","passed":true,"cases":["close-while-waiting-cancels-without-disturbing-current-owner","two-owned-instances-wait-and-handover","guard-death-stops-descendant-and-next-owner-recovers","worker-death-stops-descendant-and-next-owner-recovers","client-disconnect-ends-unresponsive-owned-group-without-Eagle-kill","connected-close-ends-unresponsive-owned-group-without-Eagle-kill","twenty-rapid-real-process-open-close-cycles"],"eagleGuiExecuted":false,"cacheOrLibraryTouched":false,"sourceSha256":"d2836873806edf1d320312ebe9866095785295bfe576d803ac2bca3b718cb45f","scratchBytes":22162}
+```
+
+等待关闭断言先在旧守护实际复现失败，修正/重构建后定向与完整检查通过；20次为真实自有进程循环，未强退Eagle界面。守护EXE仍11776B，已用现有系统编译器就绪；22162B本轮隔离固定产物核对身份/摘要后清除，无新增依赖。
+
+真实Windows磁盘检查已通过三组清理→新进程读回与复用、旧完成计划兼容、损坏重建；新增自有Node进程留下截断最近使用标记后直接退出，正式cache恢复仅清临时文件，owner/manifest/资产SHA前后一致。最近通过轮11493B生成物已清，末次复核大小单列；总预算仍2MiB，未访问正式素材/缓存。不是图片解码或Eagle界面验收，不将自有测试进程退出称为真实宿主强退。
+
+真实媒体取消补验采用`--cancel-only`，因为用户清理后现有两个完整缓存均非旧T0登记基线，不重建历史基线来制造复用。默认完整模式增加已有基线前置条件，缺少时明确拒绝。Eagle Node16+现有FFmpeg+新守护实际输出：
+
+```json
+{"protocol":"eva-real-guard-media-v1","mode":"cancel-only","passed":true,"results":[{"case":"decode-cancel-waits-real-tool-and-write-exit","peakObservedTemporaryBytes":0},{"case":"verify-cancel-waits-real-tool-and-write-exit","peakObservedTemporaryBytes":1125829}],"originalsUnchanged":true,"completeCachesPreserved":2,"transientAbsent":true,"eagleGuiOrLibraryExecuted":false,"boundary":"Real owned Windows guard, Eagle Node16, FFmpeg and disk cache; no actual Eagle window or performance acceptance."}
+```
+
+源为已有登记3秒H.264合成文件，无新造/修改/导入素材；前后精确ID/SHA/mtime一致，两份正式完整缓存目录/容量保留，无writer/lease/partial/recovery。0B为250ms采样未捕获短暂输出，不是实际峰值；1125829B同样是观测最大值，不充当P-03/P-04完整成绩。没有重跑A/B/S1、旧T2测量、长时资源或画质/性能策略实验。
+
+候选运行字节指纹（本地Git记录源码，守护EXE及构建指纹继续忽略但本机已就绪）：
+
+| 文件 | SHA256 |
+| --- | --- |
+| plugin/cache.cjs | 4dd1c0fbcccd9e9a0830d8130eaa769097a4339d6c3f4699ac64fad8f8a15075 |
+| plugin/task-client.cjs | 3cc8ee85c76ab991fcd71996ba9f1cef37dee6c209dabe4b6a26ab0dec990926 |
+| plugin/native/task-host.cs | d2836873806edf1d320312ebe9866095785295bfe576d803ac2bca3b718cb45f |
+| plugin/native/task-host.local.exe | a36a6d461c2b98069546fe5647855f4d16a94e97c7d5c26f91e3658bb119e209 |
+
+检查工具指纹：verify-task-host.cjs `8971e44fa1b912e6a521e4339afeeb88a103f1174bb3154e55681a7474fae487`；verify-cache-maintenance.cjs `e1bc06ffdc2695b850cce5ff5c66e37a2584538e6a5b4ba524a435d3305fdf3a`；verify-task-media.cjs `efd65ded7876bd093bb27e8040cc0dbe3fce80ea0e70cf6fd590f10c57bf322f`。由关联Git提交冻结，不另建已验收标签。
+
+最终核对：`node scripts/check.cjs --without-prepared-host`通过92份脚本语法/模块依赖边界、全部纯/接线模型、正式入口、26份文档216条链接；原停用测量入口指纹是唯一明确排除项。末次真实磁盘验证仍通过上述4组结果，生成11487B后核对身份/摘要定点清除；lifecycle-scratch与maintenance-scratch均不存在，未清其他存留证据/测试归属标记。`git diff --check`通过；本轮提交包含8份运行/测试脚本及6份既有文档，未改产品规格、UI/Player、偏好、原视频、素材库、安装目录或旧发行包。最终文档只读链接/指纹及构建一致性复核后保存本地Git，工作区应干净；未推送或打发布/验收标签。
+
+交付与下一步：仍用原主插件“视频分析”，无需重导入、不含测量按钮。集中清单维护在verification“本轮稳定性候选的集中人工验收”，涵盖换片关开、播放拖动逐帧/空格、缓存复用清理、RAM应用、已有标注与专用素材主动保存、窗口/长用、无效选中恢复。用户通过后收尾L-03及T2剩余条件，再补同候选T4全项R/P证据；旧自动测量已停止，恢复计量方式另行说明确认。全编码/源帧独立参考/P-03/所有进程长期资源未在此重验，1080p/2K与新功能后续安排。任意磁盘损坏、无归属的旧残片及截断旧固定标记仍保留报错，原视频/素材库不以恢复为由删除；本轮未强退真实Eagle、发布或推送。

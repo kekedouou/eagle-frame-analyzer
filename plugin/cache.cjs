@@ -155,10 +155,11 @@ function createCache(options = {}) {
     }
     job.disk += bytes;
   }
-  function inspectDirectory(dir, kind, expectedSha, allowDamaged = false) {
+  function inspectDirectory(dir, kind, expectedSha, allowDamaged = false, ownedRecencyFile = null) {
     verifyOwner(dir, kind); const info = readJSON(path.join(dir, 'manifest.json'));
     const map = manifestAssets(info, expectedSha), expected = new Set(['owner.json', 'manifest.json', ...map.keys()]);
     const actual = fs.readdirSync(dir);
+    if (ownedRecencyFile) expected.add(ownedRecencyFile);
     if (kind === 'partial' && actual.includes('transaction.log')) expected.add('transaction.log');
     if (actual.length !== expected.size || actual.some(name => !expected.has(name))) fail('缓存包含未登记文件；拒绝使用。');
     let totalBytes = 0, lengthsMatch = true;
@@ -320,6 +321,7 @@ function createCache(options = {}) {
     // Verify actual bytes, not just the expected buffer, before deleting.
     if (leafSnapshot(file).sha256 !== sha(data)) fail('清理记录落盘校验失败；未授权后续删除。');
     if (/^cleanup-[0-9a-f]{24}(?:\.result)?\.json$/.test(path.basename(file))) verifyCleanupRecord(path.basename(file));
+    else if (/^reap-[0-9a-f]{24}(?:\.result)?\.json$/.test(path.basename(file))) verifyReapRecord(path.basename(file));
   }
   function occupancy() {
     const protectedDirs = new Set();
@@ -477,8 +479,8 @@ function createCache(options = {}) {
     if (!Number.isSafeInteger(sequence + 1)) fail('最近使用序号超过安全范围。');
     const data = jsonBytes({ ...old, lastUsedAt: Date.now(), useSequence: sequence + 1 });
     // Atomic metadata replacement preserves the complete cache if the process
-    // exits before rename. An unconfirmed owner.next is never guessed away.
-    const next = path.join(dir, 'owner.next.json'); charge(job, data.length);
+    // Bind the temporary marker to this writer before any bytes are written.
+    const next = path.join(dir, 'owner.next-' + job.token + '.json'); charge(job, data.length);
     const fd = fs.openSync(next, 'wx'), identity = fs.fstatSync(fd); let written = 0, fdClosed = false;
     try {
       writeAll(fd, data, 0, n => { written += n; }); fs.fsyncSync(fd); fs.closeSync(fd); fdClosed = true;
@@ -509,7 +511,53 @@ function createCache(options = {}) {
       !/^[0-9a-f]{64}$/.test(record.file.sha256) || !Array.isArray(record.file.identity) || record.file.identity.length !== 4 ||
       !Number.isSafeInteger(record.file.bytes) || record.file.bytes < 0 || !record.ownerRecord || record.ownerRecord.root !== root))
       fail('恢复计划含未授权的路径或身份。');
+    if (!match[2] && value.recency !== undefined) {
+      if (!Array.isArray(value.recency) || value.recency.length > 1 || value.recency.some(item => {
+        const parent = value.records.find(record => record.ownerRecord.kind === 'writer' && record.ownerRecord.token === item.writerToken);
+        return !parent || parent.file.file !== 'writer.lock' || parent.ownerRecord.schema !== 1 || parent.ownerRecord.owner !== OWNER ||
+          parent.ownerRecord.recipe !== RECIPE || !/^[0-9a-f]{24}$/.test(item.writerToken || '') || !/^[0-9a-f]{64}$/.test(parent.ownerRecord.sourceSha256 || '') ||
+          item.directory !== path.join(root, 'media-' + parent.ownerRecord.sourceSha256 + '-' + recipeId) ||
+          !Array.isArray(item.directoryIdentity) || item.directoryIdentity.length !== 2 || !item.directoryIdentity.every(preciseDirectoryId) ||
+          !/^[0-9a-f]{24}$/.test(item.cacheToken) || !/^[0-9a-f]{64}$/.test(item.ownerSha256) || !/^[0-9a-f]{64}$/.test(item.manifestSha256) ||
+          !item.file || !['owner.next.json', 'owner.next-' + item.writerToken + '.json'].includes(item.file.file) ||
+          !Number.isSafeInteger(item.file.bytes) || item.file.bytes < 0 || item.file.bytes > LIMITS.metadataBytes ||
+          !/^[0-9a-f]{64}$/.test(item.file.sha256) || !Array.isArray(item.file.identity) || item.file.identity.length !== 4 || !item.file.identity.every(Number.isFinite);
+      })) fail('最近使用恢复计划身份不明。');
+    }
     return value;
+  }
+  function assertRecencyRepair(item, allowMissing = false) {
+    const file = path.join(item.directory, item.file.file);
+    if (!fs.existsSync(file) && allowMissing) return false;
+    if (!sameDirectoryIdentity(item.directory, directory(item.directory), item.directoryIdentity) ||
+        verifyOwner(item.directory, 'cache').token !== item.cacheToken ||
+        leafSnapshot(path.join(item.directory, 'owner.json')).sha256 !== item.ownerSha256 ||
+        leafSnapshot(path.join(item.directory, 'manifest.json')).sha256 !== item.manifestSha256 ||
+        JSON.stringify(leafSnapshot(file)) !== JSON.stringify(item.file)) fail('最近使用恢复目标已变化；保留原件。');
+    inspectDirectory(item.directory, 'cache', path.basename(item.directory).slice(6, 70), false, item.file.file);
+    return true;
+  }
+  function recencyRepair(writer) {
+    const dir = path.join(root, 'media-' + writer.sourceSha256 + '-' + recipeId);
+    if (!fs.existsSync(dir)) return null;
+    directory(dir);
+    const candidates = fs.readdirSync(dir).filter(name => /^owner\.next(?:-.*)?\.json$/.test(name));
+    if (!candidates.length) return null;
+    const bound = 'owner.next-' + writer.token + '.json';
+    if (candidates.length !== 1 || ![bound, 'owner.next.json'].includes(candidates[0])) fail('最近使用临时标记缺少任务绑定；保留原件。');
+    const leaf = candidates[0], owner = verifyOwner(dir, 'cache');
+    if (leaf === 'owner.next.json') {
+      // Only a complete legacy marker matching immutable owner fields is
+      // recoverable. A truncated unbound legacy marker remains protected.
+      const next = readJSON(path.join(dir, leaf));
+      const stable = value => JSON.stringify(Object.keys(value).sort().filter(key => !['lastUsedAt', 'useSequence'].includes(key)).map(key => [key, value[key]]));
+      if (stable(next) !== stable(owner) || !Number.isSafeInteger(next.useSequence) || next.useSequence <= (owner.useSequence || 0) ||
+          !Number.isSafeInteger(next.lastUsedAt) || next.lastUsedAt < (owner.lastUsedAt || 0)) fail('旧最近使用临时标记不能确认；保留原件。');
+    }
+    const item = { writerToken: writer.token, directory: dir, directoryIdentity: captureDirectoryIdentity(dir), cacheToken: owner.token,
+      ownerSha256: leafSnapshot(path.join(dir, 'owner.json')).sha256, manifestSha256: leafSnapshot(path.join(dir, 'manifest.json')).sha256,
+      file: leafSnapshot(path.join(dir, leaf)) };
+    assertRecencyRepair(item); return item;
   }
   function requireReapCompleted(name) {
     const value = verifyReapRecord(name), planName = name.replace('.result.json', '.json'), resultName = planName.replace('.json', '.result.json');
@@ -580,7 +628,7 @@ function createCache(options = {}) {
     }
     const names = fs.readdirSync(root), pending = names.filter(name => /^reap-[0-9a-f]{24}\.json$/.test(name) &&
       !fs.existsSync(path.join(root, name.replace(/\.json$/, '.result.json'))));
-    const records = [], partialPlans = [];
+    const records = [], partialPlans = [], recency = [];
     for (const name of names.filter(name => name === 'writer.lock' || /^lease-[0-9a-f]{24}\.json$/.test(name))) {
       const file = path.join(root, name); let value;
       try { value = readJSON(file); } catch (_) { continue; } // Unknown locks are never reaped.
@@ -591,6 +639,7 @@ function createCache(options = {}) {
         value.cacheDir !== path.join(root, 'media-' + value.sourceSha256 + '-' + recipeId))) continue;
       if (!processIdentity.inspect(value).safe) continue;
       records.push({ file: leafSnapshot(file), ownerRecord: value });
+      if (name === 'writer.lock') { const item = recencyRepair(value); if (item) recency.push(item); }
       if (name === 'writer.lock') for (const child of names.filter(name => /^partial-[0-9a-f]{24}$/.test(name))) {
         const dir = path.join(root, child);
         const prior = names.filter(name => /^cleanup-[0-9a-f]{24}\.json$/.test(name)).map(verifyCleanupRecord)
@@ -623,6 +672,15 @@ function createCache(options = {}) {
     try {
       if (!guarded) { writeAll(guardFd, guardData, 0, n => { guardWritten += n; }); fs.fsyncSync(guardFd); fs.closeSync(guardFd); }
       ownGuard();
+      const reaps = pending.map(name => ({ name, plan: verifyReapRecord(name), data: fs.readFileSync(path.join(root, name)) }));
+      if (records.length) {
+        const plan = ownerValue('reap-plan', { token: nonce(), records, ...(recency.length ? { recency } : {}), createdAt: Date.now() });
+        reaps.push({ name: 'reap-' + plan.token + '.json', plan, data: jsonBytes(plan), fresh: true });
+      }
+      const recencyByDirectory = new Map();
+      for (const reap of reaps) for (const item of reap.plan.recency || []) {
+        assertRecencyRepair(item, true); if (fs.existsSync(path.join(item.directory, item.file.file))) recencyByDirectory.set(item.directory, item.file.file);
+      }
       // Validate and account every current leaf before any delete. No recursive
       // remove, links, unknown root entries or anonymous partial are accepted.
       let used = 0;
@@ -634,7 +692,7 @@ function createCache(options = {}) {
           if (!new RegExp('^media-[0-9a-f]{64}-' + recipeId + '$').test(name) && !partialPlans.some(plan => plan.directory === file) &&
             !fs.readdirSync(root).some(leaf => /^cleanup-[0-9a-f]{24}\.json$/.test(leaf) && verifyCleanupRecord(leaf).directory === file)) fail('恢复根含未知目录。');
           directory(file);
-          if (name.startsWith('media-') && !interruptedCleanup.has(file)) inspectDirectory(file, 'cache', name.slice(6, 70));
+          if (name.startsWith('media-') && !interruptedCleanup.has(file)) inspectDirectory(file, 'cache', name.slice(6, 70), false, recencyByDirectory.get(file));
           for (const leaf of fs.readdirSync(file)) used += regular(path.join(file, leaf)).size;
         } else {
           if (!['owner.json', 'writer.lock', 'recovery.lock'].includes(name) && !/^lease-[0-9a-f]{24}\.json$/.test(name) &&
@@ -645,11 +703,6 @@ function createCache(options = {}) {
         }
       }
       const plans = partialPlans.map(plan => ({ plan, data: jsonBytes(plan) }));
-      const reaps = pending.map(name => ({ name, plan: verifyReapRecord(name), data: fs.readFileSync(path.join(root, name)) }));
-      if (records.length) {
-        const plan = ownerValue('reap-plan', { token: nonce(), records, createdAt: Date.now() });
-        reaps.push({ name: 'reap-' + plan.token + '.json', plan, data: jsonBytes(plan), fresh: true });
-      }
       const needed = plans.reduce((n, p) => n + p.data.length, 0) + reaps.reduce((n, p) => n + (p.fresh ? p.data.length : 0) + 4096, 0);
       if (!Number.isSafeInteger(used) || used + needed > diskBytes) fail('没有空间预留恢复清单及回执；未删除。');
       for (const item of records) if (!processIdentity.inspect(item.ownerRecord).safe) fail('恢复前任务终止证据不足；保留。');
@@ -658,12 +711,17 @@ function createCache(options = {}) {
       for (const reap of reaps) {
         ownGuard();
         if (reap.fresh) writeRecord(path.join(root, reap.name), reap.data);
+        for (const item of reap.plan.recency || []) assertRecencyRepair(item, true);
         for (const item of reap.plan.records) {
           if (!processIdentity.inspect(item.ownerRecord).safe) fail('恢复任务身份仍不确定；未删除该项。');
           const file = path.join(root, item.file.file);
           if (fs.existsSync(file) && JSON.stringify(leafSnapshot(file)) !== JSON.stringify(item.file)) fail('恢复目标已经替换；未删除。');
         }
         let freedBytes = 0;
+        for (const item of reap.plan.recency || []) {
+          ownGuard(); if (!assertRecencyRepair(item, true)) continue;
+          fs.unlinkSync(path.join(item.directory, item.file.file)); freedBytes += item.file.bytes;
+        }
         for (const item of reap.plan.records) {
           ownGuard(); const file = path.join(root, item.file.file);
           if (!fs.existsSync(file)) continue;
@@ -821,7 +879,7 @@ function createCache(options = {}) {
     }
     function openAsset(name, internal = false) {
       safeName(name);
-      if ((!internal && ['owner.json', 'manifest.json', 'writer.lock', 'transaction.log', 'owner.next.json'].includes(name)) || job.files.has(name)) fail('缓存文件已登记或属于保留名称。');
+      if ((!internal && (['owner.json', 'manifest.json', 'writer.lock', 'transaction.log'].includes(name) || /^owner\.next(?:-[0-9a-f]{24})?\.json$/.test(name))) || job.files.has(name)) fail('缓存文件已登记或属于保留名称。');
       ensurePartial();
       const file = path.join(job.partial, name), fileFd = fs.openSync(file, 'wx+');
       const record = { file: name, bytes: 0, identity: fs.fstatSync(fileFd), closed: false, sha256: null };
@@ -867,7 +925,7 @@ function createCache(options = {}) {
     }
     async function writeAsset(name, data, internal = false) {
       safeName(name);
-      if ((!internal && ['owner.json', 'manifest.json', 'writer.lock', 'transaction.log', 'owner.next.json'].includes(name)) || job.files.has(name)) fail('缓存文件已登记或属于保留名称。');
+      if ((!internal && (['owner.json', 'manifest.json', 'writer.lock', 'transaction.log'].includes(name) || /^owner\.next(?:-[0-9a-f]{24})?\.json$/.test(name))) || job.files.has(name)) fail('缓存文件已登记或属于保留名称。');
       if (!Buffer.isBuffer(data)) fail('缓存输出只接受Buffer。');
       if (data.length > (internal ? LIMITS.metadataBytes : LIMITS.assetBytes)) fail('单个缓存资产超过上限。');
       // Whole JPEG/metadata buffers need no streaming boundary. Verify the

@@ -71,6 +71,43 @@ async function main() {
     const replacement = h.reboot({ taskOwner: owner('c'), processIdentity }).begin({ sourceSha256: 'b'.repeat(64) });
     assert(!h.nodes.has(target), 'Interrupted ' + kind + ' deletion must resume from its original strict plan'); replacement.close();
   }
-  console.log('Task cache: 12 pure ownership/remote-read/interruption regressions passed; no files or processes created.');
+  for (const scenario of ['complete-temp', 'truncated-temp', 'empty-temp', 'legacy-valid', 'legacy-truncated', 'wrong-token', 'missing-writer', 'replaced-temp']) {
+    const h = harness({ taskOwner: owner('a'), processIdentity }), info = await prepared(h); h.cache.release(info);
+    const before = Buffer.from(h.nodes.get(path.join(info.cacheDir, 'owner.json')).data);
+    h.cache.begin({ sourceSha256: SOURCE_SHA });
+    const writer = JSON.parse(h.nodes.get(path.join(h.root, 'writer.lock')).data);
+    const leaf = scenario.startsWith('legacy-') ? 'owner.next.json' : 'owner.next-' + (scenario === 'wrong-token' ? 'e'.repeat(24) : writer.token) + '.json';
+    const temp = path.join(info.cacheDir, leaf), marker = { ...JSON.parse(before), useSequence: 999, lastUsedAt: Date.now() };
+    h.make(temp, 'file', scenario.includes('truncated') ? '{partial' : scenario === 'empty-temp' ? '' : JSON.stringify(marker));
+    if (scenario === 'missing-writer') h.nodes.delete(path.join(h.root, 'writer.lock'));
+    if (scenario === 'replaced-temp') h.state.afterWrite = ({ file }) => { if (/reap-[0-9a-f]{24}\.json$/.test(file)) h.nodes.get(temp).ino += 1; };
+    const next = h.reboot({ taskOwner: owner('b'), processIdentity });
+    if (['legacy-truncated', 'wrong-token', 'missing-writer', 'replaced-temp'].includes(scenario)) {
+      assert.throws(() => next.begin({ sourceSha256: SOURCE_SHA })); assert(h.nodes.has(temp));
+    } else {
+      const tx = next.begin({ sourceSha256: SOURCE_SHA }); assert(await tx.readComplete()); tx.close();
+      assert(!h.nodes.has(temp)); assert(h.nodes.get(path.join(info.cacheDir, 'owner.json')).data.equals(before));
+      assert.equal(next.inventory().caches.length, 1);
+    }
+    assert.equal(h.nodes.get(path.join(info.cacheDir, '000000.jpg')).data.toString(), 'frame-data');
+  }
+  for (const phase of ['temp', 'writer', 'tampered-path']) {
+    const h = harness({ taskOwner: owner('a'), processIdentity }), info = await prepared(h); h.cache.release(info);
+    h.cache.begin({ sourceSha256: SOURCE_SHA });
+    const lock = path.join(h.root, 'writer.lock'), writer = JSON.parse(h.nodes.get(lock).data), temp = path.join(info.cacheDir, 'owner.next-' + writer.token + '.json');
+    h.make(temp, 'file', '{partial');
+    h.state.beforeUnlink = file => { if (file === (phase === 'writer' ? lock : temp)) throw new Error('recency-repair-interrupted'); };
+    assert.throws(() => h.reboot({ taskOwner: owner('b'), processIdentity }).begin({ sourceSha256: SOURCE_SHA }), /recency-repair-interrupted/);
+    h.state.beforeUnlink = null;
+    if (phase === 'tampered-path') {
+      const record = [...h.nodes].find(([file]) => /reap-[0-9a-f]{24}\.json$/.test(file)), value = JSON.parse(record[1].data);
+      value.recency[0].directory = 'G:\\originals'; record[1].data = Buffer.from(JSON.stringify(value));
+      assert.throws(() => h.reboot({ taskOwner: owner('c'), processIdentity }).begin({ sourceSha256: SOURCE_SHA }), /最近使用恢复计划身份不明/);
+      assert(h.nodes.has(temp)); continue;
+    }
+    const next = h.reboot({ taskOwner: owner('c'), processIdentity }), tx = next.begin({ sourceSha256: SOURCE_SHA });
+    assert(await tx.readComplete()); tx.close(); assert(!h.nodes.has(temp)); assert.equal(next.inventory().caches.length, 1);
+  }
+  console.log('Task cache: 23 pure ownership/remote-read/interruption regressions passed; no files or processes created.');
 }
 main().catch(error => { console.error(error.stack); process.exitCode = 1; });

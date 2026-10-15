@@ -44,6 +44,21 @@ send({type:'ready',taskOwner:owner,pid:process.pid,node:process.versions.node});
     process.kill(pid);
   }
   try {
+    {
+      let sawWait; const waiting = new Promise(resolve => { sawWait = resolve; });
+      const active = client(), original = await active.ping(), queued = client({ onWaiting: sawWait });
+      const ping = queued.ping(); ping.catch(() => {}); await waiting; const at = Date.now(); let timer;
+      try {
+        queued.beginClose(); await Promise.race([queued.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Closing while waiting for handover did not cancel the wait.')), 2500); })]);
+        await assert.rejects(ping, error => error.code === 'MEDIA_CANCELLED');
+        assert(Date.now() - at < 2500); assert.equal((await active.ping()).pid, original.pid);
+        results.push('close-while-waiting-cancels-without-disturbing-current-owner');
+      } finally { clearTimeout(timer); await active.close(); }
+      if (process.argv.includes('--handover-cancel-only')) {
+        console.log(JSON.stringify({ protocol: 'eva-real-windows-guard-v1', passed: true, cases: results, eagleGuiExecuted: false,
+          cacheOrLibraryTouched: false, sourceSha256: sha(fs.readFileSync(path.join(repo, 'plugin/native/task-host.cs'))), scratchBytes: [...files.values()].reduce((n, f) => n + f.bytes, 0) })); return;
+      }
+    }
     let waiting; const observed = new Promise(resolve => { waiting = resolve; });
     const a = client(), first = await a.ping(), b = client({ onWaiting: waiting });
     let settled = false; const next = b.ping().then(value => { settled = true; return value; });

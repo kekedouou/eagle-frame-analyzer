@@ -62,11 +62,13 @@ public static class EvaTaskHost {
         try { acquired=gate.WaitOne(0); } catch(AbandonedMutexException) { acquired=true; }
         if(!acquired) Emit("{\"type\":\"guard\",\"event\":\"waiting\"}");
         var waiting=Stopwatch.StartNew();
-        while(!acquired && !disconnected) {
+        while(!acquired && !disconnected && !closingRequested) {
           try { acquired=gate.WaitOne(100); } catch(AbandonedMutexException) { acquired=true; }
           if(waiting.ElapsedMilliseconds>30000) throw new IOException("Previous video session did not hand over within 30 seconds.");
         }
-        if(!acquired||disconnected) return 0;
+        if(!acquired||disconnected||closingRequested) {
+          Emit("{\"type\":\"guard\",\"event\":\"cancelled\"}"); return 0;
+        }
         // This group name contains only prior instances of this plugin guard,
         // its Node worker and descendants. Never attach the Eagle host itself.
         job=CreateJobObject(IntPtr.Zero,"Local\\EvaCacheJob-"+key);

@@ -52,6 +52,21 @@ function harness(settings = {}) {
   return h;
 }
 async function main() {
+  await test('Closing while cache clearing is pending suppresses its late result', async () => {
+    const issued = deferred(), finish = deferred();
+    const h = harness({ clearOther() { issued.resolve(); return finish.promise; } });
+    await h.session.loadSelected(); const cleaning = h.session.clearOtherCaches(); await issued.promise;
+    await h.session.close(); const changes = h.changes.length;
+    finish.resolve({ cleared: 1, freedBytes: 123 }); assert.equal((await cleaning).status, 'superseded');
+    assert.equal(h.session.snapshot().state, 'closed'); assert.equal(h.changes.length, changes); assert.equal(h.released.length, 1);
+  });
+  await test('Closing during a seek ignores the old picture result and never restores playback', async () => {
+    const gate = deferred(), issued = deferred();
+    const h = harness({ seek: async () => { issued.resolve(); await gate.promise; } });
+    await h.session.loadSelected(); const locating = h.session.seek(2); await issued.promise;
+    await h.session.close(); const changes = h.changes.length; gate.resolve(); await locating;
+    assert.equal(h.session.snapshot().state, 'closed'); assert.equal(h.changes.length, changes); assert.equal(h.released.length, 1);
+  });
   await test('Manual cache clearing pauses and protects the loaded source rather than a new Eagle selection',async()=>{
     let request;const h=harness({clearOther(value){request=value;return {cleared:2,freedBytes:400};}});
     await h.session.loadSelected();await h.session.seek(2,{final:true});await h.session.toggle();h.selection=selected('B');
