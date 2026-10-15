@@ -12,8 +12,9 @@
       local = new URL('file:///' + entry.pathname.replace(/^\/+/, ''));
     else if (entryScheme !== 'file:') throw new Error('T2 验证入口必须使用 Eagle 本地插件地址。');
     const hostRoot = path.dirname(fileURLToPath(local.href));
-    const { install } = require(path.resolve(hostRoot, '../../support/window-launch.cjs'));
-    Object.defineProperty(window, 'EVAWindowAutomatic', { value: install({ window, document, eagle, hostRoot, entryScheme }), configurable: false });
+    const { install, WINDOW_OBSERVER_VERSION } = require(path.resolve(hostRoot, '../../support/window-launch.cjs'));
+    if (WINDOW_OBSERVER_VERSION !== 'eva-window-observer-v2') throw new Error('测试入口版本不匹配，未启动；请由Codex核对加载路径与模块版本。');
+    Object.defineProperty(window, 'EVAWindowAutomatic', { value: install({ window, document, eagle, hostRoot, entryScheme, observeStartup: true }), configurable: false });
   } catch (error) {
     const show = () => {
       document.title = 'T2 自动测量 · 入口启动失败';

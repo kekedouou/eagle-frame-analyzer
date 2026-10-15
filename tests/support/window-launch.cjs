@@ -6,6 +6,7 @@ const entry = require('../../scripts/prepare-window-host.cjs');
 const driver = require('./window-host.cjs');
 const { createStore } = require('./t2-evidence.cjs');
 const PREPARE_MS = 120000, WORK_MS = 180000, RESOURCE_MS = 72 * 60000;
+const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v2';
 function install(options) {
   const { window: win, document: doc, eagle, hostRoot } = options;
   if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T2独立自动验证入口。');
@@ -15,6 +16,21 @@ function install(options) {
   let timer = null, done = Promise.resolve(), receipts = [], failureSaved = false, safeToRecord = false, closeScheduled = false;
   let cancelPreparation = null, runCallback = null, exitCallback = null, activeMode = 'performance';
   let activeContext = null, windowUnloadObserved = false;
+  if (options.observeStartup) {
+    const prepared = verify(repo);
+    if (prepared.marker.mode === 'window-checks') {
+      activeMode = 'window-checks'; safeToRecord = true;
+      const store = storeFactory(repo, { stage: 'T2' });
+      try {
+        store.start({ reserveBytes: 64 * 1024 });
+        receipts.push(store.save('host', { schema: 'window-lifecycle-start-v2', stage: 'T2', at: new Date().toISOString(),
+          origin: 'real-Eagle-independent-window-observation', pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION,
+          sdkCreateObserved: false, hostRoot: prepared.host, pluginRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
+          note: 'Entry installed before SDK create. Not proof of readiness, closure or cleanup.' }));
+      } catch (error) { throw new Error('窗口验收入口启动记录未保存，本项未启动：' + String(error.message).slice(0, 512)); }
+      finally { store.close(); }
+    }
+  }
   // Capture formal callbacks for test invocation; restore SDK registration immediately.
   for (const [name, assign] of [['onPluginRun', callback => { runCallback = callback; }], ['onPluginBeforeExit', callback => { exitCallback = callback; }]]) {
     if (typeof eagle[name] !== 'function') continue;
@@ -80,7 +96,7 @@ function install(options) {
         receipts.push(store.save('host', { schema: 'window-lifecycle-unload-request-v1', stage: 'T2', at: new Date().toISOString(),
           origin: 'real-Eagle-independent-window-observation', launchContext: activeContext, state: value && value.state,
           sourceIdentity: value && value.sourceIdentity, progress: value && value.progress, loadMetrics: value && value.loadMetrics,
-          nativeWindowDestroyedVerified: false, cleanupVerified: false,
+          pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, nativeWindowDestroyedVerified: false, cleanupVerified: false,
           note: 'Observed beforeunload request only. Product may defer closure for cleanup; user confirmation and post-close file checks remain required.' }));
       } catch (error) { message('关闭请求记录未保存：' + String(error.message).slice(0, 512), true); }
       finally { if (store) { try { store.close(); } catch (_) {} } }
@@ -169,7 +185,7 @@ function install(options) {
             at: new Date().toISOString(), launchContext: context, state: snapshot.state, sourceIdentity: snapshot.sourceIdentity,
             memorySettings: snapshot.memorySettings, playback: snapshot.playback ? { frameId: snapshot.playback.frameId,
               time: snapshot.playback.time, budget: snapshot.playback.budget } : null, loadMetrics: snapshot.loadMetrics,
-            settingsInteractionVerified: false, performanceVerified: false }));
+            pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, settingsInteractionVerified: false, performanceVerified: false }));
         } catch (error) { failureSaved = true; throw new Error('内存设置就绪证据未保存：' + error.message); }
         finally { store.close(); }
         state = 'saved';
@@ -203,4 +219,4 @@ function install(options) {
   return Object.freeze({ get done() { return done; }, snapshot: () => ({ state, completed, receipts: receipts.slice() }), cancel: stop,
     unsavedEvidence: () => job ? job.unsavedEvidence() : null });
 }
-module.exports = { install, PREPARE_MS, WORK_MS, RESOURCE_MS };
+module.exports = { install, PREPARE_MS, WORK_MS, RESOURCE_MS, WINDOW_OBSERVER_VERSION };

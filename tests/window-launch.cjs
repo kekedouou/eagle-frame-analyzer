@@ -119,13 +119,13 @@ function fileTests() {
   let installed = null;
   const win = { location: { href: pathToFileURL(path.join(m.host, 'index.local.html')).href + '?cache=1#test' } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: win, document: {}, eagle: {},
-    require(name) { return name.endsWith('window-launch.cjs') ? { install(options) { installed = options; return {}; } } : require(name); } });
+    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v2", install(options) { installed = options; return {}; } } : require(name); } });
   assert.strictEqual(installed.hostRoot, m.host); assert(win.EVAWindowAutomatic);
   installed = null;
   const eagleUrl = pathToFileURL(path.join(m.host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAWINDOWVERIFY20261013/') + '?theme=DARK&locale=zh_CN#test';
   const eagleWin = { location: { href: eagleUrl } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: eagleWin, document: {}, eagle: {},
-    require(name) { return name.endsWith('window-launch.cjs') ? { install(options) { installed = options; return {}; } } : require(name); } });
+    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v2", install(options) { installed = options; return {}; } } : require(name); } });
   assert.strictEqual(installed.hostRoot, m.host); assert.strictEqual(installed.entryScheme, 'eagleplugin:'); assert(eagleWin.EVAWindowAutomatic);
   ok('Windows Eagle main-process eagleplugin URL reaches the test launcher with Chinese/space paths');
   for (const address of ['https://invalid.test', 'eagleplugin://id/remote/path']) {
@@ -147,6 +147,13 @@ function fileTests() {
   missingSdk.onPluginCreate(() => {}); assert.strictEqual(wronglyRegistered, false);
   assert(/launcher module failure/.test(missingNodes.error.textContent));
   ok('launcher module failure preserves the original error without secondary product module loading');
+  const staleNodes = { error: {}, status: {} }, staleSdk = { onPluginCreate() { throw new Error('stale launcher must not register'); } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), {
+    URL, window: { location: { href: eagleUrl } }, document: { getElementById: id => staleNodes[id] || null }, eagle: staleSdk,
+    require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: 'old', install() { throw new Error('stale install called'); } } : require(name); } });
+  staleSdk.onPluginCreate(() => { throw new Error('product must not start'); });
+  assert.match(staleNodes.error.textContent, /版本不匹配/);
+  ok('Bootstrap rejects stale launcher version visibly without clearing module cache or initializing product');
 }
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function launchModel(settings = {}) {
@@ -177,8 +184,9 @@ function launchModel(settings = {}) {
   if (settings.bootstrap) {
     win.location = { href: pathToFileURL(path.join(host, 'index.local.html')).href.replace('file://', 'eagleplugin://EVAWINDOWVERIFY20261013/') + '?theme=DARK&locale=zh_CN' };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'host/window/bootstrap.js'), 'utf8'), { URL, window: win, document: doc, eagle,
-      require(name) { return name.endsWith('window-launch.cjs') ? { install: input => install({ ...options, ...input }) } : require(name); } });
-    controller = win.EVAWindowAutomatic; assert(controller);
+      require(name) { return name.endsWith('window-launch.cjs') ? { WINDOW_OBSERVER_VERSION: "eva-window-observer-v2", install: input => install({ ...options, ...input }) } : require(name); } });
+    controller = win.EVAWindowAutomatic;
+    if (settings.expectBootstrapFailure) assert.equal(controller, undefined); else assert(controller);
   } else controller = install(options);
   if (settings.formal) {
     const ui = { canvas: {}, bindSession() {}, update() {}, destroy() {} };
@@ -273,7 +281,7 @@ async function launchTests() {
   const args = m.options.lastDriver;
   assert.strictEqual(args.bridge, m.win.EVADiagnostics); assert.strictEqual(args.pluginRoot, m.plugin);
   assert.strictEqual(args.launchContext.entryScheme, 'eagleplugin:');
-  assert.strictEqual(args.launchContext.callbackToReadyMs, 102); assert.strictEqual(args.launchContext.appEntryToReadyMs, 100);
+  assert.strictEqual(args.launchContext.callbackToReadyMs, 112 - args.launchContext.sdkCallbackAt); assert.strictEqual(args.launchContext.appEntryToReadyMs, 100);
   assert.strictEqual(args.launchContext.sdkPluginRoot, m.host); args.verifyLaunch();
   assert.strictEqual(m.launch(), done); // Duplicate SDK create cannot start another measurement.
   m.jobDone.resolve({ complete: true, earlyRegressionPassed: true, p03: { withinTarget: null }, receipts: ['summary'] });
@@ -348,6 +356,17 @@ async function launchTests() {
   assert(beforeReady.saved.some(item => item.value.schema === 'window-automatic-entry-failure-v1'));
   gatePreparation.resolve(); await tick(); assert.equal(beforeReady.counts().driverCalls, 0);
   ok('Manual preparation cancellation records the pre-close stage and retains cancellation separately; late ready cannot restart');
+  const startObserved = launchModel({ bootstrap: true, mode: 'window-checks', snapshot: settingsReady });
+  assert.equal(startObserved.saved.length, 1); assert.equal(startObserved.saved[0].value.schema, 'window-lifecycle-start-v2');
+  assert.equal(startObserved.saved[0].value.sdkCreateObserved, false); assert.equal(startObserved.counts().preparedCalls, 0);
+  await startObserved.launch(); assert.equal(startObserved.saved[1].value.schema, 'window-lifecycle-ready-v1');
+  startObserved.unload(); assert.equal(startObserved.saved[2].value.schema, 'window-lifecycle-unload-request-v1');
+  assert.equal(startObserved.counts().driverCalls, 0);
+  ok('Real bootstrap model saves window startup before SDK create, then ready/close separately; performance mode adds no startup writes');
+  const startFailed = launchModel({ bootstrap: true, mode: 'window-checks', snapshot: settingsReady, saveFailure: true, expectBootstrapFailure: true });
+  assert.equal(startFailed.saved.length, 0); assert.equal(startFailed.counts().preparedCalls, 0);
+  assert.match(startFailed.nodes.error.textContent, /入口启动记录未保存/);
+  ok('Window startup persistence failure blocks product initialization visibly rather than proceeding with no evidence');
 }
 (async () => { fileTests(); await launchTests(); console.log('Window automatic entry: ' + count + ' pure checks passed; no Eagle, media or evidence writes.'); })()
   .catch(error => { console.error(error.stack); process.exitCode = 1; });
