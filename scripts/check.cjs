@@ -71,4 +71,8 @@ if (!process.argv.includes('--without-prepared-host') && fs.existsSync(path.join
   const prepared = require('./prepare-window-host.cjs').verify(root);
   console.log('Window automatic entry ownership/source hashes checked: ' + prepared.bytes + ' bytes; Eagle not executed');
 }
+if (fs.existsSync(path.join(root, 'tests/host/t4/prepared.local.json'))) {
+  const prepared = require('./prepare-mvp-host.cjs').verify();
+  console.log('Current stage-4 entry/source/build fingerprints checked: ' + prepared.bytes + ' bytes; Eagle not executed');
+}
 console.log('default check passed (no media generation, no historical rerun, no Eagle/library writes)');

@@ -20,7 +20,7 @@ function unsavedEvidenceJSON(summary, failure) {
   let json = JSON.stringify(base);
   if (Buffer.byteLength(json) <= EVIDENCE_LIMITS.fileBytes) return json;
   // Keep the entire trace before optional environment and duplicated summaries.
-  const minimal = { schema: VERSION, stage: 'T2', origin: summary.origin, type: 'unsaved-summary', complete: false,
+  const minimal = { schema: VERSION, stage: summary.stage || 'T2', origin: summary.origin, type: 'unsaved-summary', complete: false,
     earlyRegressionPassed: false, persisted: false, error: summary.error || null, persistenceError,
     source: summary.source, pluginRoot: summary.pluginRoot, receipts: summary.receipts, cleanup: summary.cleanup,
     resourceStop: summary.resourceStop, existingP03: summary.existingP03, interruptedTrace: trace,
@@ -35,16 +35,21 @@ function unsavedEvidenceJSON(summary, failure) {
   json = JSON.stringify(minimal);
   if (Buffer.byteLength(json) <= EVIDENCE_LIMITS.fileBytes) return json;
   // Defensive bound even if unexpected context, rather than a trace, is huge.
-  return JSON.stringify({ schema: VERSION, stage: 'T2', type: 'unsaved-summary', complete: false, earlyRegressionPassed: false,
+  return JSON.stringify({ schema: VERSION, stage: summary.stage || 'T2', type: 'unsaved-summary', complete: false, earlyRegressionPassed: false,
     persisted: false, persistenceError, traceRetention: minimal.traceRetention,
     omittedContext: 'The remaining context also exceeded 2MiB and cannot be retained completely.' });
 }
-function fingerprints(pluginRoot) {
+function fingerprints(pluginRoot, extra = []) {
+  if (!Array.isArray(extra) || extra.some(n => !['task-client.cjs', 'task-worker.cjs', 'native/task-host.cs', 'native/task-host.local.exe'].includes(n)))
+    throw new Error('Unknown extra runtime fingerprint.');
   const sources = {};
-  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs', 'preferences.cjs']) {
-    const absolute = path.join(pluginRoot, file), stat = fs.lstatSync(absolute);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MIB || !samePath(fs.realpathSync(absolute), absolute)) throw new Error('正式源码指纹路径或容量不符合边界。');
-    const bytes = fs.readFileSync(absolute); if (bytes.length !== stat.size) throw new Error('正式源码指纹读取不完整。'); sources[file] = sha(bytes);
+  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs', 'preferences.cjs', ...extra]) {
+    const absolute = path.join(pluginRoot, file), stat = fs.lstatSync(absolute, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || BigInt(stat.size) > BigInt(MIB) || !samePath(fs.realpathSync(absolute), absolute)) throw new Error('正式源码指纹路径或容量不符合边界。');
+    const bytes = fs.readFileSync(absolute), after = fs.lstatSync(absolute, { bigint: true });
+    if (BigInt(bytes.length) !== BigInt(stat.size) || ['dev', 'ino', 'size', 'mtimeNs', 'mtimeMs'].some(k => String(stat[k]) !== String(after[k])))
+      throw new Error('正式源码指纹读取不完整或读取期间变化。');
+    sources[file] = sha(bytes);
   }
   return sources;
 }
@@ -147,6 +152,9 @@ function createCapture(frames, frozen) {
     settled: () => [...requests.values()].every(record => record.terminal) };
 }
 function run(options = {}) {
+  const evidenceStage = options.evidenceStage || 'T2';
+  if (!['T2', 'T4'].includes(evidenceStage) || evidenceStage === 'T4' && typeof options.createStore !== 'function')
+    throw new Error('T4 requires an independent record store.');
   const { bridge, document: doc, window: win, pluginRoot } = options;
   if (!bridge || typeof bridge.snapshot !== 'function' || typeof bridge.subscribe !== 'function' || !doc || !win || typeof win.PointerEvent !== 'function')
     throw new Error('宿主验证需要只读诊断桥、document、window和实际插件目录。');
@@ -155,18 +163,20 @@ function run(options = {}) {
       launchContext.kind !== 'real-Eagle-formal-code-independent-entry' || !samePath(launchContext.mappedFormalRoot, pluginRoot) ||
       typeof options.verifyLaunch !== 'function'))
     throw new Error('独立宿主入口来源无效或超过16KiB。');
-  const rssStop = require('./ram-diagnostic.cjs').hostRssLimit(launchContext && launchContext.ramDiagnostic);
+  const first = bridge.snapshot();
+  const rssStop = evidenceStage === 'T4'
+    ? require('./mvp-resource.cjs').approvedLimits(first && first.playback && first.playback.budget && first.playback.budget.limit).pluginRssStopBytes
+    : require('./ram-diagnostic.cjs').hostRssLimit(launchContext && launchContext.ramDiagnostic);
   if (launchContext && launchContext.ramDiagnostic && launchContext.ramDiagnostic.rendererRssStopBytes !== undefined &&
     launchContext.ramDiagnostic.rendererRssStopBytes !== rssStop) throw new Error('RAM对照观察停止线记录不一致。');
   const origin = launchContext && launchContext.ramDiagnostic ? 'automatic-real-Eagle-in-memory-RAM-candidate' :
     launchContext ? 'automatic-real-Eagle-independent-entry-formal-code' : 'user-started-real-Eagle-formal-window';
-  const first = bridge.snapshot();
   if (!first || first.state !== 'paused' || !first.playback || !first.loadMetrics) throw new Error('请先等待正式视频首帧暂停就绪，再启动验证。');
   if (typeof first.pluginRoot !== 'string' || !path.isAbsolute(first.pluginRoot) || typeof pluginRoot !== 'string' || !samePath(first.pluginRoot, pluginRoot))
     throw new Error('取证目录必须与只读诊断桥提供的实际插件目录一致。');
   const { info, manifestSha256, manifestBytes } = registeredManifest(pluginRoot, first);
-  const initialFingerprints = fingerprints(pluginRoot);
-  const repo = path.dirname(path.resolve(pluginRoot)), store = createStore(repo);
+  const initialFingerprints = fingerprints(pluginRoot, options.extraFingerprints);
+  const repo = path.dirname(path.resolve(pluginRoot)), store = (options.createStore || createStore)(repo);
   const reservation = store.start({ reserveBytes: RESERVE });
   const timeline = doc.getElementById('timeline'), hint = doc.getElementById('timeHint');
   if (!timeline || !hint) { store.close(); throw new Error('正式时间轴或时间提示缺失。'); }
@@ -234,7 +244,7 @@ function run(options = {}) {
   }
   async function saveRound(summary) {
     const trace = await round.capture.pack();
-    pendingRoundPayload = { schema: VERSION, stage: 'T2', origin, launchContext, type: 'round',
+    pendingRoundPayload = { schema: VERSION, stage: evidenceStage, origin, launchContext, type: 'round',
       source: first.sourceIdentity, protocol: protocol.PROTOCOL, summary, trace };
     const receipt = save(pendingRoundPayload, 'round');
     receipts.push(receipt); rounds.push(summary); round = null; pendingRoundPayload = null;
@@ -320,7 +330,7 @@ function run(options = {}) {
       }
     }
     try {
-      const sources = fingerprints(pluginRoot), fingerprintsUnchanged = JSON.stringify(sources) === JSON.stringify(initialFingerprints);
+      const sources = fingerprints(pluginRoot, options.extraFingerprints), fingerprintsUnchanged = JSON.stringify(sources) === JSON.stringify(initialFingerprints);
       if (!fingerprintsUnchanged) result = { complete: false, earlyRegressionPassed: false, error: { code: 'HOST_SOURCE_CHANGED', message: '测量期间正式源码发生变化。' } };
       let launchSourceError = null;
       if (launchContext) { try { options.verifyLaunch(); } catch (error) {
@@ -328,7 +338,7 @@ function run(options = {}) {
         result = { complete: false, earlyRegressionPassed: false, error: { code: 'HOST_ENTRY_CHANGED', message: launchSourceError } };
       } }
       const current = snapshot(), p03 = first.loadMetrics;
-      const summary = { schema: VERSION, stage: 'T2', origin, launchContext, type: 'summary', ...result,
+      const summary = { schema: VERSION, stage: evidenceStage, origin, launchContext, type: 'summary', ...result,
         launchSourcesVerifiedAtEnd: launchContext ? !launchSourceError : null,
         pluginRoot: first.pluginRoot,
         source: first.sourceIdentity, sourceMetadata: info.source, duration: info.duration, frames: info.frames.length, manifestSha256, manifestBytes,
@@ -340,7 +350,7 @@ function run(options = {}) {
           note: 'App/session entry through audio/index/first-frame ready and synchronous UI notification; one load only. Reuse has no numeric readiness gate; independent entry provenance, when present, is recorded separately.' },
         rounds, receipts, reservation, interruptedTrace: failedCapture, resourceStop: { requested: closeForRss, thresholdBytes: rssStop,
           closeRequestedAfterReceipt: closeForRss, independentlyObservedReleased: false },
-        limitations: ['T2 six-round formal-UI regression only; not complete T2 lifecycle acceptance, not T0 full 18-round repetition or T4 full acceptance.',
+        limitations: [evidenceStage + ' six-round formal-UI regression only; not complete T2 lifecycle acceptance, not T0 full 18-round repetition or T4 full acceptance.',
           'Same loaded Player and RAM working set remain across rounds; no automatic RAM reset, reload or complete-cache deletion.',
           'Synthetic DOM pointers exercise formal UI/session/player; physical mouse feel and OS pointer capture still require user observation.',
           'Draw submissions are measured, not monitor scanout. Completed-draw P95 excludes superseded/reused requests; their counts and gaps remain.',

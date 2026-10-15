@@ -171,7 +171,7 @@ function lifecycleHarness(settings = {}) {
   vm.runInNewContext(code, { module, Buffer, console, process: { ...process, memoryUsage: () => ({ rss: settings.rss || 1, external: 0, arrayBuffers: 0 }) },
     require(name) {
       if (name === 'fs') return fakeFs;
-      if (name === './t2-evidence.cjs') return { createStore: () => store, LIMITS: require('./support/t2-evidence.cjs').LIMITS };
+      if (name === './t2-evidence.cjs') return { createStore: () => { if (settings.rejectLegacyStore) throw new Error('Old T2 writer must not be used.'); return store; }, LIMITS: require('./support/t2-evidence.cjs').LIMITS };
       if (name === './t0-protocol.cjs') return { ...originalProtocol, PROTOCOL: { ...originalProtocol.PROTOCOL, roundMs: 30, randomTargets: 2 } };
       return require(require('module').createRequire(path.join(__dirname, 'support/window-host.cjs')).resolve(name));
     } }, { filename: 'window-host-memory-lifecycle' });
@@ -179,6 +179,15 @@ function lifecycleHarness(settings = {}) {
     win, value, activePointer: () => activePointer, closed: () => closed, onRequest: callback => { requestObserver = callback; } };
 }
 async function lifecycle() {
+  const t4 = lifecycleHarness({ rejectLegacyStore: true, rss: 2.8 * 1024 ** 3 });
+  t4.value.playback.budget = { limit: 2 * 1024 ** 3, used: 0 };
+  let newStoreCalls = 0;
+  t4.options.evidenceStage = 'T4'; t4.options.createStore = () => { newStoreCalls++; return t4.store; };
+  const t4Result = await t4.driver.run(t4.options).done;
+  assert(t4Result.complete); assert.strictEqual(newStoreCalls, 1);
+  assert(t4.saved.every(record => record.stage === 'T4'));
+  assert.strictEqual(t4.saved.at(-1).resourceStop.thresholdBytes, 3 * 1024 ** 3);
+  count++; console.log('ok Window host lifecycle: current T4 uses independent records and actual 2GiB/3GiB scope, never old T2 writer');
   const h = lifecycleHarness(), result = await h.driver.run(h.options).done;
   assert.strictEqual(result.complete, true); assert.strictEqual(h.saved.length, 7); assert.strictEqual(h.saved[6].rounds.length, 6);
   assert(h.store.closed); assert.strictEqual(h.observers.size, 0); assert.strictEqual(h.intervals.size, 0); assert.strictEqual(h.activePointer(), false);

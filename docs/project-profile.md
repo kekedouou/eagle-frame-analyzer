@@ -1,10 +1,12 @@
 # 项目说明
 
-2026-10-15当前：用户认可bd7481f稳定性候选的集中体验，授权连续推进至T4的MVP总验收；本地体验节点为phase4-lifecycle-experience-approved。原plugin/主入口及11776B守护构建保留，原T2测量入口仍停用，T2技术收尾和T4全项证据尚未完成。先审计可复用证据，再补当前版本的性能/逐帧/新进程资源，不重做产品设计或增加画质功能。当前状态见[进度](progress.md#2026-10-15-稳定性体验认可与t4推进授权)，执行顺序见[计划](development-plan.md#稳定性体验通过后的-t2t4-执行顺序)，反馈来源及局限见[T2记录](experiments/T2/report.md#2026-10-15-用户集中体验认可与后续证据盘点)。
+2026-10-15当前：稳定性集中体验认可保留，T2证据/7段指定样本审计完成；阶段4独立验收入口、外部Windows采样及有界记录准备完成，待首次真实Eagle接线和默认1GiB短回归。正式plugin运行文件仍bd7481f/11776B守护，旧T2入口停用，T2/T4未整体验收。新入口为tests/host/t4（manifest已生成），不替换日常“视频分析”；实际载入需用户操作/授权。进度见[当前记录](progress.md)，具体入口、32MiB独立记录和已批准停止线见[T4计划](experiments/T4/plan.md)，实际/未测结果见[T4记录](experiments/T4/report.md)。
 
 当前入口和检查以此段为准，下面旧宿主入口说明保留为历史：使用`plugin/manifest.json`既有“视频分析”入口，无需重新导入T2插件。`task-client.cjs`发送控制请求，`native/task-host.cs`用Windows系统互斥/进程组持有本会话任务，`task-worker.cjs`复用media/cache准备和清理；Player直接在本地读帧，Eagle/标注API不迁移。本机11776B守护产物及构建指纹已就绪、Git忽略；源码变更/新检出由Codex执行`node scripts/build-task-host.cjs`构建，无需用户安装依赖或输入命令。
 
 当前统一检查为`node scripts/check.cjs --without-prepared-host`：保留全部正式代码、纯/接线模型、文档及manifest检查，仅不核对已经停用且源码过时的T2准备入口。显式Windows/媒体检查入口及副作用见[专项验证](verification.md#生命周期整改验证-l-01l-03)。不执行旧自动测量、不清真实库、不改旧展示包；新的发行包必须包含新增运行模块与守护产物，旧白名单未更新时脚本明确拒绝新打包。
+
+新验证工具：`scripts/audit-mvp.cjs --read-only --samples`只读证据/输入；`scripts/build-resource-sampler.cjs`用已有编译器构建tests/native下采样器，`scripts/prepare-mvp-host.cjs`生成阶段4入口≤256KiB。统一检查在新入口存在时始终核对其来源/构建指纹，--without-prepared-host只排除旧入口。`mvp-launch`负责测试协调，`mvp-monitor/mvp-resource`负责外部采样和纯统计，`t4-evidence`负责有界记录；共用window-host计量核显式选择T4，未开启旧T2 writer。正式app/player/cache不依赖这些文件，资源/记录问题不能成为产品启动或关闭条件。显式Windows/磁盘自检范围见[T4计划](experiments/T4/plan.md#文件与入口)。
 
 文档职责：根README面向使用者，介绍Eagle插件、两种体验包及快速开始；本文件承担工程目录、运行/检查入口和上下文恢复，进度与实验原始记录仍在docs/progress.md及其链接中。主页不累积实验流水账，也不把绿色展示版升级为正式开发主线。
 

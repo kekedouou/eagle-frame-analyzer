@@ -31,3 +31,11 @@
 /plugin/native/task-host.local.exe
 /plugin/native/task-host.local.json
 /tests/host/t2/maintenance-scratch/
+/tests/native/resource-sampler.local.exe
+/tests/native/resource-sampler.local.json
+/tests/host/t4/resource-scratch/
+/tests/host/t4/manifest.json
+/tests/host/t4/index.local.html
+/tests/host/t4/logo.local.png
+/tests/host/t4/prepared.local.json
+/tests/host/t4/evidence-scratch/
