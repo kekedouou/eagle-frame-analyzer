@@ -30,6 +30,68 @@ async function demand(h) {
 }
 async function test(name, work) { await work(); count++; console.log('ok T2 lifecycle: ' + name); }
 async function main() {
+  await test('manual clear with a large Windows directory ID can be read on next boot', async () => {
+    const h = harness(), item = await publish(h, 1); h.cache.release(item);
+    const dir = h.nodes.get(item.cacheDir); dir.exactIno = 10977524091718209n; dir.ino = Number(dir.exactIno);
+    const cleared = h.cache.clearOther({ sourceSha256: hash(2) }); assert.equal(cleared.cleared, 1);
+    const plan = [...h.nodes].find(([file]) => /cleanup-[0-9a-f]{24}\.json$/.test(file));
+    assert.equal(JSON.parse(plan[1].data).directoryIdentity[1], '10977524091718209');
+    assert(!h.nodes.has(item.cacheDir)); assert.equal(h.reboot().inventory().caches.length, 0);
+    const next = h.reboot().begin({ sourceSha256: hash(2) }); next.close();
+  });
+  for (const action of ['idle', 'capacity', 'damaged', 'orphan']) await test('large directory IDs remain readable after ' + action + ' cleanup', async () => {
+    const h = harness({ diskBytes: 128 * 1024 }), at = Date.now() + 1000;
+    const first = await publish(h, 1); h.cache.release(first);
+    const dir = h.nodes.get(first.cacheDir); dir.exactIno = 10977524091718209n; dir.ino = Number(dir.exactIno);
+    if (action === 'idle') {
+      const marker = h.nodes.get(path.join(first.cacheDir, 'owner.json')), value = JSON.parse(marker.data);
+      marker.data = Buffer.from(JSON.stringify({ ...value, lastUsedAt: at - 86400000 }));
+      const tx = h.reboot({ now: () => at }).begin({ sourceSha256: hash(2) }); tx.close();
+    } else if (action === 'capacity') {
+      for (const n of [2, 3]) h.cache.release(await publish(h, n)); await demand(h);
+    } else if (action === 'damaged') {
+      h.nodes.get(path.join(first.cacheDir, '000000.jpg')).data[0] ^= 1;
+      const tx = h.cache.begin({ sourceSha256: hash(1) }); assert.equal(await tx.readComplete(), null); tx.close();
+    } else {
+      const tx = h.cache.begin({ sourceSha256: hash(2) }); await tx.writeAsset('000000.jpg', Buffer.from('partial'));
+      const partial = [...h.nodes.keys()].find(file => path.basename(file).startsWith('partial-'));
+      h.nodes.get(partial).exactIno = 10977524091718209n; h.nodes.get(partial).ino = Number(10977524091718209n);
+      const next = h.reboot({ processIdentity: { self: () => ({ pid: 4242, startTicks: '639000000000000001', image: 'D:\\worker.exe' }),
+        inspect: () => ({ safe: true }) } }).begin({ sourceSha256: hash(2) }); next.close(); assert(!h.nodes.has(partial));
+    }
+    for (const [file, node] of h.nodes) if (/cleanup-[0-9a-f]{24}\.json$/.test(file))
+      assert(JSON.parse(node.data).directoryIdentity.every(n => typeof n === 'string'));
+    h.reboot().inventory(); const next = h.reboot().begin({ sourceSha256: hash(5) }); next.close();
+  });
+  for (const scenario of ['valid', 'recreated', 'missing-receipt', 'wrong-hash', 'wrong-owner', 'blocked'])
+    await test('rounded completed legacy cleanup history: ' + scenario, async () => {
+      const h = harness(), first = await publish(h, 1); h.cache.release(first); h.cache.clearOther({ sourceSha256: hash(2) });
+      const [file, node] = [...h.nodes].find(([file]) => /cleanup-[0-9a-f]{24}\.json$/.test(file)), plan = JSON.parse(node.data);
+      const receiptFile = file.replace('.json', '.result.json'), receipt = h.nodes.get(receiptFile), done = JSON.parse(receipt.data);
+      plan.directoryIdentity = [1, Number(10977524091718209n)]; node.data = Buffer.from(JSON.stringify(plan));
+      done.planSha256 = scenario === 'wrong-hash' ? 'f'.repeat(64) : crypto.createHash('sha256').update(node.data).digest('hex');
+      if (scenario === 'wrong-owner') done.owner = 'unknown';
+      if (scenario === 'blocked') { done.status = 'blocked'; done.freedBytes = 0; }
+      receipt.data = Buffer.from(JSON.stringify(done)); if (scenario === 'missing-receipt') h.nodes.delete(receiptFile);
+      const original = Buffer.from(node.data);
+      if (scenario === 'valid' || scenario === 'recreated') {
+        if (scenario === 'recreated') h.cache.release(await publish(h, 1));
+        h.reboot().inventory(); const next = h.reboot().begin({ sourceSha256: hash(1) }); next.close();
+        if (scenario === 'recreated') assert(h.nodes.has(path.join(first.cacheDir, '000000.jpg')), 'Completed history cannot delete a newly created cache at the same path');
+      } else assert.throws(() => h.reboot().inventory(), /清理计划路径或文件清单不明/);
+      assert(node.data.equals(original), 'Do not rewrite historical plans or fabricate a precise ID');
+    });
+  await test('interrupted large-ID cleanup refuses a replacement directory even when numeric IDs round equal', async () => {
+    const h = harness(), first = await publish(h, 1); h.cache.release(first);
+    const dir = h.nodes.get(first.cacheDir); dir.exactIno = 10977524091718209n; dir.ino = Number(dir.exactIno); let removed = false;
+    h.state.beforeUnlink = file => { if (path.dirname(file) !== first.cacheDir) return;
+      if (!removed) { removed = true; return; } throw new Error('interrupted-cleanup'); };
+    assert.throws(() => h.cache.clearOther({ sourceSha256: hash(2) }), /interrupted-cleanup/); h.state.beforeUnlink = null;
+    const prior = h.deleted.filter(file => path.dirname(file) === first.cacheDir).length;
+    dir.exactIno--; assert.equal(Number(dir.exactIno), dir.ino);
+    assert.throws(() => h.reboot().begin({ sourceSha256: hash(2) }), /目录身份已变化/);
+    assert.equal(h.deleted.filter(file => path.dirname(file) === first.cacheDir).length, prior);
+  });
   await test('one-day expiration uses recorded non-use and protects current/active caches',async()=>{
     const {h,list}=await three(),held=await reuse(h,3),at=Date.now()+1000;
     for(const item of list){const n=h.nodes.get(path.join(item.cacheDir,'owner.json')),v=JSON.parse(n.data);v.lastUsedAt=at-86400000;n.data=Buffer.from(JSON.stringify(v));}

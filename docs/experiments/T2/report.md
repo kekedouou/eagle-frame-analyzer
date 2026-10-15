@@ -608,3 +608,35 @@ L-01已完成本地定位：新增准备取消+清理失败断言先在旧sessio
 统一检查最终通过：`node scripts/check.cjs --without-prepared-host`核对91份脚本语法/正式代码依赖边界、全部纯/接线模型、正式manifest/assets、26份文档210条本地链接；只排除明确停用的旧T2准备入口指纹，不跳过正式模块或新回归。文档追加尚未完成时曾并行触发“Missing heading”，补齐文档后顺序复查通过；属于写作顺序问题，无改判或豁免。`git diff --check`通过。工作区只包含本专项源码、测试/脚本、6份已有文档及2条构建忽略规则；原Player/需求规格/素材/发布包未改，最终以本地提交保存，未推送或建验收标签。
 
 交付待验：已有主线“视频分析”入口和本机构建已就绪；用户只集中体验预缓存中关闭/快速重开与换视频、就绪后关闭/复用、正常播放暂停/拖动/声音/已有标注读取，不输入命令、不用T2测量按钮、不新增测试标注。本次为计划中的第一次必要人工停顿，此前0次。人工反馈到来前，L-03、本专项最终验收及T2/T4整体均保持待验。
+
+## 2026-10-15 清理完成后重开失败与格式修复
+
+用户首次L-03反馈未通过：执行清理缓存、确认完成后退出，下一视频报“清理计划路径或文件清单不明”。只读查明cleanup-ff8ab4368aba4847cff5eb71.json（282830B，SHA256 `9ae78d6e9d32d1d78cc061b14c64279e65292dd5fa4b2f626ab2a9af8b79209d`）目录身份为数字`[477229185,10977524091718208]`，超过Number安全整数；对应464B result为completed，planSha256与原字节匹配，目标目录已不存在。其余同次清理计划也有匹配completed回执，证明用户观察的清理完成有数据支持；没有理由改说用户退出过早。本条错误在重新读取旧计划时触发，不必经过退出即可复现，不等于已证明真实窗口所有交接均执行正确。
+
+根因与责任：9377655把读取规则收紧为安全数字/精确字符串，却只更新守护半成品恢复端；普通手动/过期、容量、损坏清理及普通恢复仍写Number目录ID。已有模型用小inode，异常退出侧验证多，遗漏“大ID正常清理完成后重新启动读取”的闭环。新断言先在旧代码复现同一中文报错，确认原因后再修，不通过删记录、宽松允许未完成失真ID或重做测量掩盖。
+
+修正：全部5个计划构造位置共用captureDirectoryIdentity，从BigInt读取并保存十进制字符串；同一读取规则核验写出的plan/result后，才继续后续删除。旧失真数字计划仅在同归属completed回执与原计划SHA严格相符时作为已完成历史读取，原字节不改；没有完成回执、摘要错、异主或blocked仍拒绝。失真ID不会被sameDirectoryIdentity接受为新删除依据，历史同路径后来重建的缓存不得删除。方案未改Windows任务负责人、关闭期限、Player、产品行为或预算。
+
+验证范围与结果：
+
+| 路径 | 新增检查与边界 |
+| --- | --- |
+| 手动清理成功后重开 | 大目录ID10977524091718209精确持久化，inventory/begin可重读；真实Windows3组清理→新Node进程读取→复用通过 |
+| 一天过期与容量淘汰 | 大ID完成记录可重读的纯模型通过，保留当前/活跃缓存策略不变 |
+| 损坏缓存重建 | 大ID模型及实际Windows隔离重建/新进程读取通过，输入为非媒体字节，不测画面 |
+| 普通/守护孤儿恢复与半途清理 | 普通大ID恢复、守护12组原模型继续检查；恢复中被替换为舍入相同的相邻ID必须拒绝 |
+| 已完成旧记录兼容 | 有效/同路径重建可读且原字节不改；缺回执/摘要不符/异主/blocked4项拒绝模型通过 |
+
+tests/t2-lifecycle.cjs现29组维护模型通过。`node scripts/verify-cache-maintenance.cjs`最终默认入口输出：
+
+```json
+{"protocol":"eva-real-cache-maintenance-v1","passed":true,"results":["three-manual-clear-complete-fresh-process-read-and-reuse-cycles","rounded-completed-legacy-plan-read-only-compatibility","damaged-cache-cleanup-regeneration-and-fresh-process-read"],"temporaryBytes":9238,"scratchRemoved":true,"originalOrProductionCacheAccessed":false,"eagleGuiExecuted":false,"boundary":"Real Windows disk, fresh Node processes and production cache module; generated cache bytes, no image decoding or Eagle window."}
+```
+
+初次新隔离工具误用publish去覆盖上一轮完整目标，正式保护正确报“完整缓存目标已存在”；测试未完成且现场保留。改为检测现存项并复用，核对本工具根标记后显式--resume-owned恢复上一轮自有半成品，14193B检查产物清除；随后从全新目录跑默认入口通过，得到上述9238B。工具错误与产品回归分开，不把首次失败算通过。临时额度仍为原2MiB，未新增安装、媒体生成、真实库写入或正式缓存删除。
+
+正式缓存另做只读核对：使用修正模块inventory通过，1份完整缓存、0lease、28,513,293B；50份历史cleanup/reap文件前后SHA全部一致，包括本次失败原计划。未改写它们或清空缓存，也未运行旧T2自动测量、A/B/S1或新性能协议。源码SHA：cache.cjs `fa566b555b85589fedb23f6efb3c4b2f924de7ae82dfe1c97665b6472bee2856`；verify-cache-maintenance.cjs `1241de008901a67b59bd26bca5f9c0d19dc5e7cd1428261d5956f71272801fdf`；t2-lifecycle.cjs `6fc71ff83eed80e055154839f2a554efe7e7bfc285df30861e5c9bd54f92bc2c`。本轮代码版本以关联本地Git提交为准，上节指纹仍是9377655候选历史。
+
+最终统一检查通过：92份脚本语法/依赖边界、所有纯/接线模型（含35组基础缓存、29组维护、14组旧恢复、12组守护缓存）、26份文档212条链接及正式入口；命令仍为`node scripts/check.cjs --without-prepared-host`，仅排除已停用的旧测量入口指纹。`git diff --check`通过，本轮临时目录不存在，未修改或重新构建守护/worker/Player/展示包。补记仅文档校验后保存本地Git，不推送/打标签。
+
+审查边界：工作程序clearOther/release/close共用串行队列，关闭期限覆盖任务组，不能只按功能名推断无遗漏；此次证据并非清理进行中退出失败。AGENTS新增持久化格式修改必须盘点全部生产/读取端及旧数据，并验证正常完成后重开与执行中关闭，verification补对应矩阵。实际Eagle中所有功能进行时退出仍未逐项通过；复用元数据临时标记写入中被强制中断、记录写到一半/磁盘故障等仍有保留报错而非自动自愈的边界，不宣称“所有情况彻底解决”。当前只需关闭旧报错窗口，重开主线并针对性体验清理后换视频；不要求重新导入或反复跑性能/音画测试。首次L-03验收失败保留，修正后的宿主体验、L-03与T2/T4整体继续待验。

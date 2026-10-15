@@ -264,7 +264,7 @@ function createCache(options = {}) {
         !(new RegExp('^media-[0-9a-f]{64}-' + recipeId + '$').test(path.basename(value.directory)) ||
           /^partial-[0-9a-f]{24}$/.test(path.basename(value.directory)) && (value.reason === 'orphaned-incomplete-cache' || ownedPartial)) ||
         !Array.isArray(value.directoryIdentity) || value.directoryIdentity.length !== 2 ||
-        !value.directoryIdentity.every(n => Number.isSafeInteger(n) || typeof n === 'string' && /^(?:0|[1-9][0-9]{0,19})$/.test(n)) || !/^[0-9a-f]{24}$/.test(value.cacheToken) ||
+        (!value.directoryIdentity.every(preciseDirectoryId) && !completedLegacyPlan(name, value)) || !/^[0-9a-f]{24}$/.test(value.cacheToken) ||
         !Array.isArray(value.files) || !ownedPartial && (!value.files.length || !value.files.some(item => item.file === 'owner.json')) ||
         new Set(value.files.map(item => item.file)).size !== value.files.length || value.files.some(item => {
           safeName(item.file); return !Number.isSafeInteger(item.bytes) || item.bytes < 0 || !/^[0-9a-f]{64}$/.test(item.sha256) ||
@@ -273,8 +273,28 @@ function createCache(options = {}) {
     }
     return value;
   }
+  function preciseDirectoryId(value) {
+    return Number.isSafeInteger(value) && value >= 0 || typeof value === 'string' && /^(?:0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n;
+  }
+  function completedLegacyPlan(name, plan) {
+    // A matching completed receipt makes rounded legacy IDs readable history,
+    // NEVER identity evidence for a new deletion.
+    if (!plan.directoryIdentity.every(n => typeof n === 'number' && Number.isInteger(n) && n >= 0)) return false;
+    const resultPath = path.join(root, name.replace('.json', '.result.json'));
+    if (!fs.existsSync(resultPath)) return false;
+    const done = readJSON(resultPath);
+    return done.schema === 1 && done.owner === OWNER && done.recipe === RECIPE && done.root === root &&
+      done.kind === 'cleanup-result' && done.token === plan.token && done.status === 'completed' &&
+      Number.isSafeInteger(done.freedBytes) && done.freedBytes >= 0 && done.planSha256 === leafSnapshot(path.join(root, name)).sha256;
+  }
+  function captureDirectoryIdentity(dir) {
+    directory(dir); const exact = fs.lstatSync(dir, { bigint: true });
+    if (!exact.isDirectory() || exact.isSymbolicLink()) fail('清理目录身份已变化。');
+    return [ledgerId(exact.dev), ledgerId(exact.ino)];
+  }
   function stamp(stat) { return [stat.dev, stat.ino, stat.size, stat.mtimeMs]; }
   function sameDirectoryIdentity(dir, stat, identity) {
+    if (!identity.every(preciseDirectoryId)) return false; // Legacy history cannot authorize deletion.
     if (identity.some(n => typeof n === 'string')) { const exact = fs.lstatSync(dir, { bigint: true });
       return exact.dev.toString() === String(identity[0]) && exact.ino.toString() === String(identity[1]); }
     return stat.dev === identity[0] && stat.ino === identity[1];
@@ -299,6 +319,7 @@ function createCache(options = {}) {
     finally { fs.closeSync(fd); }
     // Verify actual bytes, not just the expected buffer, before deleting.
     if (leafSnapshot(file).sha256 !== sha(data)) fail('清理记录落盘校验失败；未授权后续删除。');
+    if (/^cleanup-[0-9a-f]{24}(?:\.result)?\.json$/.test(path.basename(file))) verifyCleanupRecord(path.basename(file));
   }
   function occupancy() {
     const protectedDirs = new Set();
@@ -367,9 +388,9 @@ function createCache(options = {}) {
   function discardDamaged(job, dir, inspected) {
     assertWriter(job);
     if (occupancy().has(dir.toLowerCase())) fail('完整缓存内容指纹不符且仍被占用；未删除或重建。');
-    const owner = verifyOwner(dir, 'cache'), identity = directory(dir);
+    const owner = verifyOwner(dir, 'cache');
     const plan = ownerValue('cleanup-plan', { token: nonce(), writerToken: job.token, directory: dir,
-      directoryIdentity: [identity.dev, identity.ino], cacheToken: owner.token, reason: 'damaged-cache', createdAt: Date.now(),
+      directoryIdentity: captureDirectoryIdentity(dir), cacheToken: owner.token, reason: 'damaged-cache', createdAt: Date.now(),
       files: inspected.names.sort().map(name => leafSnapshot(path.join(dir, name))) });
     const data = jsonBytes(plan);
     if (job.disk + data.length + 4096 > diskBytes) fail('无法预留损坏缓存清理记录；保留原件。');
@@ -391,8 +412,8 @@ function createCache(options = {}) {
     candidates.sort((a, b) => a.order - b.order || a.dir.localeCompare(b.dir));
     const selected = []; let future = job.disk, recordBytes = 0;
     for (const item of candidates) {
-      const identity = directory(item.dir), plan = ownerValue('cleanup-plan', { token: nonce(), writerToken: job.token,
-        directory: item.dir, directoryIdentity: [identity.dev, identity.ino], cacheToken: item.owner.token,
+      const plan = ownerValue('cleanup-plan', { token: nonce(), writerToken: job.token,
+        directory: item.dir, directoryIdentity: captureDirectoryIdentity(item.dir), cacheToken: item.owner.token,
         reason: 'least-recently-used', createdAt: Date.now(), files: item.checked.names.sort().map(name => leafSnapshot(path.join(item.dir, name))) });
       const data = jsonBytes(plan); recordBytes += data.length + 4096;
       // Reserve every plan and result before the first unlink. No deletion
@@ -428,9 +449,9 @@ function createCache(options = {}) {
       if (samePath(dir, job.target) || occupied.has(dir.toLowerCase())) continue;
       // Missing/future recency never proves one day of non-use.
       if (!all && (!Number.isSafeInteger(owner.lastUsedAt) || at - owner.lastUsedAt < 86400000)) continue;
-      const checked = inspectDirectory(dir, 'cache', match[1]), identity = directory(dir);
+      const checked = inspectDirectory(dir, 'cache', match[1]);
       const plan = ownerValue('cleanup-plan', { token: nonce(), writerToken: job.token, directory: dir,
-        directoryIdentity: [identity.dev, identity.ino], cacheToken: owner.token,
+        directoryIdentity: captureDirectoryIdentity(dir), cacheToken: owner.token,
         reason: all ? 'user-clear-other-cache' : 'idle-one-day', createdAt: at,
         files: checked.names.sort().map(leaf => leafSnapshot(path.join(dir, leaf))) });
       const data = jsonBytes(plan); reserved += data.length + 4096;
@@ -504,7 +525,7 @@ function createCache(options = {}) {
       // The OS guard has already stopped the entire previous task group. This
       // directory name was reserved by its immutable ownership record BEFORE
       // creation, so interruption within file/ledger/owner writes is recoverable.
-      directory(dir); const identity = fs.lstatSync(dir, { bigint: true }), names = fs.readdirSync(dir).sort();
+      directory(dir); const names = fs.readdirSync(dir).sort();
       const captured = names.map(name => {
         if (!/^(?:owner\.json|transaction\.log|manifest\.json|audio\.wav|\d{6}\.jpg)$/.test(name)) fail('中断任务含未知文件，保留原件。');
         const stat = regular(path.join(dir, name));
@@ -512,7 +533,7 @@ function createCache(options = {}) {
         return leafSnapshot(path.join(dir, name));
       });
       return ownerValue('cleanup-plan', { token: nonce(), writerToken: writer.token, directory: dir,
-        directoryIdentity: [identity.dev.toString(), identity.ino.toString()], cacheToken: writer.token, targetKind: 'partial', taskKey: options.taskOwner.key,
+        directoryIdentity: captureDirectoryIdentity(dir), cacheToken: writer.token, targetKind: 'partial', taskKey: options.taskOwner.key,
         reason: 'owned-job-stopped-interrupted-output', createdAt: Date.now(), files: captured });
     }
     const marker = readJSON(path.join(dir, 'owner.json'));
@@ -546,9 +567,8 @@ function createCache(options = {}) {
       const inspected = inspectDirectory(dir, marker.kind, writer.sourceSha256);
       for (const item of inspected.map.values()) if (leafSnapshot(path.join(dir, item.file)).sha256 !== item.sha256) fail('残留完整清单资产指纹不符。');
     }
-    const identity = directory(dir);
     return ownerValue('cleanup-plan', { token: nonce(), writerToken: writer.token, directory: dir,
-      directoryIdentity: [identity.dev, identity.ino], cacheToken: marker.token, targetKind: marker.kind,
+      directoryIdentity: captureDirectoryIdentity(dir), cacheToken: marker.token, targetKind: marker.kind,
       reason: 'orphaned-incomplete-cache', createdAt: Date.now(), files: names.sort().map(name => leafSnapshot(path.join(dir, name))) });
   }
   function recoverOrphans() {

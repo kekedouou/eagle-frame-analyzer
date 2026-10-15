@@ -30,3 +30,4 @@
 /tests/host/t2/lock-quarantine/
 /plugin/native/task-host.local.exe
 /plugin/native/task-host.local.json
+/tests/host/t2/maintenance-scratch/

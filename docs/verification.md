@@ -176,3 +176,7 @@ Codex先完成无媒体纯/模拟及受限真实Windows验证，随后必要已�
 专项入口（由Codex运行）：`node scripts/build-task-host.cjs`只构建本机守护程序；`node scripts/verify-task-host.cjs`在2MiB隔离额度内启动真实Windows守护/Eagle Node模式/自有子程序，不执行Eagle界面或素材库；`node scripts/verify-task-media.cjs`以现有登记输入做完整缓存读取、解码/最终校验取消及自有worker中断恢复，临时生成单次≤256MiB，不重置完整缓存。后二者不属于默认检查，不自动重跑历史A/B/S1或性能协议。测试结束按创建清单核对文件身份与摘要后清理本轮临时产物；源码/实际结果保存在T2报告。
 
 `tests/task-cache.cjs`为内存文件系统模型：验证远端lease只读、任务身份/清单不符拒绝、不可变writer、坏/缺失账本与owner、未登记输出、清理半途退出恢复，以及未知/变更文件不删。真实OS检查另验证断连与连接仍在但关闭无响应两条15秒期限，不能用“父进程顺带杀死子进程”冒充守护工作；断连需观察存活到独立期限，窗口关闭期限也单测。真实媒体检查保存原输入SHA/身份/mtime及完整缓存目录/占用前后结果；其250ms临时容量采样是观测最大值，不是连续真实峰值。图片/Canvas未在此执行，不产生P-01/P-02/音画同步新成绩；守护/worker内存与原renderer/FFmpeg应分别核算，当前未完成新结构的长期P-04验收。
+
+首次人工反馈后补齐持久化读写闭环：`tests/t2-lifecycle.cjs`使用超过2^53的目录ID覆盖手动清理完成→下一次inventory/begin、过期清理、容量淘汰、损坏缓存重建及普通孤儿恢复；大ID清理中断后替换成会舍入相同的另一目录必须拒绝。旧completed计划兼容需同归属、原计划SHA一致的完成回执；缺回执/摘要错/异主/blocked均拒绝，同路径新缓存不删除，旧字节不改。`tests/task-cache.cjs`的守护恢复/半途清理继续执行。单纯“没有关窗死锁”不能替代各功能成功后重新读取记录。
+
+Codex显式运行`node scripts/verify-cache-maintenance.cjs`：tests/host/t2/maintenance-scratch隔离目录，固定少量非媒体缓存字节及原2MiB临时额度，真实Windows磁盘、3组手动清理→新Node进程重新读取/复用、旧completed记录兼容、损坏内容清理后重建；核对生成文件身份/摘要后定点清理。不访问正式缓存/素材库，不启动Eagle界面或FFmpeg，不等于图像/宿主体验验收。失败保留隔离现场；`--resume-owned`只在Codex检查本工具归属后显式恢复本次隔离记录，不覆盖未知目录、不用于真实缓存。缓存更新元数据或写记录半途中遭强退/磁盘故障的真实Eagle场景仍未逐项验完，不能宣称全部退出路径已证明可靠。
