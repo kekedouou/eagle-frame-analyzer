@@ -1,6 +1,6 @@
 # 项目说明
 
-2026-10-15当前：稳定性集中体验认可保留，T2证据/7段指定样本审计完成；阶段4独立验收入口、外部Windows采样及有界记录准备完成，待首次真实Eagle接线和默认1GiB短回归。正式plugin运行文件仍bd7481f/11776B守护，旧T2入口停用，T2/T4未整体验收。新入口为tests/host/t4（manifest已生成），不替换日常“视频分析”；实际载入需用户操作/授权。进度见[当前记录](progress.md)，具体入口、32MiB独立记录和已批准停止线见[T4计划](experiments/T4/plan.md)，实际/未测结果见[T4记录](experiments/T4/report.md)。
+2026-10-15当前：稳定性集中体验认可保留，T2证据/7段指定样本审计完成；阶段4独立验收入口、外部Windows采样及有界记录准备完成，待首次真实Eagle接线和默认1GiB短回归。正式plugin运行文件仍bd7481f/11776B守护，旧T2入口停用，T2/T4未整体验收。新入口为tests/host/t4（manifest已生成），不替换日常“视频分析”；用户已授权载入并验证“索尼克”，当前缺少可用桌面控件，需要用户完成一次实际载入/打开，无需再次批准或输入调试命令。进度见[当前记录](progress.md)，具体入口、32MiB独立记录和已批准停止线见[T4计划](experiments/T4/plan.md)，实际/未测结果见[T4记录](experiments/T4/report.md)。
 
 当前入口和检查以此段为准，下面旧宿主入口说明保留为历史：使用`plugin/manifest.json`既有“视频分析”入口，无需重新导入T2插件。`task-client.cjs`发送控制请求，`native/task-host.cs`用Windows系统互斥/进程组持有本会话任务，`task-worker.cjs`复用media/cache准备和清理；Player直接在本地读帧，Eagle/标注API不迁移。本机11776B守护产物及构建指纹已就绪、Git忽略；源码变更/新检出由Codex执行`node scripts/build-task-host.cjs`构建，无需用户安装依赖或输入命令。
 
