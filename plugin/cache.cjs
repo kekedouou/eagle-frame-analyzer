@@ -42,6 +42,12 @@ function regular(file) {
   return stat;
 }
 function sameFile(stat, other) { return stat.isFile() && other.isFile() && stat.ino === other.ino && stat.dev === other.dev && other.nlink === 1; }
+function ledgerId(value) {
+  if (typeof value === 'bigint' && value >= 0n && value <= 18446744073709551615n) return value.toString();
+  if (Number.isSafeInteger(value) && value >= 0) return String(value);
+  if (typeof value === 'string' && /^(?:0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n) return value;
+  fail('残留临时账本文件编号精度不足或无效；保留原件。');
+}
 function jsonBytes(value) {
   const data = Buffer.from(JSON.stringify(value));
   if (data.length > LIMITS.metadataBytes) fail('缓存元数据超过容量限制。');
@@ -494,14 +500,16 @@ function createCache(options = {}) {
       for (const item of entries) {
         safeName(item.file);
         if (['owner.json', 'transaction.log', 'owner.next.json', 'writer.lock'].includes(item.file) || expected.has(item.file) ||
-          !Number.isSafeInteger(item.dev) || !Number.isSafeInteger(item.ino)) fail('残留临时账本含未知输出。');
+          !Object.prototype.hasOwnProperty.call(item, 'dev') || !Object.prototype.hasOwnProperty.call(item, 'ino')) fail('残留临时账本含未知输出。');
+        ledgerId(item.dev); ledgerId(item.ino);
         expected.set(item.file, item);
       }
       if (names.length !== expected.size + 2 || names.some(name => !['owner.json', 'transaction.log'].includes(name) && !expected.has(name)))
         fail('残留临时目录含未登记文件；未删除。');
       for (const [name, item] of expected) {
         const stat = regular(path.join(dir, name));
-        if (stat.dev !== item.dev || stat.ino !== item.ino || stat.size > (name === 'manifest.json' ? LIMITS.metadataBytes : LIMITS.assetBytes))
+        const exact = fs.lstatSync(path.join(dir, name), { bigint: true });
+        if (ledgerId(exact.dev) !== ledgerId(item.dev) || ledgerId(exact.ino) !== ledgerId(item.ino) || stat.size > (name === 'manifest.json' ? LIMITS.metadataBytes : LIMITS.assetBytes))
           fail('残留输出身份或容量不符。');
       }
     } else {
@@ -727,7 +735,7 @@ function createCache(options = {}) {
       if (!ledger || ledger.closed) fail('临时文件归属账本已关闭。');
       const current = regular(path.join(job.partial, 'transaction.log'));
       if (!sameFile(ledger.identity, current) || !sameFile(ledger.identity, fs.fstatSync(ledger.fd)) || current.size !== ledger.bytes) fail('临时账本身份已改变。');
-      const data = Buffer.from(JSON.stringify({ file: name, dev: identity.dev, ino: identity.ino }) + '\n');
+      const data = Buffer.from(JSON.stringify({ file: name, dev: ledgerId(identity.dev), ino: ledgerId(identity.ino) }) + '\n');
       if (ledger.bytes + data.length > LIMITS.metadataBytes) fail('临时归属账本超过上限。');
       let at = 0;
       charge(job, data.length); writeAll(ledger.fd, data, ledger.bytes, n => { ledger.hash.update(data.subarray(at, at + n)); at += n; ledger.bytes += n; });
@@ -760,7 +768,7 @@ function createCache(options = {}) {
       const file = path.join(job.partial, name), fileFd = fs.openSync(file, 'wx+');
       const record = { file: name, bytes: 0, identity: fs.fstatSync(fileFd), closed: false, sha256: null };
       job.files.set(name, record); job.streams.add(record); let closing = null;
-      try { ledgerEntry(name, record.identity); }
+      try { ledgerEntry(name, fs.fstatSync(fileFd, { bigint: true })); }
       catch (error) { fs.closeSync(fileFd); record.closed = true; job.streams.delete(record); throw error; }
       function checkStream() {
         assertWriter(job); if (record.closed || closing) fail('缓存输出流已经关闭。');
@@ -813,7 +821,7 @@ function createCache(options = {}) {
       job.files.set(name, record); job.streams.add(record); let primaryError = null;
       try {
         record.identity = fs.fstatSync(fileFd);
-        ledgerEntry(name, record.identity);
+        ledgerEntry(name, fs.fstatSync(fileFd, { bigint: true }));
         const openedPath = regular(file);
         if (!sameFile(record.identity, openedPath) || openedPath.size !== 0 || record.identity.size !== 0) fail('缓存输出文件身份或长度已改变。');
         charge(job, data.length);

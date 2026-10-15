@@ -47,6 +47,33 @@ async function main() {
     assert(!h.nodes.has(path.join(h.root, 'recovery.lock'))); assert(!h.nodes.has(path.join(h.root, 'writer.lock')));
     assert(cache.inventory().caches.length === 1); assert(h.deleted.every(file => file.startsWith(h.root + '\\')));
   });
+  await test('64-bit NTFS file IDs survive the ledger exactly, while ambiguous legacy numbers are refused', async () => {
+    for (const scenario of ['exact', 'legacy-rounded', 'adjacent-exact-id']) {
+      const h = harness(), exact = 63894819713321403n;
+      h.state.afterOpen = ({ file, node, flags }) => { if (file.endsWith('000000.jpg') && flags === 'wx+') { node.exactIno = exact; node.ino = Number(exact); } };
+      const tx = h.cache.begin({ sourceSha256: hash(2) }); await tx.writeAsset('000000.jpg', Buffer.from('owned exact-ID output'));
+      const partial = [...h.nodes.keys()].find(file => path.basename(file).startsWith('partial-'));
+      const ledger = h.nodes.get(path.join(partial, 'transaction.log')), row = JSON.parse(ledger.data.toString().trim());
+      assert.strictEqual(row.ino, exact.toString(), 'A file ID above 2^53 must not be persisted as a rounded JSON number');
+      if (scenario === 'legacy-rounded') { row.ino = Number(exact); ledger.data = Buffer.from(JSON.stringify(row)+'\n'); }
+      if (scenario === 'adjacent-exact-id') {
+        assert.equal(Number(exact), Number(exact-1n));
+        h.nodes.get(path.join(partial,'000000.jpg')).exactIno = exact-1n;
+      }
+      const cache = boot(h);
+      if (scenario !== 'exact') { assert.throws(() => cache.begin({ sourceSha256: hash(2) }), /账本|身份/); assert(h.nodes.has(partial)); }
+      else { const next = cache.begin({ sourceSha256: hash(2) }); next.close(); assert(!h.nodes.has(partial)); }
+    }
+  });
+  await test('legacy safe numeric ledger IDs remain compatible', async () => {
+    const h = harness(), tx = h.cache.begin({ sourceSha256: hash(2) }); await tx.writeAsset('000000.jpg', Buffer.from('legacy safe output'));
+    const partial = [...h.nodes.keys()].find(file => path.basename(file).startsWith('partial-'));
+    const ledger = h.nodes.get(path.join(partial, 'transaction.log'));
+    ledger.data = Buffer.from(ledger.data.toString().trimEnd().split('\n').map(line => {
+      const value=JSON.parse(line);return JSON.stringify({...value,dev:Number(value.dev),ino:Number(value.ino)});
+    }).join('\n')+'\n');
+    const next = boot(h).begin({ sourceSha256: hash(2) }); next.close(); assert(!h.nodes.has(partial));
+  });
   await test('live parent, live child or unregistered spawn blocks recovery', async () => {
     for (const scenario of ['parent', 'child', 'starting']) {
       const h = harness(), tx = h.cache.begin({ sourceSha256: hash(2) }); await tx.writeAsset('000000.jpg', Buffer.from('partial'));

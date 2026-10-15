@@ -33,7 +33,8 @@ function memoryFileSystem() {
   make('D:\\fixtures', 'dir'); make('D:\\fixtures\\plugin', 'dir');
   const api = {
     existsSync(file) { return nodes.has(normal(file)); },
-    lstatSync(file) { return stat(nodeFor(file)); },
+    lstatSync(file, options) { const value = nodeFor(file), result = stat(value);
+      return options && options.bigint ? { ...result, ino: value.exactIno || BigInt(result.ino), dev: BigInt(result.dev) } : result; },
     realpathSync(file) { const value = nodeFor(file); return value.real || normal(file); },
     readdirSync(dir) { if (nodeFor(dir).kind !== 'dir') error('ENOTDIR'); return [...nodes.keys()].filter(file => file !== normal(dir) && win.dirname(file) === normal(dir)).map(file => win.basename(file)); },
     mkdirSync(dir) { make(dir, 'dir'); },
@@ -56,7 +57,8 @@ function memoryFileSystem() {
     },
     closeSync(fd) { if (!descriptors.delete(fd)) error('EBADF'); },
     fsyncSync(fd) { descriptor(fd); },
-    fstatSync(fd) { return stat(descriptor(fd).node); },
+    fstatSync(fd, options) { const value = descriptor(fd).node, result = stat(value);
+      return options && options.bigint ? { ...result, ino: value.exactIno || BigInt(result.ino), dev: BigInt(result.dev) } : result; },
     writeSync(fd, data, offset, length, position) {
       const value = descriptor(fd).node;
       if (state.zeroWrite) return 0;

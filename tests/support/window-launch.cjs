@@ -6,7 +6,7 @@ const entry = require('../../scripts/prepare-window-host.cjs');
 const driver = require('./window-host.cjs');
 const { createStore } = require('./t2-evidence.cjs');
 const PREPARE_MS = 120000, WORK_MS = 180000, RESOURCE_MS = 72 * 60000;
-const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v3';
+const WINDOW_OBSERVER_VERSION = 'eva-window-observer-v4';
 function install(options) {
   const { window: win, document: doc, eagle, hostRoot } = options;
   if (!win || !doc || !eagle || typeof eagle.onPluginCreate !== 'function') throw new Error('请从 Eagle 加载T2独立自动验证入口。');
@@ -17,6 +17,17 @@ function install(options) {
   let cancelPreparation = null, runCallback = null, exitCallback = null, activeMode = 'performance';
   let activeContext = null, windowUnloadObserved = false;
   let cleanupObserver = null, cleanupObserved = false, witnessId = null;
+  let windowCloseIntent = false, windowClosing = false, windowCloseTask = null;
+  let windowExitNotice = null, windowCaptureError = null;
+  let windowSessionClean = false;
+  let pendingWindowBytes = 0; const pendingWindowRecords = [];
+  function rememberWindowRecord(value) {
+    const bytes = Buffer.from(JSON.stringify(value));
+    if (pendingWindowBytes + bytes.length > 48 * 1024 || pendingWindowRecords.length >= 3)
+      throw new Error('关闭观察记录超过48KiB边界，未静默截断。');
+    pendingWindowBytes += bytes.length; pendingWindowRecords.push(JSON.parse(bytes));
+  }
+  win.addEventListener('beforeunload', beforeUnload);
   if (options.observeStartup) {
     const prepared = verify(repo);
     if (prepared.marker.mode === 'window-checks') {
@@ -30,15 +41,36 @@ function install(options) {
           witnessId,
           sdkCreateObserved: false, hostRoot: prepared.host, pluginRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
           note: 'Entry installed before SDK create. Not proof of readiness, closure or cleanup.' }));
-      } catch (error) { throw new Error('窗口验收入口启动记录未保存，本项未启动：' + String(error.message).slice(0, 512)); }
-      finally { store.close(); }
+      } catch (error) {
+        win.removeEventListener('beforeunload', beforeUnload);
+        throw new Error('窗口验收入口启动记录未保存，本项未启动：' + String(error.message).slice(0, 512));
+      } finally {
+        try { store.close(); } catch (error) { win.removeEventListener('beforeunload', beforeUnload); throw error; }
+      }
     }
   }
   // Capture formal callbacks for test invocation; restore SDK registration immediately.
   for (const [name, assign] of [['onPluginRun', callback => { runCallback = callback; }], ['onPluginBeforeExit', callback => { exitCallback = callback; }]]) {
     if (typeof eagle[name] !== 'function') continue;
     const registration = eagle[name];
-    eagle[name] = callback => { eagle[name] = registration; assign(callback); return registration.call(eagle, callback); };
+    eagle[name] = callback => {
+      eagle[name] = registration; assign(callback);
+      return registration.call(eagle, name === 'onPluginBeforeExit' ? (...args) => {
+        if (activeMode === 'window-checks') {
+          windowCloseIntent = true;
+          if (!windowExitNotice) {
+            try {
+              const value = win.EVADiagnostics && win.EVADiagnostics.snapshot();
+              windowExitNotice = value ? { state: value.state, sourceIdentity: value.sourceIdentity,
+                progress: value.progress, loadMetrics: value.loadMetrics } : { state: null };
+            } catch (error) {
+              windowCaptureError = error; windowExitNotice = { state: null, error: String(error.message).slice(0, 512) };
+            }
+          }
+        }
+        return callback(...args);
+      } : callback);
+    };
   }
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
@@ -48,6 +80,12 @@ function install(options) {
   }
   function saveFailure(error, context) {
     if (failureSaved || !safeToRecord) return; failureSaved = true;
+    if (activeMode === 'window-checks' && (windowCloseIntent || windowClosing)) {
+      rememberWindowRecord({ schema: 'window-automatic-entry-failure-v1', stage: 'T2', origin: 'real-Eagle-independent-test-entry',
+        complete: false, earlyRegressionPassed: false, at: new Date().toISOString(), state, context, witnessId,
+        error: { message: String(error && error.message || error).slice(0, 2048) } });
+      return;
+    }
     let store;
     try {
       store = storeFactory(repo, { stage: activeMode === 'annotations' ? 'T3' : 'T2' }); store.start({ reserveBytes: 64 * 1024 });
@@ -74,20 +112,16 @@ function install(options) {
       if (!event || event.type !== 'close-result' || cleanupObserved) return;
       cleanupObserved = true;
       if (cleanupObserver) { cleanupObserver(); cleanupObserver = null; }
-      let store;
       try {
-        verify(repo);
         const result = event.value, snapshot = bridge.snapshot();
-        store = storeFactory(repo, { stage: 'T2' }); store.start({ reserveBytes: 64 * 1024 });
-        receipts.push(store.save('host', { schema: 'window-lifecycle-cleanup-result-v1', stage: 'T2', at: new Date().toISOString(),
+        rememberWindowRecord({ schema: 'window-lifecycle-cleanup-result-v1', stage: 'T2', at: new Date().toISOString(),
           origin: 'real-Eagle-independent-window-observation', launchContext: context,
           pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, witnessId, unloadRequestObserved: windowUnloadObserved,
           result, state: snapshot && snapshot.state, error: snapshot && snapshot.error,
           sessionCleanupCompleted: !!(result && result.status === 'closed' && snapshot && snapshot.state === 'closed' && !snapshot.error),
           nativeWindowDestroyedVerified: false,
-          note: 'Actual formal session.close promise settled. Not proof of native destruction, post-close disk state, physical memory return or forced-exit recovery.' }));
-      } catch (error) { message('资源清理结果记录未保存：' + String(error.message).slice(0, 512), true); }
-      finally { if (store) { try { store.close(); } catch (_) {} } }
+          note: 'Actual formal session.close promise settled. Not proof of native destruction, post-close disk state, physical memory return or forced-exit recovery.' });
+      } catch (error) { windowCaptureError = error; message('资源清理结果记录未保存：' + String(error.message).slice(0, 512), true); }
     });
   }
   async function waitReady(bridge, context, aborted) {
@@ -113,20 +147,22 @@ function install(options) {
     } finally { if (unsubscribe) unsubscribe(); }
   }
   function beforeUnload(event) {
-    if (activeMode === 'window-checks' && safeToRecord && !windowUnloadObserved) {
-      windowUnloadObserved = true; let store;
-      try {
-        verify(repo);
-        const value = observe(win.EVADiagnostics, activeContext);
-        store = storeFactory(repo, { stage: 'T2' }); store.start({ reserveBytes: 64 * 1024 });
-        receipts.push(store.save('host', { schema: 'window-lifecycle-unload-request-v1', stage: 'T2', at: new Date().toISOString(),
-          origin: 'real-Eagle-independent-window-observation', launchContext: activeContext, state: value && value.state,
-          sourceIdentity: value && value.sourceIdentity, progress: value && value.progress, loadMetrics: value && value.loadMetrics,
-          pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, nativeWindowDestroyedVerified: false, cleanupVerified: false,
-          witnessId,
-          note: 'Observed beforeunload request only. Product may defer closure for cleanup; user confirmation and post-close file checks remain required.' }));
-      } catch (error) { message('关闭请求记录未保存：' + String(error.message).slice(0, 512), true); }
-      finally { if (store) { try { store.close(); } catch (_) {} } }
+    if (activeMode === 'window-checks' && safeToRecord) {
+      if (allowUnload) return;
+      // Eagle sends plugin-exit without awaiting cleanup. Neither that IPC's
+      // cancellation microtasks nor beforeunload may scan/write old evidence.
+      event.returnValue = false; if (event.preventDefault) event.preventDefault();
+      windowCloseIntent = true;
+      if (windowClosing) return;
+      windowClosing = true;
+      captureWindowUnload(); closeRequested = true; stop();
+      win.setTimeout(() => { windowCloseTask = finishWindowClose(); windowCloseTask.catch(error => {
+        // Keep the failure visible, but a completed formal cleanup permits the
+        // user to close this test error window. Never retry a partial batch.
+        if (windowSessionClean) allowUnload = true;
+        message('窗口清理或记录保存失败，尚未完成关闭：' + String(error.message).slice(0, 512), true);
+      }); }, 0);
+      return;
     }
     closeRequested = true; stop();
     if (allowUnload || !job || completed) return;
@@ -135,7 +171,42 @@ function install(options) {
     if (closeScheduled) return; closeScheduled = true;
     done.finally(() => win.setTimeout(() => { allowUnload = true; win.close(); }, 0)).catch(() => {});
   }
-  win.addEventListener('beforeunload', beforeUnload);
+  function captureWindowUnload() {
+    if (activeMode === 'window-checks' && safeToRecord && !windowUnloadObserved) {
+      windowUnloadObserved = true;
+      try {
+        const value = observe(win.EVADiagnostics, activeContext);
+        rememberWindowRecord({ schema: 'window-lifecycle-unload-request-v1', stage: 'T2', at: new Date().toISOString(),
+          origin: 'real-Eagle-independent-window-observation', launchContext: activeContext, state: value && value.state,
+          sourceIdentity: value && value.sourceIdentity, progress: value && value.progress, loadMetrics: value && value.loadMetrics,
+          sdkExitNotice: windowExitNotice,
+          pid: process.pid, observerVersion: WINDOW_OBSERVER_VERSION, nativeWindowDestroyedVerified: false, cleanupVerified: false,
+          witnessId,
+          note: 'Observed beforeunload request only. Product may defer closure for cleanup; user confirmation and post-close file checks remain required.' });
+      } catch (error) { windowCaptureError = error; message('关闭请求记录未保存：' + String(error.message).slice(0, 512), true); }
+    }
+  }
+  async function finishWindowClose() {
+    let result, cleanupError;
+    try {
+      if (!exitCallback) throw new Error('正式退出回调缺失。');
+      result = await exitCallback();
+      windowSessionClean = !!(result && result.status === 'closed');
+    } catch (error) { cleanupError = error; }
+    try { await done; } catch (error) { if (!cleanupError) cleanupError = error; }
+    verify(repo);
+    const store = storeFactory(repo, { stage: 'T2' });
+    try {
+      store.start({ reserveBytes: 64 * 1024 });
+      for (const value of pendingWindowRecords) receipts.push(store.save('host', value));
+    } finally { store.close(); }
+    if (cleanupError) throw cleanupError;
+    if (windowCaptureError) throw windowCaptureError;
+    if (!result || result.status !== 'closed' || !pendingWindowRecords.some(x => x.schema === 'window-lifecycle-unload-request-v1') ||
+        !pendingWindowRecords.some(x => x.schema === 'window-lifecycle-cleanup-result-v1' && x.sessionCleanupCompleted))
+      throw new Error('资源清理未获实际成功回执，未自动关闭。');
+    allowUnload = true; win.setTimeout(() => win.close(), 0);
+  }
   eagle.onPluginCreate = callback => {
     eagle.onPluginCreate = register; // The SDK itself is restored after one registration.
     return register.call(eagle, plugin => {
@@ -248,6 +319,7 @@ function install(options) {
     }
   }
   return Object.freeze({ get done() { return done; }, snapshot: () => ({ state, completed, receipts: receipts.slice() }), cancel: stop,
+    get closingDone() { return windowCloseTask; },
     unsavedEvidence: () => job ? job.unsavedEvidence() : null });
 }
 module.exports = { install, PREPARE_MS, WORK_MS, RESOURCE_MS, WINDOW_OBSERVER_VERSION };
