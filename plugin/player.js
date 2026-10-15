@@ -196,9 +196,19 @@
         target.inputAt > previous.inputAt && target.inputAt - previous.inputAt <= 100) {
         target.dragDelta = targetTime - previous.targetTime;
         if (target.dragDelta && Math.sign(target.dragDelta) === Math.sign(previous.dragDelta || 0)) {
-          const predicted = this.index.frameAt(this.info.frames, Math.max(0, Math.min(this.info.duration, targetTime + target.dragDelta)));
+          // Frame-snapped positions alternate short/long deltas. Repeating the
+          // last delta predicts the opposite rounding error, often one frame
+          // away on every event. Fit the last few positions instead; event
+          // order avoids turning OS input timestamp jitter into video motion.
+          target.dragSamples = (previous.dragSamples || [previous.targetTime]).concat(targetTime).slice(-5);
+          const points = target.dragSamples, middle = (points.length - 1) / 2;
+          const mean = points.reduce((sum, value) => sum + value, 0) / points.length;
+          let numerator = 0, denominator = 0;
+          for (let n = 0; n < points.length; n++) { numerator += (n - middle) * (points[n] - mean); denominator += (n - middle) ** 2; }
+          const predictedTime = mean + numerator / denominator * (points.length - middle);
+          const predicted = this.index.frameAt(this.info.frames, Math.max(0, Math.min(this.info.duration, predictedTime)));
           if (predicted !== ordinal) target.predictedIndex = predicted;
-        }
+        } else target.dragSamples = [previous.targetTime, targetTime];
       }
       this.target = target;
       this._emit('request', { epoch, phase: 'input', requestId: target.requestId, kind: target.kind, frameId: frame.id,

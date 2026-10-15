@@ -205,11 +205,11 @@ function validateDecodedSpan(info) {
   return span;
 }
 function ffmpegArgs(source, hasAudio, codecName) {
-  // Bound HEVC input decoding separately from JPEG output encoding. One video
+  // Bound H.264/HEVC input decoding separately from JPEG output encoding. One video
   // job remains active; the cache recipe, output quality and RAM pool are unchanged.
-  const args = ['-hide_banner', '-loglevel', 'info', '-nostdin', '-copyts', '-threads', codecName === 'hevc' ? '8' : '2', '-i', source,
+  const args = ['-hide_banner', '-loglevel', 'info', '-nostdin', '-copyts', '-threads', ['hevc', 'h264'].includes(codecName) ? '8' : '2', '-i', source,
     '-map', '0:v:0', '-an', '-sn', '-dn', '-vf', 'showinfo@v=checksum=0,scale=1280:720:force_original_aspect_ratio=decrease:flags=bilinear,setsar=1,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
-    '-filter_threads', '1', '-fps_mode', 'passthrough', '-c:v', 'mjpeg', '-threads', '2', '-q:v', '3', '-f', 'image2pipe', 'pipe:1'];
+    '-filter_threads', codecName === 'h264' ? '2' : '1', '-fps_mode', 'passthrough', '-c:v', 'mjpeg', '-threads', '2', '-q:v', '3', '-f', 'image2pipe', 'pipe:1'];
   if (hasAudio) args.push('-map', '0:a:0', '-vn', '-sn', '-dn', '-af', 'aresample=48000,ashowinfo@a', '-c:a', 'pcm_f32le', '-f', 'wav', 'pipe:3');
   return args;
 }

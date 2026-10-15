@@ -27,6 +27,12 @@ class ResourceSampler {
   [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageNameW(IntPtr handle, uint flags, StringBuilder name, ref int size);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr handle, out long creation, out long exit, out long kernel, out long user);
+  [StructLayout(LayoutKind.Sequential)]
+  struct MemoryCounters {
+    public uint size, pageFaultCount;
+    public UIntPtr peakWorkingSet, workingSet, peakPagedPool, pagedPool, peakNonPagedPool, nonPagedPool, pagefile, peakPagefile;
+  }
+  [DllImport("psapi.dll", SetLastError=true)] static extern bool GetProcessMemoryInfo(IntPtr handle, ref MemoryCounters counters, uint size);
   class Member { public int pid; public long ticks; public string role, root, image; }
   class Root : Member { }
   static readonly Dictionary<string,Member> known=new Dictionary<string,Member>();
@@ -131,8 +137,25 @@ class ResourceSampler {
     foreach(var member in members.Values) {
       try { using(var process=Process.GetProcessById(member.pid)) {
         if(Identity(process)!=Key(member.pid,member.ticks)) continue;
-        rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
-          image=Path.GetFileName(member.image),imagePath=member.image,rssBytes=process.WorkingSet64,cpuMs=process.TotalProcessorTime.TotalMilliseconds});
+        var handle=OpenProcess(0x1000,false,member.pid);
+        if(handle==IntPtr.Zero) {
+          int code=Marshal.GetLastWin32Error();
+          if(process.HasExited) continue;
+          throw new Win32Exception(code,"Resource process query failed.");
+        }
+        try {
+          long creation,exit,kernel,user;
+          if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) throw new Win32Exception(Marshal.GetLastWin32Error(),"Resource time query failed.");
+          if(DateTime.FromFileTimeUtc(creation).Ticks!=member.ticks || exit!=0) continue;
+          var memory=new MemoryCounters(); memory.size=(uint)Marshal.SizeOf(typeof(MemoryCounters));
+          if(!GetProcessMemoryInfo(handle,ref memory,memory.size)) {
+            int code=Marshal.GetLastWin32Error();
+            if(process.HasExited) continue;
+            throw new Win32Exception(code,"Resource memory query failed.");
+          }
+          rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
+            image=Path.GetFileName(member.image),imagePath=member.image,rssBytes=memory.workingSet.ToUInt64(),cpuMs=(kernel+user)/10000.0});
+        } finally { CloseHandle(handle); }
       } } catch(ArgumentException) { } catch(InvalidOperationException) { }
       catch(Exception e) { errors.Add(Error(member.pid,e,"resource-counters")); }
     }

@@ -187,9 +187,9 @@ async function run() {
   // A pointer event immediately before every rAF is deliberately different from
   // the old 120Hz timer test. Expected frames come from the input times, never
   // from the prediction; drawing an earlier prepared image cannot pass this.
-  async function phaseLockedDrag(info, times) {
+  async function phaseLockedDrag(info, times, settings = {}) {
     let latest = null; const wrongDraws = [];
-    const h = harness({ decodeMs: 5.6, onEvent(event) {
+    const h = harness({ decodeMs: 5.6, ramBytes: settings.ramBytes, onEvent(event) {
       // Player deliberately catches telemetry callback errors; collect the
       // observation and assert outside the callback so a failure cannot hide.
       if (event.type === 'draw' && latest !== null && event.frameOrdinal !== latest) wrongDraws.push({ actual: event.frameOrdinal, latest });
@@ -214,7 +214,7 @@ async function run() {
     assert(['drawn', 'reused'].includes(final.status)); assert.equal(h.player.snapshot().frameOrdinal, latest);
     assert.deepEqual(wrongDraws, [], 'Only the latest pointer target may draw.');
     assert((await Promise.all(requests)).every(result => ['drawn', 'reused', 'superseded'].includes(result.status)));
-    assert(h.maxDecodes() <= 2); assert(h.player.snapshot().cachePeakBytes <= 512 * 1024 ** 2);
+    assert(h.maxDecodes() <= 2); assert(h.player.snapshot().cachePeakBytes <= h.player.snapshot().budget.limit);
     assert(h.events.some(event => event.type === 'cache' && event.phase === 'evict'), 'Trajectory must exceed the decoded working set.');
     const result = { source: info.source.key, inputs: times.length, simulatedWindowMs: end - begin,
       simulatedDraws: draws.length, simulatedMaxGapMs: maxGapMs, maxImageTasks: h.maxDecodes(),
@@ -224,6 +224,12 @@ async function run() {
   await check('phase-locked 144Hz forward and reverse drag stays current with a bounded RAM working set', async () => {
     const times = Array.from({ length: 480 }, (_, index) => (200 + Math.min(index, 479 - index) * 2.62) / 60);
     simulations.push(await phaseLockedDrag(sample('phase-locked-cfr', null, 1490, 60), times));
+  });
+  await check('frame-snapped pointer positions do not make motion prediction alternate one frame away', async () => {
+    const count = 1490;
+    const forward = Array.from({ length: 120 }, (_, n) => (Math.round(n * (count - 1) / 119) + .5) / 60);
+    const reverse = forward.slice().reverse();
+    simulations.push(await phaseLockedDrag(sample('frame-snapped-cfr', null, count, 60), forward.concat(reverse), { ramBytes: 128 * 1024 ** 2 }));
   });
   await check('motion lookahead uses timestamp mapping for variable-rate frames', async () => {
     const info = sample('phase-locked-vfr', null, 1490, 60); let ticks = 0;

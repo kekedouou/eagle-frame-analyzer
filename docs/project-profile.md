@@ -1,6 +1,6 @@
 # 项目说明
 
-2026-10-15当前：稳定性集中体验认可保留；tests/host/t4当前真实入口/资源接线通过，索尼克默认1GiB六轮已完整测量及复算，平均更新/随机定位通过，最长停顿和单次首备未达标。观察器自身约36%单核开销须先降低并对照，再排查调度/必要RAM对照；不因新工具出错或旧不同样本成绩改写性能结论。正式plugin运行文件仍bd7481f/11776B守护，旧T2入口停用，T2/T4未整体验收。进度见[当前记录](progress.md)，具体入口、32MiB独立记录和已批准停止线见[T4计划](experiments/T4/plan.md)，实际/未测结果见[T4记录](experiments/T4/report.md)。
+2026-10-15当前：稳定性集中体验认可保留；按用户新优先级，player修正连续拖动的邻帧误预测，media提高H.264解码/缩放并行度，守护仍11776B、关闭/缓存格式/默认1GiB/720p不变。实测变慢的同步预载候选撤回，不保留额外API或产品开关。观察工具只作一次直接RSS/CPU计数读取替换，不为及格线继续调参；同一tests/host/t4入口待最后一轮索尼克真实短回归，旧T2停用。旧长停顿/首备失败及未验矩阵仍保留，局部生成提速不等于完整P-03通过，T2/T4未整体验收。进度见[当前记录](progress.md)，具体入口、32MiB独立记录和已批准停止线见[T4计划](experiments/T4/plan.md)，实际/未测结果见[T4记录](experiments/T4/report.md)。
 
 当前入口和检查以此段为准，下面旧宿主入口说明保留为历史：使用`plugin/manifest.json`既有“视频分析”入口，无需重新导入T2插件。`task-client.cjs`发送控制请求，`native/task-host.cs`用Windows系统互斥/进程组持有本会话任务，`task-worker.cjs`复用media/cache准备和清理；Player直接在本地读帧，Eagle/标注API不迁移。本机11776B守护产物及构建指纹已就绪、Git忽略；源码变更/新检出由Codex执行`node scripts/build-task-host.cjs`构建，无需用户安装依赖或输入命令。
 

@@ -219,13 +219,15 @@ async function main() {
     assert.throws(() => h.api.createMedia({ tools, cache: {} }));
     assert.strictEqual(Object.keys(h.media).join(','), 'prepare');
   });
-  await test('HEVC input parallelism does not alter output recipe or other codecs', async () => {
-    const base = Array.from(pure.ffmpegArgs(sourcePath, true, 'h264'));
-    assert.deepStrictEqual(Array.from(pure.ffmpegArgs(sourcePath, true, 'vp9')), base);
+  await test('codec-specific input and filter parallelism preserves the JPEG and audio recipe', async () => {
     for (const audio of [true, false]) {
-      const expected = Array.from(pure.ffmpegArgs(sourcePath, audio));
-      expected[expected.indexOf('-threads') + 1] = '8';
-      assert.deepStrictEqual(Array.from(pure.ffmpegArgs(sourcePath, audio, 'hevc')), expected);
+      const base = Array.from(pure.ffmpegArgs(sourcePath, audio));
+      for (const codec of ['h264', 'hevc', 'vp9']) {
+        const expected = [...base];
+        expected[expected.indexOf('-threads') + 1] = codec === 'vp9' ? '2' : '8';
+        expected[expected.indexOf('-filter_threads') + 1] = codec === 'h264' ? '2' : '1';
+        assert.deepStrictEqual(Array.from(pure.ffmpegArgs(sourcePath, audio, codec)), expected);
+      }
     }
     const p = probe(true); p.streams[0].codec_name = 'hevc';
     const h = harness({ audio: true, probe: p }); await h.media.prepare(h.snapshot);
