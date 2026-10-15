@@ -87,6 +87,10 @@ function fileTests() {
   assert.equal(entry.verify(m.root, m.io).marker.mode, 'reuse');
   assert.throws(() => entry.prepare(m.root, m.io, 'reuse'), /approved 2GiB/);
   assert.throws(() => entry.prepare(m.root, m.io, 'reuse', null, { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 }), /approved 2GiB/);
+  entry.prepare(m.root, m.io, 'window-checks');
+  assert.match(JSON.parse(m.files.get(path.join(m.host, 'manifest.json'))).name, /T2 窗口验收/);
+  assert.equal(entry.verify(m.root, m.io).marker.ramDiagnostic, undefined);
+  assert.throws(() => entry.prepare(m.root, m.io, 'window-checks', null, ram2), /bounded performance/);
   entry.prepare(m.root, m.io, 'performance');
   ok('bounded idempotent entry retains formal body and uses escaped file URLs for Chinese/space paths');
   const source = path.join(m.root, 'plugin/app.js'); m.files.set(source, Buffer.from('changed source'));
@@ -329,6 +333,21 @@ async function launchTests() {
   assert.equal(memoryFailed.saved.length, 0); assert.equal(memoryFailed.counts().storeCloses, 1);
   assert.match(memoryFailed.nodes.error.textContent, /就绪证据未保存/);
   ok('Settings observation records actual configuration without workload and never retries failed evidence writes');
+  const windowCheck = launchModel({ mode: 'window-checks', snapshot: settingsReady }); await windowCheck.launch();
+  assert.equal(windowCheck.counts().driverCalls, 0); assert.equal(windowCheck.saved[0].value.schema, 'window-lifecycle-ready-v1');
+  assert.match(windowCheck.doc.title, /T2 窗口验收/); assert.equal(windowCheck.counts().unloadListeners, 1);
+  assert.equal(windowCheck.unload().returnValue, undefined);
+  assert.equal(windowCheck.saved[1].value.schema, 'window-lifecycle-unload-request-v1');
+  assert.equal(windowCheck.saved[1].value.state, 'paused'); assert.equal(windowCheck.saved[1].value.nativeWindowDestroyedVerified, false);
+  windowCheck.unload(); assert.equal(windowCheck.saved.length, 2);
+  ok('Window witness retains one unload observer after readiness, records one request, never claims native destruction or starts workload');
+  const gatePreparation = deferred(), beforeReady = launchModel({ mode: 'window-checks', snapshot: { state: 'preparing', progress: { stage: 'decode' } }, prepare: gatePreparation });
+  const preparingDone = beforeReady.launch(); await tick(); beforeReady.unload(); await preparingDone;
+  assert.equal(beforeReady.counts().driverCalls, 0);
+  assert(beforeReady.saved.some(item => item.value.schema === 'window-lifecycle-unload-request-v1' && item.value.state === 'preparing'));
+  assert(beforeReady.saved.some(item => item.value.schema === 'window-automatic-entry-failure-v1'));
+  gatePreparation.resolve(); await tick(); assert.equal(beforeReady.counts().driverCalls, 0);
+  ok('Manual preparation cancellation records the pre-close stage and retains cancellation separately; late ready cannot restart');
 }
 (async () => { fileTests(); await launchTests(); console.log('Window automatic entry: ' + count + ' pure checks passed; no Eagle, media or evidence writes.'); })()
   .catch(error => { console.error(error.stack); process.exitCode = 1; });

@@ -42,7 +42,7 @@ function render(html, plugin, hashes, mode = 'performance') {
   }
   const app = '<script src="' + (pathToFileURL(path.join(plugin, 'app.js')).href + '?verify=' + hashes['plugin/app.js']).replace(/&/g, '&amp;') + '"></script>';
   out = out.replace(app, '<script src="bootstrap.js?verify=' + hashes['tests/host/window/bootstrap.js'] + '"></script>\n  ' + app);
-  return out.replace('<title>视频分析</title>', '<title>' + (mode === 'annotations' ? 'T3 标注验收' : mode === 'preferences' ? 'T2 内存设置验收' : 'T2 自动测量') + ' · 视频分析</title>');
+  return out.replace('<title>视频分析</title>', '<title>' + (mode === 'window-checks' ? 'T2 窗口验收' : mode === 'annotations' ? 'T3 标注验收' : mode === 'preferences' ? 'T2 内存设置验收' : 'T2 自动测量') + ' · 视频分析</title>');
 }
 function validApproval(value) {
   if (value == null) return true;
@@ -60,12 +60,12 @@ function validRam(value) {
 function generated(root, io, mode = 'performance', writeApproval = null, ramDiagnostic = null) {
   if (!validRam(ramDiagnostic) || ramDiagnostic && !['performance', 'reuse'].includes(mode)) throw new Error('RAM candidate requires the bounded performance protocol or approved reuse protocol.');
   if (mode === 'reuse' && (!ramDiagnostic || ramDiagnostic.schema !== 'T2-ram-host-v2')) throw new Error('Reuse requires the approved 2GiB configuration.');
-  if (!['performance', 'resource', 'annotations', 'preferences', 'reuse'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
+  if (!['performance', 'resource', 'annotations', 'preferences', 'reuse', 'window-checks'].includes(mode) || !validApproval(writeApproval) || mode !== 'annotations' && writeApproval)
     throw new Error('Unknown measurement protocol or annotation approval.');
   const p = paths(root, io), hashes = sourceHashes(p.root, io);
   const original = JSON.parse(read(path.join(p.plugin, 'manifest.json'), io));
   if (original.main.multiple !== false || original.main.url !== 'index.html') throw new Error('Unexpected formal Window entry.');
-  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: mode === 'annotations' ? '视频分析 · T3 标注验收' : mode === 'preferences' ? '视频分析 · T2 内存设置验收' : '视频分析 · T2 自动测量', logo: '/logo.local.png',
+  const manifest = { ...original, id: 'EVAWINDOWVERIFY20261013', name: mode === 'window-checks' ? '视频分析 · T2 窗口验收' : mode === 'annotations' ? '视频分析 · T3 标注验收' : mode === 'preferences' ? '视频分析 · T2 内存设置验收' : '视频分析 · T2 自动测量', logo: '/logo.local.png',
     keywords: ['视频', mode === 'annotations' ? 'T3' : 'T2', '验证'], devTools: false, main: { ...original.main, url: 'index.local.html', runAfterInstall: false } };
   const files = { 'index.local.html': Buffer.from(render(read(path.join(p.plugin, 'index.html'), io).toString('utf8'), p.plugin, hashes, mode)),
     'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'logo.local.png': read(path.join(p.plugin, 'logo.png'), io) };
@@ -90,7 +90,7 @@ function verify(repo, io = fs, verifySources = true) {
   const beforePreferences = JSON.stringify(SOURCES.filter(name => name !== 'plugin/preferences.cjs').sort());
   const beforeReuse = JSON.stringify(SOURCES.filter(name => name !== 'tests/support/window-reuse.cjs').sort());
   const knownSourceList = keys === current || !verifySources && (keys === previous || keys === preceding || keys === beforeAnnotations || keys === beforeRam || keys === beforePreferences || keys === beforeReuse);
-  if (marker.mode !== undefined && !['performance', 'resource', 'annotations', 'preferences', 'reuse'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
+  if (marker.mode !== undefined && !['performance', 'resource', 'annotations', 'preferences', 'reuse', 'window-checks'].includes(marker.mode) || !validApproval(marker.writeApproval) ||
       !validRam(marker.ramDiagnostic) || marker.ramDiagnostic && !['performance', 'reuse'].includes(marker.mode) ||
       marker.mode === 'reuse' && (!marker.ramDiagnostic || marker.ramDiagnostic.schema !== 'T2-ram-host-v2')) throw new Error('Unknown measurement protocol.');
   if (marker.schema !== SCHEMA || !same(marker.hostRoot, p.host) || !same(marker.pluginRoot, p.plugin) ||
@@ -115,9 +115,9 @@ function prepare(repo, io = fs, mode = 'performance', writeApproval = null, ramD
 }
 if (require.main === module) {
   try { if (process.argv.includes('--ram-compare') && process.argv.includes('--ram-compare-2g')) throw new Error('Choose only one RAM comparison configuration.');
-    const modes = ['--preferences', '--annotations', '--resource', '--reuse'].filter(flag => process.argv.includes(flag));
+    const modes = ['--preferences', '--annotations', '--resource', '--reuse', '--window-checks'].filter(flag => process.argv.includes(flag));
     if (modes.length > 1) throw new Error('Choose only one measurement protocol.');
-    const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--reuse') ? 'reuse' : process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
+    const value = prepare(path.resolve(__dirname, '..'), fs, process.argv.includes('--window-checks') ? 'window-checks' : process.argv.includes('--reuse') ? 'reuse' : process.argv.includes('--preferences') ? 'preferences' : process.argv.includes('--annotations') ? 'annotations' : process.argv.includes('--resource') ? 'resource' : 'performance', null,
     process.argv.includes('--ram-compare-2g') ? { schema: 'T2-ram-host-v2', ramMiB: 2048, compressedMiB: 256, rendererStopMiB: 3072 } :
       process.argv.includes('--ram-compare') ? { schema: 'T2-ram-host-v1', ramMiB: 1024, compressedMiB: 128 } : null); console.log(JSON.stringify({ host: value.host, bytes: value.bytes,
     manifest: path.join(value.host, 'manifest.json'), boundary: 'Prepared only; Eagle not loaded and no performance test executed.' })); }

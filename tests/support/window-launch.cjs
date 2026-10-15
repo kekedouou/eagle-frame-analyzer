@@ -14,6 +14,7 @@ function install(options) {
   let state = 'waiting', job = null, stopping = false, closeRequested = false, allowUnload = false, completed = false;
   let timer = null, done = Promise.resolve(), receipts = [], failureSaved = false, safeToRecord = false, closeScheduled = false;
   let cancelPreparation = null, runCallback = null, exitCallback = null, activeMode = 'performance';
+  let activeContext = null, windowUnloadObserved = false;
   // Capture formal callbacks for test invocation; restore SDK registration immediately.
   for (const [name, assign] of [['onPluginRun', callback => { runCallback = callback; }], ['onPluginBeforeExit', callback => { exitCallback = callback; }]]) {
     if (typeof eagle[name] !== 'function') continue;
@@ -22,7 +23,7 @@ function install(options) {
   }
   const clearTimer = () => { if (timer !== null) { win.clearTimeout(timer); timer = null; } };
   function message(text, failed = false) {
-    doc.title = (activeMode === 'annotations' ? 'T3 标注验收' : activeMode === 'preferences' ? 'T2 内存设置验收' : 'T2 自动测量') + ' · ' + text;
+    doc.title = (activeMode === 'window-checks' ? 'T2 窗口验收' : activeMode === 'annotations' ? 'T3 标注验收' : activeMode === 'preferences' ? 'T2 内存设置验收' : 'T2 自动测量') + ' · ' + text;
     const node = doc.getElementById(failed ? 'error' : 'status');
     if (node) { node.textContent = text; node.hidden = false; }
   }
@@ -70,6 +71,20 @@ function install(options) {
     } finally { if (unsubscribe) unsubscribe(); }
   }
   function beforeUnload(event) {
+    if (activeMode === 'window-checks' && safeToRecord && !windowUnloadObserved) {
+      windowUnloadObserved = true; let store;
+      try {
+        verify(repo);
+        const value = observe(win.EVADiagnostics, activeContext);
+        store = storeFactory(repo, { stage: 'T2' }); store.start({ reserveBytes: 64 * 1024 });
+        receipts.push(store.save('host', { schema: 'window-lifecycle-unload-request-v1', stage: 'T2', at: new Date().toISOString(),
+          origin: 'real-Eagle-independent-window-observation', launchContext: activeContext, state: value && value.state,
+          sourceIdentity: value && value.sourceIdentity, progress: value && value.progress, loadMetrics: value && value.loadMetrics,
+          nativeWindowDestroyedVerified: false, cleanupVerified: false,
+          note: 'Observed beforeunload request only. Product may defer closure for cleanup; user confirmation and post-close file checks remain required.' }));
+      } catch (error) { message('关闭请求记录未保存：' + String(error.message).slice(0, 512), true); }
+      finally { if (store) { try { store.close(); } catch (_) {} } }
+    }
     closeRequested = true; stop();
     if (allowUnload || !job || completed) return;
     // Preserve the driver's failure receipt before the renderer disappears.
@@ -119,7 +134,7 @@ function install(options) {
         mappedFormalRoot: prepared.plugin, sourceHashes: prepared.marker.sourceHashes,
         boundary: ramContext ? 'Real SDK/media/cache/UI with explicitly captured in-memory RAM Player candidate; mapped root, not formal default startup.' :
           'Real SDK/media/cache/UI/player; test entry maps create.path only. Not the formal manifest startup.', sdkCallbackAt: callbackAt };
-      state = 'preparing';
+      activeContext = context; state = 'preparing';
       const aborted = new Promise((_, reject) => { cancelPreparation = reject; });
       // Consume a cancellation even if a synchronous callback throws first.
       aborted.catch(() => {});
@@ -144,13 +159,13 @@ function install(options) {
       context.appEntryToReadyMs = snapshot.loadMetrics.totalMs;
       context.readyEpoch = snapshot.epoch;
       context.readyTrigger = snapshot.loadMetrics.trigger;
-      if (activeMode === 'preferences') {
+      if (activeMode === 'preferences' || activeMode === 'window-checks') {
         if (!snapshot.memorySettings || !snapshot.playback || snapshot.playback.budget.limit !== snapshot.memorySettings.ramBytes)
           throw new Error('正式内存设置与实际Player额度不符，未记录就绪。');
         const store = storeFactory(repo, { stage: 'T2' });
         try {
           store.start({ reserveBytes: 64 * 1024 });
-          receipts.push(store.save('host', { schema: 'window-memory-settings-ready-v1', stage: 'T2', origin: 'real-Eagle-preferences-ready-observation',
+          receipts.push(store.save('host', { schema: activeMode === 'window-checks' ? 'window-lifecycle-ready-v1' : 'window-memory-settings-ready-v1', stage: 'T2', origin: activeMode === 'window-checks' ? 'real-Eagle-independent-window-observation' : 'real-Eagle-preferences-ready-observation',
             at: new Date().toISOString(), launchContext: context, state: snapshot.state, sourceIdentity: snapshot.sourceIdentity,
             memorySettings: snapshot.memorySettings, playback: snapshot.playback ? { frameId: snapshot.playback.frameId,
               time: snapshot.playback.time, budget: snapshot.playback.budget } : null, loadMetrics: snapshot.loadMetrics,
@@ -158,7 +173,7 @@ function install(options) {
         } catch (error) { failureSaved = true; throw new Error('内存设置就绪证据未保存：' + error.message); }
         finally { store.close(); }
         state = 'saved';
-        message('内存设置已就绪，请体验修改与重开保留；本次不自动拖动。');
+        message(activeMode === 'window-checks' ? '已载入，请核对素材；本次仅记录窗口操作，不自动测量。' : '内存设置已就绪，请体验修改与重开保留；本次不自动拖动。');
         return { complete: true, observationSaved: true, receipts };
       }
       state = 'measuring'; doc.title = activeMode === 'reuse' ? 'T2 自动测量 · 2GB缓存复用与释放，三次载入' : activeMode === 'annotations' ? 'T3 标注验收 · 只读观察／具体授权后一次写入' : activeMode === 'resource' ? 'T2 资源验证 · 60分钟运行＋5分钟静置' : ramContext ? 'T2 自动测量 · '+(ramContext.ramMiB/1024)+'GB RAM对照，请保持前台，约2分钟' : 'T2 自动测量 · 请保持前台，约2分钟';
@@ -182,7 +197,7 @@ function install(options) {
       state = 'failed'; return { complete: false, earlyRegressionPassed: false, error: String(error.message || error), receipts };
     } finally {
       clearTimer(); cancelPreparation = null; completed = true;
-      if (!closeRequested) win.removeEventListener('beforeunload', beforeUnload);
+      if (!closeRequested && activeMode !== 'window-checks') win.removeEventListener('beforeunload', beforeUnload);
     }
   }
   return Object.freeze({ get done() { return done; }, snapshot: () => ({ state, completed, receipts: receipts.slice() }), cancel: stop,
