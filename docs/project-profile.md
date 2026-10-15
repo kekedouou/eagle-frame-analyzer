@@ -1,6 +1,6 @@
 # 项目说明
 
-2026-10-15当前：两项2c349e4用户人工通过已保存为f09056e；本轮稳定性最终候选补齐交接取消及元数据中断恢复，模型、实际Windows/FFmpeg检查通过，待用户集中高强度验收。固定原plugin/主入口与本地Git、11776B新守护构建，不重导入测试入口/发布或引入新功能。原T2测量停止，T2/T4未整体通过。交付与下一步见[进度](progress.md#2026-10-15-稳定性最终候选交付)、[候选证据](experiments/T2/report.md#2026-10-15-稳定性最终验收候选)和[体验清单](verification.md#本轮稳定性候选的集中人工验收)。
+2026-10-15当前：用户认可bd7481f稳定性候选的集中体验，授权连续推进至T4的MVP总验收；本地体验节点为phase4-lifecycle-experience-approved。原plugin/主入口及11776B守护构建保留，原T2测量入口仍停用，T2技术收尾和T4全项证据尚未完成。先审计可复用证据，再补当前版本的性能/逐帧/新进程资源，不重做产品设计或增加画质功能。当前状态见[进度](progress.md#2026-10-15-稳定性体验认可与t4推进授权)，执行顺序见[计划](development-plan.md#稳定性体验通过后的-t2t4-执行顺序)，反馈来源及局限见[T2记录](experiments/T2/report.md#2026-10-15-用户集中体验认可与后续证据盘点)。
 
 当前入口和检查以此段为准，下面旧宿主入口说明保留为历史：使用`plugin/manifest.json`既有“视频分析”入口，无需重新导入T2插件。`task-client.cjs`发送控制请求，`native/task-host.cs`用Windows系统互斥/进程组持有本会话任务，`task-worker.cjs`复用media/cache准备和清理；Player直接在本地读帧，Eagle/标注API不迁移。本机11776B守护产物及构建指纹已就绪、Git忽略；源码变更/新检出由Codex执行`node scripts/build-task-host.cjs`构建，无需用户安装依赖或输入命令。
 
