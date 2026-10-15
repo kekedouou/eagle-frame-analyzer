@@ -13,6 +13,7 @@ function createSession(options) {
   let epoch = 0, libraryEpoch = 0, closed = false, tail = Promise.resolve(), controller = null, owner = null;
   let state = 'empty', source = null, duration = 0, playback = null, error = null, progress = null, loadMetrics = null;
   let memoryResume = null;
+  let cleanupError = null;
   const emptyComments = () => Object.freeze({ status: 'idle', items: Object.freeze([]), libraryPath: null, message: '', draft: null });
   let comments = emptyComments(), draftSequence = 0;
   const writes = new Map(), annotationReceipts = [];
@@ -79,6 +80,7 @@ function createSession(options) {
   async function runLoad(request) {
     let owned = null;
     try {
+      if (cleanupError) throw issue(cleanupError.code, cleanupError.message);
       if (!current(request)) return { status: 'superseded' };
       await releaseOwner(); if (!current(request)) return { status: 'superseded' };
       const captured = await waitCaptured(request.captured, request.controller.signal);
@@ -140,6 +142,10 @@ function createSession(options) {
     } catch (failure) {
       try { await releaseOwner(owned || owner); }
       catch (cleanupFailure) { failure = issue('SESSION_RELEASE_FAILED', '旧视频资源未能确认释放，停止准备新素材：' + cleanupFailure.message); }
+      if (['MEDIA_CLEANUP_FAILED', 'SESSION_RELEASE_FAILED'].includes(failure && failure.code)) {
+        cleanupError = describe(failure, 'SESSION_RELEASE_FAILED');
+        if (!current(request)) { error = cleanupError; notify(); return { status: 'error', error: { ...cleanupError } }; }
+      }
       if (!current(request)) return { status: 'superseded' };
       state = 'error'; error = describe(failure, 'PREPARATION_FAILED'); progress = null; playback = null; notify();
       return { status: 'error', error: { ...error } };
@@ -212,6 +218,7 @@ function createSession(options) {
     return enqueue(async () => {
       if (!closed && token !== epoch) return { status: 'superseded' };
       try {
+        if (cleanupError) throw issue(cleanupError.code, cleanupError.message);
         await releaseOwner();
         // Dispatched writes cannot be cancelled with the player. They finish
         // read-back against their own identity, without updating another item.

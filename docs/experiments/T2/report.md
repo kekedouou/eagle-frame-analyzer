@@ -556,3 +556,10 @@ T2尚未验收。后续在本预检基础上依次完成排他清理事务与回
 用户报告测试入口再次因t2-writer.lock的EEXIST无法启动，并明确要求不再自动测量、直接体验。v5启动原件t2-2026-10-15T03-59-20-044Z-71aab0bb652ca271941d/host-71aab0bb652ca271941d-0.json（3452B，SHA c8454c9e8db4628e7df87cb35a3d4c912448598188594d217550d0c6ce113346），PID14184、witnessId300384ade516551eb01d；没有新关闭/清理记录。当前该PID不存在，262B证据writer原件SHA 4f4fd198e6f0d5eb34100636b67dff8c89dea9319345a7b31845d4a4b8b14324、token f78e322106063dcecfdb仍在。不能把本地40组通过当作v5真实退出可靠；退出中断原因未定，不继续猜测改观察器。
 
 切换的是用户体验入口，非移除缓存保护：主线plugin/manifest.json（ID EVAVIDEOANALYSIS20261011，名称“视频分析”）直接加载player.js/ui.js/app.js，无verification-runs/t2-writer.lock或测试模块依赖。当前正式cache盘点5份/225,769,128B、无lease/writer/partial，不生成、删除或逐资产重验；不证明完整体验已验收。本次不清测试锁、不新写测试回执、不运行任何自动测量/性能/媒体测试，只保留原失败记录并更新文档/Diff。当前先由用户正常使用正式开发入口反馈体验；不要求重导入测试插件、反复执行相同测量或输调试命令。T2/T4缺口原样保留，不因停止当前测试流程而通过关卡。
+
+
+## 2026-10-15 A-07整改启动
+
+用户批准整改流程落实后直接开发，目标人工停顿不超过3次，见development-plan L-01～L-03。基线ac59e28；正式545B writer父PID19956不存在、子starting/identity=null，SHA5119d1bcaa189723f3f7212dfbed056ecc040eedd08b1b2231ba79c35e91058e；只读系统快照无FFmpeg，原恢复判missing-process-birth-or-child-registration。此为不可恢复分支的实际证据，尚不能断言旧renderer具体为何结束。本轮先记设计与权限，再实施；未重跑旧自动测量、未清原视频/素材库/完整缓存、未强退Eagle。
+
+L-01已完成本地定位：新增准备取消+清理失败断言先在旧session复现superseded!=error，修正后29组session和28组media纯/模拟检查通过，含abort/close清理失败与重复关闭。中途media补丁作用域错误在本地立即暴露并修正，未交付用户。Eagle二进制fuse只读显示RunAsNode已开启，独立命令实际输出Node16.17.1/Electron22.3.7并退出0，未打开Eagle界面或插件；现有系统csc.exe存在，无需安装工具。上述不是L-02或实际Eagle关窗通过。

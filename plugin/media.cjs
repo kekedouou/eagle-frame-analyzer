@@ -421,6 +421,12 @@ function createMedia(options) {
           throw closeError;
         }
       } finally { active = false; }
+      if (primaryError && (primaryError.cleanupError || primaryError.lockReleaseError || primaryError.releaseError)) {
+        const failure = new Error('视频任务已停止，但资源清理失败：' +
+          [primaryError.cleanupError, primaryError.lockReleaseError, primaryError.releaseError].filter(Boolean).join('；'));
+        failure.code = 'MEDIA_CLEANUP_FAILED'; failure.causeCode = primaryError.code || primaryError.name;
+        throw failure;
+      }
     }
   }
   return Object.freeze({ prepare });

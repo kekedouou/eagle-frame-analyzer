@@ -263,6 +263,18 @@ async function main() {
     assert.strictEqual(h.released.length, 0); assert.strictEqual((await h.session.close()).status, 'error');
     assert.strictEqual((await h.session.close()).status, 'error'); assert.strictEqual(h.session.snapshot().state, 'closed');
   });
+  await test('Preparation cleanup failure survives cancellation and prevents false close success', async () => {
+    const started = deferred();
+    const h = harness({ prepare: (value, options) => new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(Object.assign(new Error('partial cleanup failed'), { code: 'MEDIA_CLEANUP_FAILED' })), { once: true });
+      started.resolve();
+    }) });
+    const load = h.session.loadSelected(); await started.promise;
+    const closed = h.session.close();
+    assert.equal((await load).status, 'error');
+    assert.equal((await closed).status, 'error');
+    assert.equal((await h.session.close()).error.code, 'MEDIA_CLEANUP_FAILED');
+  });
   await test('Current-video memory is observable during loading and invalidated before switching or closing', async () => {
     const gate = deferred();
     const h = harness({ load: async player => { player.value.budget = { used: 32, limit: 512 }; await gate.promise; } });

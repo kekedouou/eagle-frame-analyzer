@@ -120,7 +120,7 @@ function harness(settings = {}) {
       if (settings.abortAtFinish) settings.abortAtFinish.abort();
       return { ...manifest, source: currentSource, cacheDir: '/virtual-cache', leaseId: 'lease' };
     },
-    async abort() { events.push('cache-abort'); state.aborted = true; },
+    async abort() { events.push('cache-abort'); state.aborted = true; if (settings.failAbort) throw new Error('controlled partial cleanup failure'); },
     async close() { events.push('cache-close'); state.closed = true; if (settings.failClose) throw new Error('controlled lock close failure'); }
   };
   if (settings.registration) {
@@ -317,6 +317,15 @@ async function main() {
   await test('T1 writer release failure is reported and owned lease is released', async () => {
     const h = harness({ failClose: true }); await assert.rejects(h.media.prepare(h.snapshot), /controlled lock close failure/);
     assert(h.events.includes('lease-release')); assert(!h.state.acquired);
+  });
+  await test('Cancelled preparation cannot hide failed partial cleanup or writer release', async () => {
+    for (const broken of [{ failAbort: true }, { failClose: true }]) {
+      const h = harness({ holdDecode: true, ...broken }), controller = new AbortController();
+      const pending = h.media.prepare(h.snapshot, { signal: controller.signal });
+      const rejected = assert.rejects(pending, error => error.code === 'MEDIA_CLEANUP_FAILED');
+      for (let i = 0; i < 30 && !h.processes.some(x => x.kind === 'decode'); i++) await tick();
+      controller.abort(); await rejected;
+    }
   });
   await test('T1 callback errors cannot escape media event handling', async () => {
     const h = harness(), info = await h.media.prepare(h.snapshot, { onProgress() { throw new Error('observer only'); } });
