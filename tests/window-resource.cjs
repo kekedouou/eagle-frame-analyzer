@@ -7,11 +7,11 @@ const MIB = 1024 ** 2;
 let count = 0;
 function model(settings = {}) {
   let clock = 0, next = 0, epoch = 1, state = 'paused', source = 0, selected = 0, closed = false, restored = false, storeClosed = false;
-  let sampleCount = 0, writes = 0, reloaded = 0;
+  let sampleCount = 0, writes = 0, reloaded = 0, frame = 0;
   const observers = new Set(), timers = new Map(), intervals = new Map(), saved = [];
   const samples = [0, 1].map(i => ({ id: 'item-' + i, sha256: String(i).repeat(64) }));
   const snapshot = () => ({ state, epoch, libraryEpoch: 0, loadMetrics: { reused: true }, sourceIdentity: { itemId: samples[source].id, sha256: samples[source].sha256 },
-    playback: { budget: { used: 100 * MIB, limit: 512 * MIB }, pendingTargets: 0, activeImageTasks: 0 } });
+    playback: { frameId: frame, frameCount: 60, budget: { used: 100 * MIB, limit: 512 * MIB }, pendingTargets: 0, activeImageTasks: 0 } });
   function emit(event) { for (const observer of observers) observer({ type: 'player', value: { event } }); }
   const win = { performance: { now: () => clock }, PointerEvent: class { constructor(type, value) { this.type = type; Object.assign(this, value); } },
     dispatchEvent(event) { if (closed) return; if (settings.playbackError && event.type === 'pointermove') emit({ type: 'error', error: 'test decoder failure', code: 'TEST_DECODE', phase: 'background-image' }); if (event.type === 'pointerup') state = 'paused'; if (!settings.noDraws) emit({ type: 'draw' }); },
@@ -22,6 +22,7 @@ function model(settings = {}) {
         const end = clock + ms;
         for (let at = clock + 1; at <= end; at++) {
           clock = at;
+          if (state === 'playing' && clock % 10 === 0 && !settings.noPlayDraws) { frame = (frame + 1) % 60; emit({ type: 'draw' }); }
           for (const interval of intervals.values()) if (clock >= interval.next) { interval.next += interval.ms; interval.callback(); }
         }
         clock = end; callback();
@@ -30,7 +31,8 @@ function model(settings = {}) {
     setInterval(callback, ms) { const id = ++next; intervals.set(id, { callback, ms, next: clock + ms }); return id; },
     clearInterval: id => intervals.delete(id) };
   const timeline = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 10 }), dispatchEvent: win.dispatchEvent };
-  const nodes = { timeline, play: { click() { state = state === 'playing' ? 'paused' : 'playing'; } }, previous: { click() {} }, next: { click() {} } };
+  const nodes = { timeline, play: { click() { state = state === 'playing' ? 'paused' : 'playing'; } },
+    previous: { click() { if (!settings.badStep) frame = Math.max(0, frame - 1); } }, next: { click() { if (!settings.badStep) frame = Math.min(59, frame + 1); } } };
   const options = { bridge: { snapshot, subscribe(observer) { observers.add(observer); return () => observers.delete(observer); } }, window: win,
     document: { visibilityState: settings.hidden ? 'hidden' : 'visible', hasFocus: () => !settings.hidden, getElementById: id => nodes[id] }, pluginRoot: 'D:/model/plugin',
     memory() { sampleCount++; return settings.rssStop && sampleCount > 3 ? 2 * 1024 ** 3 : 400 * MIB; }, cpu: () => ({ user: clock * 10, system: 0 }),
@@ -64,6 +66,26 @@ async function main() {
     const rows = [[100, 'drag', 0, 500, 100, 20, 0, 0, 1, 1]], packed = api.packRows(rows);
     assert.deepStrictEqual(JSON.parse(zlib.gunzipSync(Buffer.from(packed.data, 'base64'))), rows);
     assert.throws(() => api.packRows(['x'.repeat(256 * 1024)]), /256KiB/);
+  });
+  await test('T4 streams every renderer sample to one bounded sink without writing old T2 chunks', async () => {
+    const f = model(), rows = []; f.options.evidenceStage = 'T4'; f.options.onSample = row => rows.push(row);
+    const job = api.execute(f.options, MODEL), result = await job.done;
+    assert(result.complete); assert.equal(result.summary.stage, 'T4'); assert.equal(result.summary.totalSamples, rows.length);
+    assert.equal(result.summary.externalTrace, true); assert(!f.saved.some(r => r.type === 'resource-chunk'));
+    assert.equal(job.status().elapsedMs, null); assert.equal(result.summary.modelRun, true);
+  });
+  await test('a failed unified sink stops workload and preserves the original failure', async () => {
+    const f = model(); f.options.onSample = () => { throw Error('model-unified-sink-full'); };
+    const result = await api.execute(f.options, MODEL).done; assert(!result.complete);
+    assert.match(result.summary.error, /model-unified-sink-full/); assert(f.inspect().closed);
+  });
+  await test('T4 requires actual play draws and accurate adjacent steps, rather than timer activity', async () => {
+    const good = model(); good.options.verifyActivities = true;
+    const result = await api.execute(good.options, MODEL).done; assert(result.complete); assert(result.summary.activities.length > 0);
+    for (const settings of [{ noPlayDraws: true }, { badStep: true }]) {
+      const bad = model(settings); bad.options.verifyActivities = true;
+      const stopped = await api.execute(bad.options, MODEL).done; assert(!stopped.complete);
+    }
   });
   await test('independent auditor recomputes real-duration sample groups and detects tampering/model provenance', () => {
     const audit = require('../scripts/audit-resource.cjs')._test;

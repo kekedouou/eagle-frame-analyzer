@@ -90,6 +90,9 @@ function packRows(rows) {
 function run(options) { return execute(options, PROTOCOL); }
 function execute(options, protocol) {
   const { bridge, document: doc, window: win, pluginRoot } = options;
+  const stage = options.evidenceStage || 'T2';
+  if (!['T2', 'T4'].includes(stage)) throw Error('Unknown resource evidence stage.');
+  const externalTrace = typeof options.onSample === 'function';
   const first = bridge && bridge.snapshot();
   const managedLimit = first && first.playback && first.playback.budget && first.playback.budget.limit;
   if (!Number.isSafeInteger(managedLimit) || managedLimit <= 0) throw new Error('资源验证缺少实际RAM配置上限。');
@@ -103,6 +106,7 @@ function execute(options, protocol) {
   let selection, issue = null, recording = false, gesture = false, disposedBudget = null, sampleTimer = null;
   let phase = 'setup', sampleIndex = 0, begin = 0, previousSampleAt = null, maxSampleGapMs = 0;
   let pendingRows = [], comparisonRows = [], chunks = [], loads = [], measuredFrames = 0, totalSamples = 0;
+  const activities = [];
   let peakRss = 0, peakManaged = 0, lastCPU = null, eventErrors = 0, complete = false, saveFailed = false, unsaved = null;
   let expectedEpoch = first.epoch, closeJob = null, workElapsedMs = null, idleElapsedMs = null;
   const timeline = doc.getElementById('timeline');
@@ -153,7 +157,8 @@ function execute(options, protocol) {
       const row = [at - begin, phase, sampleIndex, rss, managed, cpuMicros, p ? p.activeImageTasks : null,
         p ? p.pendingTargets : null, measuredFrames, value.epoch, doc.visibilityState === 'visible' ? 1 : 0,
         typeof doc.hasFocus === 'function' && doc.hasFocus() ? 1 : 0];
-      pendingRows.push(row); totalSamples++;
+      if (externalTrace) options.onSample(row); else pendingRows.push(row);
+      totalSamples++;
       const minute = row[0] / (protocol.workMs / 60);
       if (minute >= 10 && minute < 15 || minute >= 55 && minute < 60) {
         if (comparisonRows.length >= 7000) throw new Error('比较窗口采样超过有界容量。');
@@ -171,7 +176,7 @@ function execute(options, protocol) {
   }
   function flush() {
     if (!pendingRows.length || saveFailed) return;
-    chunks.push(save({ schema: 'window-resource-chunk-v1', stage: 'T2', type: 'resource-chunk', index: chunks.length,
+    chunks.push(save({ schema: 'window-resource-chunk-v1', stage, type: 'resource-chunk', index: chunks.length,
       sourceIds: selection.samples.map(s => s.id), columns: 'elapsedMs,phase,sample,rendererRssBytes,managedBytes,cpuMicros,imageTasks,pendingTargets,drawSubmissions,sessionEpoch,visible,focused',
       samples: packRows(pendingRows) }));
     pendingRows = [];
@@ -206,7 +211,7 @@ function execute(options, protocol) {
       let cycle = 0;
       while (now() - begin < protocol.workMs) {
         const cycleStart = now(), drawsAtStart = measuredFrames; phase = 'drag';
-        doc.title = 'T2 资源验证 · ' + Math.floor((now() - begin) / 60000) + '/60分钟，可切换其它应用';
+        doc.title = (stage === 'T4' ? '阶段4长期验证' : 'T2 资源验证') + ' · ' + Math.floor((now() - begin) / 60000) + '/60分钟，可切换其它应用';
         pointer('pointerdown', .5);
         while (now() - cycleStart < protocol.cycleMs / 3 && now() - begin < protocol.workMs) {
           guard(); const fraction = (now() - cycleStart) / (protocol.cycleMs / 20);
@@ -214,14 +219,31 @@ function execute(options, protocol) {
         }
         pointer('pointerup', .5); await settle();
         if (measuredFrames <= drawsAtStart) throw new Error('拖动负载未产生实际画面提交，不能将后台空等计作有效测试。');
+        if (options.verifyActivities) activities.push({ cycle, sample: sampleIndex, phase: 'drag', draws: measuredFrames - drawsAtStart });
+        if (now() - begin >= protocol.workMs) break;
+        const playDraws = measuredFrames;
         phase = 'play'; click('play');
         const playStart = now();
         while (now() - playStart < protocol.cycleMs / 4 && now() - begin < protocol.workMs) { guard(); await sleep(50); }
-        if (guard().state === 'playing') click('play'); await settle(); phase = 'step';
+        if (guard().state === 'playing') click('play'); await settle();
+        if (options.verifyActivities) {
+          if (measuredFrames <= playDraws) throw Error('正常播放未产生实际画面，不能按有效负载记录。');
+          activities.push({ cycle, sample: sampleIndex, phase: 'play', draws: measuredFrames - playDraws });
+          // Return to the middle so both directions exercise real frames.
+          pointer('pointerdown', .5); pointer('pointerup', .5); await settle();
+        }
+        phase = 'step'; let steps = 0;
         const stepStart = now();
         while (now() - stepStart < protocol.cycleMs / 12 && now() - begin < protocol.workMs) {
-          click(cycle % 2 ? 'previous' : 'next'); await settle(); await sleep(100);
+          const beforeStep = options.verifyActivities ? guard().playback : null;
+          click(cycle % 2 ? 'previous' : 'next'); await settle();
+          if (beforeStep) {
+            const expected = Math.min(beforeStep.frameCount - 1, Math.max(0, beforeStep.frameId + (cycle % 2 ? -1 : 1)));
+            if (!Number.isSafeInteger(expected) || guard().playback.frameId !== expected) throw Error('长期逐帧操作没有到达相邻目标帧。');
+          }
+          steps++; await sleep(100);
         }
+        if (options.verifyActivities) activities.push({ cycle, sample: sampleIndex, phase: 'step', checkedOperations: steps });
         if (now() - begin >= protocol.workMs) break;
         phase = 'load'; sampleIndex = (cycle + 1) % 2; selection.choose(sampleIndex);
         const loadAt = now(), originalEpoch = guard().epoch;
@@ -265,11 +287,11 @@ function execute(options, protocol) {
     try {
       if (selection && !saveFailed) { try { flush(); } catch (error) { failure = failure || error.message; } }
       const trend = trends(comparisonRows, protocol);
-      const summary = { schema: 'window-resource-summary-v1', stage: 'T2', type: 'resource-summary', complete: complete && !issue && !saveFailed,
+      const summary = { schema: 'window-resource-summary-v1', stage, type: 'resource-summary', complete: complete && !issue && !saveFailed,
         resourceGatePassed: complete && !issue && !saveFailed && trend.passed && !!cleanup && cleanup.verified && protocol === PROTOCOL,
         protocol, modelRun: protocol !== PROTOCOL, workElapsedMs, idleElapsedMs, launchContext: options.launchContext, error: failure || issue && issue.message,
         samples: selection ? selection.samples : [], sourceSelection: 'test-only fixed snapshots from real SDK; Eagle selection itself is unchanged',
-        chunks, loads, trend, cleanup, totalSamples, maxSampleGapMs, peakRendererRssBytes: peakRss, peakManagedBytes: peakManaged, managedLimitBytes: managedLimit,
+        chunks, externalTrace, activityChecks: !!options.verifyActivities, activities, loads, trend, cleanup, totalSamples, maxSampleGapMs, peakRendererRssBytes: peakRss, peakManagedBytes: peakManaged, managedLimitBytes: managedLimit,
         totalDrawSubmissions: measuredFrames, playerErrors: eventErrors, playerFailures, cpu: { start: startCPU, endMicros: lastCPU, scope: 'current renderer process, one logical core = 100%; interval deltas retained in chunks' },
         sourceHashesVerifiedAtEnd: complete, limitations: ['Not native window destruction or forced Eagle exit verification.',
           'Renderer RSS sampling may miss peaks; other Eagle/GPU/shared process resources are not measured.',
@@ -287,10 +309,11 @@ function execute(options, protocol) {
       let receipt;
       try { receipt = save(summary); }
       catch (error) { retainFailure(error); throw error; }
-      return { complete: summary.complete, resourceGatePassed: summary.resourceGatePassed, cleanupVerified: cleanup.verified, receipts: [...chunks, receipt] };
+      return { complete: summary.complete, resourceGatePassed: summary.resourceGatePassed, cleanupVerified: cleanup.verified, receipts: [...chunks, receipt], summary };
     } finally { store.close(); }
   }
   const done = executeRound();
-  return Object.freeze({ done, cancel() { fail('资源验证已取消。'); }, unsavedEvidence: () => unsaved });
+  return Object.freeze({ done, cancel() { fail('资源验证已取消。'); }, unsavedEvidence: () => unsaved,
+    status: () => ({ phase, sample: sampleIndex, elapsedMs: recording ? now() - begin : null }) });
 }
-module.exports = { run, PROTOCOL, _test: { execute, trends, median, packRows, selections } };
+module.exports = { run, PROTOCOL, _test: { execute, trends, median, packRows, selections, hashSource } };

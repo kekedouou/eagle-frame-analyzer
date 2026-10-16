@@ -37,6 +37,16 @@ class ResourceSampler {
   class Root : Member { }
   static readonly Dictionary<string,Member> known=new Dictionary<string,Member>();
   static readonly JavaScriptSerializer json=new JavaScriptSerializer();
+  static readonly Dictionary<string,int> compactIds=new Dictionary<string,int>();
+  static int CompactId(Member member,List<object> additions) {
+    string key=Key(member.pid,member.ticks); int id;
+    if(!compactIds.TryGetValue(key,out id)) {
+      id=compactIds.Count; if(id>=1024) throw new IOException("Compact process catalogue exceeds boundary.");
+      compactIds.Add(key,id);
+      additions.Add(new object[] {id,member.pid,member.ticks.ToString(),member.role,member.root,Path.GetFileName(member.image),member.image});
+    }
+    return id;
+  }
   static string Key(int pid,long ticks) { return pid+":"+ticks; }
   static string Identity(Process process) { return Key(process.Id,process.StartTime.ToUniversalTime().Ticks); }
   // MainModule can be null before the child's loader has initialized. Query the
@@ -89,10 +99,10 @@ class ResourceSampler {
     if(parentRole=="task-guard" && name=="eagle.exe") return "task-worker";
     return "owned-unclassified";
   }
-  static object Sample(List<Root> roots,double elapsed) {
+  static object Sample(List<Root> roots,double elapsed,bool compact) {
     var sampling=Stopwatch.StartNew();
     var parents=Parents(); var members=new Dictionary<int,Member>();
-    var errors=new List<object>(); var statuses=new List<object>();
+    var errors=new List<object>(); var statuses=new List<object>(); var additions=new List<object>();
     foreach(var root in roots) {
       bool alive=false;
       try {
@@ -104,7 +114,8 @@ class ResourceSampler {
         }
       } catch(ArgumentException) { } catch(InvalidOperationException) { }
       catch(Exception e) { errors.Add(Error(root.pid,e,"root-identity")); }
-      statuses.Add(new {pid=root.pid,startTicks=root.ticks.ToString(),role=root.role,alive=alive});
+      if(compact) statuses.Add(new object[] {CompactId(root,additions),alive});
+      else statuses.Add(new {pid=root.pid,startTicks=root.ticks.ToString(),role=root.role,alive=alive});
     }
     // Retain already verified descendants after parent exit, until their exact
     // creation identity disappears. PID reuse can never inherit membership.
@@ -153,22 +164,26 @@ class ResourceSampler {
             if(process.HasExited) continue;
             throw new Win32Exception(code,"Resource memory query failed.");
           }
-          rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
+          if(compact) rows.Add(new object[] {CompactId(member,additions),memory.workingSet.ToUInt64(),(kernel+user)/10000.0});
+          else rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
             image=Path.GetFileName(member.image),imagePath=member.image,rssBytes=memory.workingSet.ToUInt64(),cpuMs=(kernel+user)/10000.0});
         } finally { CloseHandle(handle); }
       } } catch(ArgumentException) { } catch(InvalidOperationException) { }
       catch(Exception e) { errors.Add(Error(member.pid,e,"resource-counters")); }
     }
+    if(compact) return new {schema="mvp-process-compact-v1",atMs=elapsed,sampleDurationMs=sampling.Elapsed.TotalMilliseconds,
+      additions=additions,processes=rows,roots=statuses,errors=errors};
     return new {schema="mvp-process-sample-v1",atMs=elapsed,sampleDurationMs=sampling.Elapsed.TotalMilliseconds,processes=rows,roots=statuses,errors=errors};
   }
   static int Main(string[] args) {
     try {
       Console.OutputEncoding=new System.Text.UTF8Encoding(false);
-      if(args.Length<6 || (args.Length-2)%4!=0 || args.Length>34) throw new IOException("Expected interval duration and explicit pid/startTicks/role/image roots.");
+      bool compact=args.Length>2 && args[2]=="compact"; int firstRoot=compact ? 3 : 2;
+      if(args.Length<firstRoot+4 || (args.Length-firstRoot)%4!=0 || args.Length>firstRoot+32) throw new IOException("Expected interval duration and explicit pid/startTicks/role/image roots.");
       int interval=Int32.Parse(args[0]), duration=Int32.Parse(args[1]);
-      if(interval!=100 || duration<500 || duration>3900000) throw new IOException("Observation interval/duration outside protocol.");
+      if(interval!=100 || duration<500 || duration>(compact ? 3960000 : 3900000)) throw new IOException("Observation interval/duration outside protocol.");
       var roots=new List<Root>(); var ids=new HashSet<int>();
-      for(int i=2;i<args.Length;i+=4) {
+      for(int i=firstRoot;i<args.Length;i+=4) {
         int pid=Int32.Parse(args[i]); string role=args[i+2],image=args[i+3]; long ticks;
         if(args[i+1]=="parent") {
           using(var self=Process.GetCurrentProcess()) using(var parent=Process.GetProcessById(pid)) {
@@ -189,7 +204,7 @@ class ResourceSampler {
       input.IsBackground=true; input.Start();
       var clock=Stopwatch.StartNew(); long outputBytes=0; int count=0;
       while(!stopping && clock.ElapsedMilliseconds<=duration) {
-        string line=json.Serialize(Sample(roots,clock.Elapsed.TotalMilliseconds));
+        string line=json.Serialize(Sample(roots,clock.Elapsed.TotalMilliseconds,compact));
         outputBytes+=System.Text.Encoding.UTF8.GetByteCount(line)+1;
         if(line.Length>32768 || outputBytes>64*1024*1024) throw new IOException("Observation pipe capacity exceeded; incomplete run.");
         Console.WriteLine(line); count++;

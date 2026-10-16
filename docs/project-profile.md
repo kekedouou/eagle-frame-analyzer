@@ -1,5 +1,11 @@
 # 项目说明
 
+当前恢复入口：已显式`node scripts/prepare-mvp-host.cjs --stability-vp9`准备同一T4目录/ID，固定“索尼克”＋“地狱野蛮之锤”、默认1GiB；用户仅单选索尼克、打开既有阶段4验收，自动60分钟＋5分钟，可被其他应用覆盖但暂不最小化。11009B/42源指纹、未启动/无cache，207/208检查及未验边界见[T4准备结果](experiments/T4/report.md#2026-10-16-两轮长期入口本地准备完成)。不要执行已完成P-03或旧T2入口；实际两轮长期与总验收未通过。
+
+测试模块：mvp-stability负责宿主协调，stability-runtime负责唯一stability-scratch副本及两素材归属，window-resource复用原工作循环，mvp-monitor负责短/长外部采样，long-trace负责无损有界轨迹及读取。原T4 readReceipt仍验证封装/摘要，长段用long-trace.decode还原窗口与外部原始行后按mvp-resource和window-resource趋势规则复算；旧audit-resource的T2文件入口不适用于新T4长段。14份运行副本仅worker磁盘缩至240MiB，正常plugin5GiB/偏好不动；第一轮核对后再按F规则切换--stability-hevc（索尼克＋喜多郁代），不覆盖started/finished。阶段记录、失败及清理分别引用报告，不把模型或短Windows检查当65分钟Eagle成绩。
+
+最新事实：VP9完整六次准备已通过并由205独立审计，测试cache清完；三种代表编码完整P-03专项已有结果，见[T4报告](experiments/T4/report.md#2026-10-16-vp9完整准备计时通过)。当前不重跑--preparation-vp9、HEVC或索尼克；接续只准备新后台结构的两轮60分钟＋5分钟长期证据，正式plugin保持f35fb8c，T2/T4整体未通过。下方待VP9运行描述为历史。
+
 最新接续：已`--preparation-vp9`准备同一tests/host/t4目录/ID，固定“地狱野蛮之锤”/MUXL6QI4AJIAG/828帧，默认1GiB，只补完整P-03六次首次/复用，不重复Canvas/拖动/人工体验。统一检查与Eagle Node26项协调检查通过，入口10584B/38源指纹，未启动/无cache。用户仅需选中该源、打开既有阶段4验收；[准备/整理回执](experiments/T4/report.md#2026-10-16-vp9补验入口准备)190/189。旧HEVC副本/生成入口已核对归属后退役，原件169～188保留，正常plugin/设置/缓存未改；不要重开--preparation-hevc或以本地检查当实际运行成绩。
 
 当前恢复入口：f35fb8c的HEVC完整准备/实际Canvas已在Eagle通过并由188独立审计。喜多郁代首次约8.1～8.8秒、复用约1.7秒；24处主画布原源对比及206张既有编号片实际Canvas通过，测试cache清完。详细范围与原件见[T4结果](experiments/T4/report.md#2026-10-16-hevc完整准备与实际画布核对通过)。当前入口已一次运行完成，不再次执行--preparation-hevc覆盖；后续合并补VP9完整窗口与两轮长期的新后台资源证据，T2/T4整体未通过。以下待运行描述保留为历史，不要求重复已完成步骤。
