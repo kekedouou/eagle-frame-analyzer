@@ -3,9 +3,9 @@ const assert = require('assert'), { compactDecoder, encode, decode, recorder, MA
 const ticks = '639277190890972699';
 function native(atMs = 0) { return { schema: 'mvp-process-sample-v1', atMs, sampleDurationMs: 1.2345, errors: [],
   roots: [{ pid: 1, startTicks: ticks, role: 'renderer', alive: true }],
-  processes: [{ pid: 1, startTicks: ticks, role: 'renderer', root: '1:' + ticks, image: 'Eagle.exe', imagePath: 'G:\\Assets\\Eagle\\Eagle.exe', rssBytes: 409600000, cpuMs: 234.375 }] }; }
+  processes: [{ pid: 1, startTicks: ticks, role: 'renderer', root: '1:' + ticks, image: 'Eagle.exe', imagePath: 'X:\\Example\\Eagle.exe', rssBytes: 409600000, cpuMs: 234.375 }] }; }
 const first = native(), wire = { schema: 'mvp-process-compact-v1', atMs: first.atMs, sampleDurationMs: first.sampleDurationMs, errors: [],
-  additions: [[0, 1, ticks, 'renderer', '1:' + ticks, 'Eagle.exe', 'G:\\Assets\\Eagle\\Eagle.exe']], roots: [[0, true]], processes: [[0, 409600000, 234.375]] };
+  additions: [[0, 1, ticks, 'renderer', '1:' + ticks, 'Eagle.exe', 'X:\\Example\\Eagle.exe']], roots: [[0, true]], processes: [[0, 409600000, 234.375]] };
 const expand = compactDecoder(); assert.deepStrictEqual(expand(wire), first);
 assert.deepStrictEqual(expand({ ...wire, atMs: 100.1234, additions: [] }), { ...first, atMs: 100.1234 });
 assert.throws(() => expand(wire), /catalogue/); assert.throws(() => compactDecoder()({ ...wire, processes: [[2, 1, 0]] }), /Unknown/);
@@ -15,7 +15,7 @@ const events = [{ kind: 'native', native: first, receivedAtMs: 100.300000001, co
 assert.deepStrictEqual(decode(encode(events, 0)), events);
 // Fixed payload written by the old v1 writer; do not regenerate with v2.
 const old = { schema: 'mvp-long-resource-chunk-v1', index: 0,
-  processes: [[1, ticks, 'renderer', '1:' + ticks, 'Eagle.exe', 'G:\\Assets\\Eagle\\Eagle.exe']], roots: [[1, ticks, 'renderer']],
+  processes: [[1, ticks, 'renderer', '1:' + ticks, 'Eagle.exe', 'X:\\Example\\Eagle.exe']], roots: [[1, ticks, 'renderer']],
   encoding: 'lossless-binary-base64-v1', events: 1, data: 'AAQURjQzMxNZQAEABHdhcm0BAAEABfLAAQEAAALAmgwDsOoBAQABAA==' };
 assert.deepStrictEqual(decode(old), [events[0]]);
 const diagnostic = { pid: 2, reason: 'Win32Exception', operation: 'child-image', message: 'Process image query failed.',

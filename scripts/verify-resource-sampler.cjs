@@ -35,6 +35,8 @@ async function observe(root, duration = 1500, onStarted = null) {
   });
 }
 async function main() {
+  const runtime = process.env.EVA_EAGLE_EXECUTABLE;
+  assert(runtime && path.isAbsolute(runtime), 'Set EVA_EAGLE_EXECUTABLE for this explicit developer check.');
   const captureStartup = process.argv.includes('--capture-startup');
   if (process.argv.slice(2).some(arg => arg !== '--capture-startup')) throw new Error('Unknown observer check option.');
   if (fs.existsSync(scratch)) throw new Error('Previous observer scratch retained; inspect before retry.');
@@ -86,7 +88,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
     const exitQueries = JSON.parse(exitRun.stdout.replace(/^\uFEFF/, ''));
     assert(exitQueries.passed && exitQueries.exitedChildren === 16);
     const fixtureEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', EVA_TEST_IDENTITY_MODULE: path.join(repo, 'plugin/process-identity.cjs') }; delete fixtureEnv.NODE_OPTIONS;
-    fixture = spawn(fixtureExe, ['G:\\Assets\\Eagle\\Eagle.exe'], { env: fixtureEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    fixture = spawn(fixtureExe, [runtime], { env: fixtureEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     let fixtureError = ''; fixture.stderr.on('data', b => { fixtureError = (fixtureError + b.toString()).slice(-4096); });
     const fixtureDone = new Promise((resolve, reject) => { fixture.once('error', reject); fixture.once('close', code => code === 0 ? resolve() : reject(Error('Owned startup fixture failed: ' + fixtureError))); });
     fixtureDone.catch(() => {});
@@ -115,7 +117,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
     const startupRows = await observe({ pid: process.pid, startTicks: 'parent', image: process.execPath, role: 'renderer' }, 6500, () => {
       startupTask = (async () => {
         for (let i = 0; i < 8; i++) {
-          client = createTaskClient({ pluginRoot: scratch, runtime: 'G:\\Assets\\Eagle\\Eagle.exe', discoverTools: async () => ({}) });
+          client = createTaskClient({ pluginRoot: scratch, runtime: runtime, discoverTools: async () => ({}) });
           const active = await client.ping(); starts.push({ guardPid: active.taskOwner.guardPid, workerPid: active.pid });
           await new Promise(resolve => setTimeout(resolve, 80)); await client.close();
           await new Promise(resolve => setTimeout(resolve, 70));
@@ -137,7 +139,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
     }
     assert.strictEqual(startup.starts.length, 8); assert(startup.workerStartsObserved >= 4, 'Startup observer must actually see workers.');
     assert.deepStrictEqual(startup.observer.stopReasons, []);
-    client = createTaskClient({ pluginRoot: scratch, runtime: 'G:\\Assets\\Eagle\\Eagle.exe', discoverTools: async () => ({}) });
+    client = createTaskClient({ pluginRoot: scratch, runtime: runtime, discoverTools: async () => ({}) });
     const active = await client.ping(), root = rootIdentity(active.taskOwner.guardPid);
     assert.strictEqual(path.resolve(root.image).toLowerCase(), path.join(scratch, 'native/task-host.local.exe').toLowerCase());
     const rows = await observe(root), aggregate = createAggregation();

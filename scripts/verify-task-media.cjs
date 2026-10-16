@@ -2,7 +2,7 @@
 // Explicit actual guard/Node/media/cache verification, never a UI measurement.
 const fs = require('fs'), path = require('path'), crypto = require('crypto'), assert = require('assert');
 const { createTaskClient } = require('../plugin/task-client.cjs'), { createCache } = require('../plugin/cache.cjs');
-const repo = path.resolve(__dirname, '..'), root = path.join(repo, 'plugin'), runtime = 'G:\\Assets\\Eagle\\Eagle.exe';
+const repo = path.resolve(__dirname, '..'), root = path.join(repo, 'plugin'), runtime = process.env.EVA_EAGLE_EXECUTABLE;
 const cancelOnly = process.argv.includes('--cancel-only');
 const config = JSON.parse(fs.readFileSync(path.join(repo, 'tests/host/t0/config.local.json')));
 const baseline = config.sources.find(s => s.key === 'baseline'), fixture = config.sources.find(s => s.key === 'h264-cfr');
@@ -14,6 +14,7 @@ function originals() { return (cancelOnly ? [fixture] : [baseline, fixture]).map
   assert(stat.isFile() && !stat.isSymbolicLink()); const digest = sha(fs.readFileSync(s.file)); assert.equal(digest, s.sha256);
   return { sha256: digest, ino: stat.ino.toString(), bytes: stat.size.toString(), modified: stat.mtimeNs.toString() }; }); }
 async function main() {
+  assert(runtime && path.isAbsolute(runtime), 'Set EVA_EAGLE_EXECUTABLE for this explicit developer check.');
   const before = inventory(); assert.equal(before.leases.length, 0, 'Close real player windows before this isolated technical check.');
   if (!cancelOnly) assert(before.caches.some(c => c.sourceSha256 === baseline.sha256), 'Baseline complete cache is absent; do not rebuild it just for a historical reuse test.');
   assert(!before.caches.some(c => c.sourceSha256 === fixture.sha256), 'Existing fixture complete cache must be preserved, not reset to force a test.');

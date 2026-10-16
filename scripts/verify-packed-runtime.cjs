@@ -5,11 +5,12 @@ const { createTaskClient, verifyGuard } = require('../plugin/task-client.cjs'), 
 const { createMedia } = require('../plugin/media.cjs'), { createStore } = require('../tests/support/t4-evidence.cjs');
 const { rootIdentity } = require('./verify-resource-sampler.cjs');
 const repo = fs.realpathSync(path.resolve(__dirname, '..')), scratch = path.join(repo, 'tests/host/t4/packed-runtime-scratch');
-const runtime = 'G:\\Assets\\Eagle\\Eagle.exe', MIB = 1024 ** 2, sha = b => crypto.createHash('sha256').update(b).digest('hex');
+const runtime = process.env.EVA_EAGLE_EXECUTABLE, MIB = 1024 ** 2, sha = b => crypto.createHash('sha256').update(b).digest('hex');
 function stat(file) { const s = fs.lstatSync(file, { bigint: true }); assert(s.isFile() && !s.isSymbolicLink() && s.nlink === 1n && fs.realpathSync(file).toLowerCase() === file.toLowerCase());
   return { ino: String(s.ino), dev: String(s.dev), bytes: Number(s.size), modified: String(s.mtimeNs) }; }
 async function fileHash(file) { const h = crypto.createHash('sha256'); for await (const b of fs.createReadStream(file)) h.update(b); return h.digest('hex'); }
 async function main() {
+  assert(runtime && path.isAbsolute(runtime), 'Set EVA_EAGLE_EXECUTABLE for this explicit developer check.');
   const resume = process.argv.slice(2).join(' ') === '--resume-owned';
   assert(process.argv.length === 2 || resume); assert(resume ? fs.existsSync(scratch) : !fs.existsSync(scratch), 'Inspect retained owned runtime scratch before retry.');
   assert.equal(fs.realpathSync(path.dirname(scratch)), path.dirname(scratch)); verifyGuard(path.join(repo, 'plugin'));

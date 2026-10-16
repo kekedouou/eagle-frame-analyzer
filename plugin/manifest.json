@@ -1,8 +1,8 @@
 {
   "id": "EVAVIDEOANALYSIS20261011",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.2",
   "platform": "win",
-  "arch": "all",
+  "arch": "x64",
   "name": "视频分析",
   "logo": "/logo.png",
   "keywords": ["视频", "逐帧", "分析"],

@@ -65,7 +65,7 @@
 
 - 用户原话：“提案已准备，允许添加，允许测试后删除这条标注。”本轮授权针对已有提案，不扩大到其他素材，不重复请求同一授权。
 - 提案 ID：ef52df7db0b6daea；素材 ID：MUXL6QI4AJIAG。
-- 精确素材路径：`G:\Assets\Eagle\库\设计素材.library\images\MUXL6QI4AJIAG.info\Hellfire Barbarian.mp4`。
+- 精确素材路径保存在本机原始证据，不在公开说明重复；素材ID为 `MUXL6QI4AJIAG`。
 - 时间：9.3 秒；文本：POC-A-ef52df7db0b6daea。
 - 证据核对：proposal.json 与实际 Window 会话中的 proposal/item/playback 一致；保存时视频暂停于 9.3 秒，seeking=false，总长 13.821 秒，读取到 4 条标注。
 - 没有发现本提案的 attempt 或 receipt，使用现有 checkGrant 对保存的会话做精确匹配核验通过。这不是对播放器当前状态的实时查询；点击添加前插件仍会重新检查。

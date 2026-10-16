@@ -244,7 +244,7 @@ Codex准备并检查后，用户在Eagle中选择一个已缓存的≤30秒MP4�
 
 用户加载`2175b1e`自动入口后提供截图：窗口显示`Cannot find module .../tests/host/t1/cache.cjs`，未载入视频，测量未开始。这是用户真实宿主失败反馈，不是Codex操作或性能结论。失败前没有进入正式cache创建/媒体准备：app在第一次require缓存模块时已经失败。
 
-只读检查已安装`G:/Assets/Eagle/resources/app.asar`：`app/js/plugin/main.js` Windows入口把`file://`替换成`eagleplugin://<id>/`，实际路径部分保留`//D:/...`；`api.js`提供真实创建回调，`ipc.js`派发时不等待Promise。旧bootstrap只接受file地址并抛错；随后HTML中的正式app仍注册创建回调，使用测试目录寻找正式模块，形成截图的二次错误。未读取当前窗口控制台/实时URL；原因来自本机SDK源码与同构地址的模型复现，不能把这写成修复后Eagle已通过。
+只读检查已安装本机Eagle安装目录下的 `resources/app.asar`（绝对路径不公开）：`app/js/plugin/main.js` Windows入口把`file://`替换成`eagleplugin://<id>/`，实际路径部分保留`//D:/...`；`api.js`提供真实创建回调，`ipc.js`派发时不等待Promise。旧bootstrap只接受file地址并抛错；随后HTML中的正式app仍注册创建回调，使用测试目录寻找正式模块，形成截图的二次错误。未读取当前窗口控制台/实时URL；原因来自本机SDK源码与同构地址的模型复现，不能把这写成修复后Eagle已通过。
 
 新回归先复现旧入口失败（`node tests/t1-launch.cjs`退出1），再修复：只在测试入口把Eagle本地盘符地址明确转换为file地址，使用Node URL解析和字符串文件地址，保留中文/空格编码并清查询/片段；远程/无效地址拒绝。引导失败会显示原始原因并阻止后续app错误初始化，不再掩盖成cache模块缺失。正常路径仍只映射测试创建目录，正式播放器、SDK其他接口、产品架构及性能门槛不变；测量回执额外记实际地址协议。入口14组回归覆盖真实格式地址→bootstrap→实际launch接线及失败阻断，均为本地模型。
 

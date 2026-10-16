@@ -31,7 +31,10 @@ async function main() {
   assert(process.argv.length === 2 || remaining, 'Use no arguments or --remaining-formats.'); assert(!fs.existsSync(scratch), 'Inspect retained scratch before retry.');
   assert.equal(fs.realpathSync(path.dirname(scratch)), path.dirname(scratch)); verifyGuard(path.join(repo, 'plugin'));
   const config = JSON.parse(fs.readFileSync(path.join(repo, 'tests/host/t0/config.local.json'))), store = createStore(repo);
-  const input = { key: 'MV86BTRC4CVVG', file: 'G:\\Assets\\Eagle\\库\\设计素材.library\\images\\MV86BTRC4CVVG.info\\2026-10-14 21-54-41.mp4',
+  assert(process.env.EVA_EAGLE_EXECUTABLE && path.isAbsolute(process.env.EVA_EAGLE_EXECUTABLE), 'Set EVA_EAGLE_EXECUTABLE for this explicit developer check.');
+  const baselineSource = config.sources.find(s => s.key === 'baseline');
+  assert(baselineSource && path.isAbsolute(baselineSource.file), 'Registered local baseline is required.');
+  const input = { key: 'MV86BTRC4CVVG', file: path.join(path.dirname(path.dirname(baselineSource.file)), 'MV86BTRC4CVVG.info', '2026-10-14 21-54-41.mp4'),
     sha256: '679691666daf5038e8316978cfac4916e5aa8ef1906919f07b5fa400921093db', label: '2026-10-14 21-54-41' };
   let sources = [input, ...config.sources.filter(s => ['h264-cfr', 'hevc-vfr', 'vp9-silent'].includes(s.key))];
   if (remaining) {
@@ -63,7 +66,7 @@ async function main() {
     for (const s of sources) {
       if (failure) throw failure;
       const row = { key: s.key, source: s, passed: false }; result.cases.push(row);
-      client = createTaskClient({ pluginRoot: scratch, runtime: 'G:\\Assets\\Eagle\\Eagle.exe', discoverTools: async () => config });
+      client = createTaskClient({ pluginRoot: scratch, runtime: process.env.EVA_EAGLE_EXECUTABLE, discoverTools: async () => config });
       controller = new AbortController(); const timer = setTimeout(() => stop(Error('Media preparation exceeded 60 seconds.')), 60000);
       try { info = await client.media.prepare({ id: s.key, itemId: s.key, name: s.label || s.key, filePath: s.file, ext: 'mp4' }, { signal: controller.signal }); }
       finally { clearTimeout(timer); controller = null; }

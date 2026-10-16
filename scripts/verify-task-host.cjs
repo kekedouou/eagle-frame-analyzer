@@ -3,13 +3,15 @@
 const fs = require('fs'), path = require('path'), crypto = require('crypto'), assert = require('assert'), { spawn } = require('child_process');
 const { createTaskClient } = require('../plugin/task-client.cjs');
 const repo = path.resolve(__dirname, '..'), root = path.join(repo, 'tests/host/t2/lifecycle-scratch');
-const runtime = 'G:\\Assets\\Eagle\\Eagle.exe';
+const runtime = process.env.EVA_EAGLE_EXECUTABLE;
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 if (process.argv[2] === 'disconnect-child') {
+  assert(runtime && path.isAbsolute(runtime), 'Set EVA_EAGLE_EXECUTABLE for this explicit developer check.');
   const client = createTaskClient({ pluginRoot: process.argv[3], runtime, discoverTools: async () => ({}) });
   client.ping().then(value => { process.stdout.write(JSON.stringify(value) + '\n', () => process.exit(0)); }).catch(error => { console.error(error); process.exit(1); });
 } else main().catch(error => { console.error(error.stack); process.exitCode = 1; });
 async function main() {
+  assert(runtime && path.isAbsolute(runtime), 'Set EVA_EAGLE_EXECUTABLE for this explicit developer check.');
   if (fs.existsSync(root)) throw new Error('Previous lifecycle scratch retained; inspect instead of overwriting.');
   if (!root.startsWith(repo + path.sep) || fs.realpathSync(path.dirname(root)) !== path.dirname(root)) throw new Error('Scratch boundary invalid.');
   const files = new Map(), clients = new Set(), results = [];
