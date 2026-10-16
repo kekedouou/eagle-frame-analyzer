@@ -1,13 +1,14 @@
 # Video Analysis 0.1.0 · Windows绿色独立版
 
+已撤下公开发行（2026-10-16）：Release已转为草稿，公开下载关闭；标签/源码及必要原始证据保留，不重新公开。本页为历史说明，不是当前安装入口。本地重复ZIP/解压按[F规则](../development-plan.md#发行产物统一整理f-01f-05f-06f-072026-10-16-用户批准)退役，恢复依赖所有者可访问的已核对草稿附件。当前主线见[Beta2记录](v0.1.0-beta.2.md)。以下功能及RAM百分比等仅对应旧绿色版。
+
 无需Eagle的短视频分析播放器。解压后即可打开或拖入MP4／视频文件夹，自动准备720p预览，再播放、逐帧或快速拖动观察画面。内置FFmpeg和运行环境，无需额外安装软件；无测试按钮，不提供标注。
 
 ## 下载
 
 下载 **video-analysis-standalone-0.1.0-win-x64.zip**（约233MiB）。GitHub自动提供的Source code ZIP是源码，不是可直接运行的软件。
 
-- [软件ZIP](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/video-analysis-standalone-0.1.0-win-x64.zip)
-- [SHA256校验文件](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/video-analysis-standalone-0.1.0-win-x64.zip.sha256)
+原软件ZIP及SHA256附件仅在所有者Release草稿中保留，当前不提供公开下载链接。
 
 ## 三步开始
 
@@ -48,8 +49,8 @@ ZIP：244,671,262字节，110文件。SHA256：
 
 `a5ed9c7f6eef4951daf77b3b4c66ee12fcc2e96ab187e1e04a4aee48e188b40f`
 
-公开包仅更新用户说明并增加许可全文／来源索引；原有运行文件与冻结展示包逐字节一致。Git标签为standalone-v0.1.0，对应当前绿色独立版公开发行。
+公开包仅更新用户说明并增加许可全文／来源索引；原有运行文件与冻结展示包逐字节一致。Git标签为standalone-v0.1.0，对应2026-10-14曾公开的绿色版；现已撤下公开下载。
 
-软件使用Electron44.7.2及BtbN FFmpeg8.1 LGPL-shared。FFmpeg按LGPL-3.0-or-later提供，包内保留许可证、对应FFmpeg源码归档、构建参数及来源说明；同一发行页另提供[FFmpeg源码附件](https://github.com/kekedouou/eagle-frame-analyzer/releases/download/standalone-v0.1.0/FFmpeg-46d899d7a0-source.tar.gz)。这些材料供查阅源码，运行软件不需另外下载。组件版权归各自作者，详见[第三方材料说明](../../demos/standalone-preview/THIRD-PARTY.md)；没有把未完成的全量依赖复现审计写成通过。
+软件使用Electron44.7.2及BtbN FFmpeg8.1 LGPL-shared。FFmpeg按LGPL-3.0-or-later提供，包内保留许可证、对应FFmpeg源码归档、构建参数及来源说明；同一发行页另提供FFmpeg源码附件（现仅草稿保留）。这些材料供查阅源码，运行软件不需另外下载。组件版权归各自作者，详见[第三方材料说明](../../demos/standalone-preview/THIRD-PARTY.md)；没有把未完成的全量依赖复现审计写成通过。
 
 遇到问题时请提供：Windows版本、视频时长／已知规格、内存设置、操作步骤和错误截图。不必提供整个素材库或未经许可的原视频。
