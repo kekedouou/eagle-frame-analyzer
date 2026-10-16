@@ -133,6 +133,17 @@ function harness(settings = {}) {
     async begin(value) { assert.strictEqual(value.sourceSha256, sha(state.content)); events.push('cache-begin'); return tx; },
     async release(handle) { assert(handle.leaseId); events.push('lease-release'); state.acquired = false; }
   };
+  if (settings.packed) {
+    let offset = 0;
+    tx.writeFrame = async (name, bytes) => { const asset = await tx.writeAsset(name, bytes), at = offset; offset += bytes.length; return { ...asset, offset: at }; };
+    tx.finishFrames = async () => {
+      events.push('pack-close-start');
+      if (settings.holdPackClose) await new Promise(resolve => { state.releasePackClose = resolve; });
+      events.push('pack-close-end');
+      if (settings.failPackClose) throw Error('controlled packed close failure');
+      return { schema: 1, file: 'frames.pack', bytes: offset, sha256: sha(Buffer.concat([...assets].filter(([name]) => name.endsWith('.jpg')).map(([, b]) => b))) };
+    };
+  }
   const module = { exports: {} };
   const context = { module, Buffer, setTimeout, clearTimeout, console,
     process: { platform: settings.windows ? 'win32' : 'linux', hrtime: process.hrtime },
@@ -155,6 +166,23 @@ let tests = 0;
 async function test(name, body) { await body(); tests++; console.log('ok ' + name); }
 async function main() {
   const pure = harness().api._test;
+  await test('packed media retains frame offsets and closes pack before commit', async () => {
+    const h = harness({ packed: true, audio: true }), info = await h.media.prepare(h.snapshot);
+    assert.equal(info.framePack.file, 'frames.pack'); assert.equal(info.frames[0].offset, 0);
+    assert.equal(info.frames[1].offset, info.frames[0].bytes); assert.equal(info.framePack.bytes, info.frames.reduce((n, f) => n + f.bytes, 0));
+    assert(h.events.indexOf('pack-close-end') < h.events.indexOf('finish'));
+  });
+  await test('packed close still settles before abort cleanup after cancellation', async () => {
+    const h = harness({ packed: true, holdPackClose: true }), controller = new AbortController();
+    const promise = h.media.prepare(h.snapshot, { signal: controller.signal }), rejected = assert.rejects(promise, e => e.name === 'AbortError');
+    while (!h.state.releasePackClose) await new Promise(resolve => setImmediate(resolve));
+    controller.abort(); assert(!h.events.includes('cache-abort')); h.state.releasePackClose(); await rejected;
+    assert(h.events.indexOf('pack-close-end') < h.events.indexOf('cache-abort')); assert(h.state.closed);
+  });
+  await test('packed close failure refuses commit and drains the transaction', async () => {
+    const h = harness({ packed: true, failPackClose: true }); await assert.rejects(h.media.prepare(h.snapshot), /packed close failure/);
+    assert(!h.events.includes('finish')); assert(h.state.aborted && h.state.closed);
+  });
   await test('T1 JPEG fragmented frames preserve escaped bytes', () => {
     const parser = new pure.JpegParser(), output = [];
     for (const byte of Buffer.concat([image, image])) output.push(...parser.push(Buffer.from([byte])));

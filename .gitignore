@@ -39,3 +39,5 @@
 /tests/host/t4/logo.local.png
 /tests/host/t4/prepared.local.json
 /tests/host/t4/evidence-scratch/
+/tests/host/t4/preparation-scratch/
+/tests/host/t4/packed-runtime-scratch/

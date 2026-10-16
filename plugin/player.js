@@ -56,7 +56,8 @@
       barcode: info.expected.barcode ? Object.freeze(Object.assign({}, info.expected.barcode)) : undefined
     })) : null;
     return Object.freeze(Object.assign({}, info, { frames: Object.freeze(frames), source: Object.freeze(Object.assign({}, info.source)),
-      audio: info.audio ? Object.freeze(Object.assign({}, info.audio)) : null, expected }));
+      audio: info.audio ? Object.freeze(Object.assign({}, info.audio)) : null,
+      ...(info.framePack ? { framePack: Object.freeze(Object.assign({}, info.framePack)) } : {}), expected }));
   }
   class Player {
     constructor(options) {
@@ -65,7 +66,8 @@
       if (!this.index || ['validateIndex', 'frameAt', 'stepIndex', 'audioStartPlan'].some(name => typeof this.index[name] !== 'function')) throw new Error('缺少纯帧索引模块。');
       this.env = Object.assign(browserEnvironment(), options.env || {}); this.canvas = options.canvas;
       this.ctx = this.canvas.getContext('2d', { alpha: false }); if (!this.ctx) throw new Error('无法取得2D画布。');
-      this.readAsset = options.readAsset; this.emit = options.emit || (() => {}); this.onChange = options.onChange || (() => {});
+      this.readAsset = options.readAsset; this.readFrameBatch = options.readFrameBatch;
+      this.emit = options.emit || (() => {}); this.onChange = options.onChange || (() => {});
       this.budget = options.budget || new Budget(options.ramBytes === undefined ? RAM_LIMIT : options.ramBytes);
       if (['reserve', 'shrink', 'release', 'snapshot'].some(name => typeof this.budget[name] !== 'function')) throw new Error('注入的RAM账本无效。');
       const ledgerLimit = this.budget.snapshot().limit;
@@ -366,7 +368,9 @@
       // Leave room for two real image tasks and the transient copies of the
       // two warm reads. This pool competes with RGBA inside the same ledger.
       const ledger = this.budget.snapshot();
-      const cap = Math.max(0, Math.min(this.compressedLimit, ledger.limit - ledger.used - 2 * (rgba + largest * 2) - largest * 2));
+      const batching = !!(info.framePack && this.readFrameBatch), batchBytes = 1024 ** 2;
+      const transient = batching ? Math.max(largest * 2, batchBytes * 2) : largest * 2;
+      const cap = Math.max(0, Math.min(this.compressedLimit, ledger.limit - ledger.used - 2 * (rgba + largest * 2) - transient));
       this.compressedCapacity = cap;
       const ordinals = []; let planned = 0;
       const total = info.frames.reduce((sum, frame) => sum + frame.bytes, 0);
@@ -391,14 +395,53 @@
         // stay distributed while avoiding unnecessary scattered disk access.
         ordinals.sort((a, b) => a - b);
       }
-      for (let n = 0; n < ordinals.length && this._valid(epoch); n += 2) {
-        const results = await Promise.allSettled(ordinals.slice(n, n + 2).map(ordinal => this._readCompressed(info, epoch, ordinal)));
-        const failure = results.find(result => result.status === 'rejected'); if (failure) throw failure.reason;
+      for (let n = 0; n < ordinals.length && this._valid(epoch);) {
+        if (!batching) {
+          const results = await Promise.allSettled(ordinals.slice(n, n + 2).map(ordinal => this._readCompressed(info, epoch, ordinal))); n += 2;
+          const failure = results.find(result => result.status === 'rejected'); if (failure) throw failure.reason;
+        } else {
+          const group = []; let size = 0, end = null;
+          while (n < ordinals.length && group.length < 2048) {
+            const frame = info.frames[ordinals[n]];
+            if (size + frame.bytes > batchBytes || end !== null && frame.offset !== end) break;
+            group.push(ordinals[n++]); size += frame.bytes; end = frame.offset + frame.bytes;
+          }
+          if (group.length) await this._readCompressedBatch(info, epoch, group);
+          else await this._readCompressed(info, epoch, ordinals[n++]); // Large JPEG stays a bounded individual read.
+        }
       }
       if (!this._valid(epoch)) return;
       this.compressedStats.warmMs = this.env.now() - began;
       this._emit('cache', { phase: 'compressed-warm-complete', ...this.compressedStats, sourceFrames: info.frames.length,
         completeSource: this.compressed.size === info.frames.length, budgetBytes: this.budget.used });
+    }
+    _readCompressedBatch(info, epoch, ordinals) {
+      const key = epoch + ':compressed-batch:' + ordinals[0];
+      if (this.tasks.size >= 2) throw new Error('压缩预载超过两个在途槽。');
+      const holder = { epoch, index: ordinals[0], role: 'compressed-warm-batch', promise: null }; this.tasks.set(key, holder);
+      holder.promise = Promise.resolve().then(async () => {
+        const reservations = [], transferred = new Set();
+        try {
+          if (!this._valid(epoch)) return;
+          for (const ordinal of ordinals) reservations.push(this.budget.reserve(info.frames[ordinal].bytes * 2, 'compressed-loading'));
+          const buffers = await this.readFrameBatch(info, ordinals.map(n => info.frames[n].file));
+          if (!this._valid(epoch)) return;
+          if (!Array.isArray(buffers) || buffers.length !== ordinals.length || buffers.some((b, i) => !b || b.byteLength !== info.frames[ordinals[i]].bytes))
+            throw new Error('图片包预载批次与清单不符。');
+          for (let i = 0; i < ordinals.length; i++) {
+            const ordinal = ordinals[i], bytes = buffers[i], token = reservations[i];
+            this.budget.shrink(token, bytes.byteLength, 'compressed-jpeg');
+            this.compressed.set(ordinal, { bytes, budget: token }); this.compressedBytes += bytes.byteLength; transferred.add(token);
+            this.compressedStats.warmedBytes += bytes.byteLength; this.compressedStats.warmedFrames++;
+          }
+        } finally {
+          for (const token of reservations) if (!transferred.has(token)) this.budget.release(token);
+          if (this.tasks.get(key) === holder) this.tasks.delete(key);
+          this._emit('cache', { epoch, phase: 'image-work-ended', frameId: info.frames[ordinals[0]].id, activeImageTasks: this.tasks.size, budgetBytes: this.budget.used });
+        }
+      });
+      this._emit('cache', { epoch, phase: 'image-work-start', frameId: info.frames[ordinals[0]].id, role: holder.role, activeImageTasks: this.tasks.size });
+      return holder.promise;
     }
     _readCompressed(info, epoch, ordinal) {
       const key = epoch + ':compressed:' + ordinal, frame = info.frames[ordinal];

@@ -1,5 +1,9 @@
 # 项目说明
 
+2026-10-16工作入口：首次准备专项已按正序/反序收益证据接入JPEG图片包/批量预载；新`plugin/frame-pack.cjs`仅负责纯布局校验，cache负责物理I/O/安全，media负责写帧，Player准备时批量读原JPEG，task/session/app只接线。旧完整散图继续复用、关闭交接/画质/预算不变；[A-08](architecture.md#a-08-jpeg集中存储与批量预载2026-10-16)、[T4结果与限制](experiments/T4/report.md#2026-10-16-首次准备优化jpeg集中存储与批量预载)为恢复入口。未测实际窗口完整就绪，不宣称P-03通过，不按下面历史安排重开流畅度或要求重复手测。
+
+显式专项工具`scripts/verify-preparation-pack.cjs compare [--reverse]`生成/清理自己的隔离配对缓存，`scripts/verify-packed-runtime.cjs`使用自有运行副本验证真实守护/媒体/恢复；后者的`--resume-owned`仅用于已留存且身份/内容完整匹配的本次失败，不是普通重试。两者有媒体/清理副作用，不在默认检查执行；预算、所有权及源以[T4计划](experiments/T4/plan.md#2026-10-16-首次准备专项集中存储与批量预载)为准，现有成功数据不需默认重跑。新T4入口指纹包括frame-pack；日常使用plugin，不需要重新导入或打开自动拖动入口。
+
 2026-10-15当前：0204ce3索尼克默认1GiB/720p真实六轮短回归通过，快拖约99～100次有效提交/秒、最长48.7ms、随机P95为10.8ms，资源集合未超线。用户批准沿用既有人工体验验收，不再要求重测；本轮没有新增人工观察，流畅度专项收尾。同一tests/host/t4入口保留但不再要求反复打开，旧T2停用；日常使用plugin入口。首次完整P-03及其余未验矩阵/新进程长期资源仍保留，单次复用就绪9.75秒不抵首次，T2/T4未整体验收。player预测/media并行度候选保留，关闭/磁盘格式/偏好不变，同步预载尝试已撤回。进度见[当前记录](progress.md)，原授权/32MiB记录/停止线见[T4计划](experiments/T4/plan.md)，实际/未测结果见[T4记录](experiments/T4/report.md)。
 
 当前入口和检查以此段为准，下面旧宿主入口说明保留为历史：使用`plugin/manifest.json`既有“视频分析”入口，无需重新导入T2插件。`task-client.cjs`发送控制请求，`native/task-host.cs`用Windows系统互斥/进程组持有本会话任务，`task-worker.cjs`复用media/cache准备和清理；Player直接在本地读帧，Eagle/标注API不迁移。本机11776B守护产物及构建指纹已就绪、Git忽略；源码变更/新检出由Codex执行`node scripts/build-task-host.cjs`构建，无需用户安装依赖或输入命令。

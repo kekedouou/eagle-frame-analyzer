@@ -31,7 +31,7 @@ const identity = { self: () => { const value = base.self(); if (!value) throw ne
     }
     return ordinary;
   } };
-const cache = require('./cache.cjs').createCache({ pluginRoot: root, taskOwner, processIdentity: identity });
+const cache = require('./cache.cjs').createCache({ pluginRoot: root, taskOwner, processIdentity: identity, packFrames: true });
 const handles = new Map(), controllers = new Map();
 let tail = Promise.resolve(), stopping = false, shutdownTask = null;
 function send(value) { const text = JSON.stringify(value); if (Buffer.byteLength(text) > 8 * 1024 ** 2) throw new Error('Control response exceeds 8MiB.'); process.stdout.write(text + '\n'); }

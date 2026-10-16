@@ -43,7 +43,7 @@ function fingerprints(pluginRoot, extra = []) {
   if (!Array.isArray(extra) || extra.some(n => !['task-client.cjs', 'task-worker.cjs', 'native/task-host.cs', 'native/task-host.local.exe'].includes(n)))
     throw new Error('Unknown extra runtime fingerprint.');
   const sources = {};
-  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs', 'preferences.cjs', ...extra]) {
+  for (const file of ['manifest.json', 'app.js', 'ui.js', 'styles.css', 'index.html', 'diagnostics.cjs', 'session.cjs', 'eagle.cjs', 'media.cjs', 'cache.cjs', 'process-identity.cjs', 'player.js', 'frame-index.cjs', 'frame-pack.cjs', 'preferences.cjs', ...extra]) {
     const absolute = path.join(pluginRoot, file), stat = fs.lstatSync(absolute, { bigint: true });
     if (!stat.isFile() || stat.isSymbolicLink() || BigInt(stat.size) > BigInt(MIB) || !samePath(fs.realpathSync(absolute), absolute)) throw new Error('正式源码指纹路径或容量不符合边界。');
     const bytes = fs.readFileSync(absolute), after = fs.lstatSync(absolute, { bigint: true });

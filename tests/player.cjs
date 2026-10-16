@@ -73,6 +73,7 @@ function harness(options = {}) {
   player = new Player({ canvas, env, frameIndex, ramBytes: options.ramBytes === undefined ? 512 * 1024 ** 2 : options.ramBytes, budget: options.budget,
     playbackGuardMs: options.playbackGuardMs, experimentMode: options.experimentMode,
     compressedRamBytes: options.compressedRamBytes, observeCanvas: options.observeCanvas,
+    readFrameBatch: options.readFrameBatch,
     emit: event => { events.push(event); if (options.onEvent) options.onEvent(event, player); },
     onChange: state => changes.push(state), readAsset: async (info, file) => {
       const key = info.source.key + ':' + file; reads.set(key, (reads.get(key) || 0) + 1);
@@ -448,6 +449,58 @@ async function run() {
       } else { assert.equal(s.compressed.residentBytes, 0); assert(!h.reads.has(mode + ':f15.jpg')); }
       assert(s.cachePeakBytes <= s.budget.limit); assert(h.events.filter(e => e.type === 'cache').every(e => !(e.activeImageTasks > 2))); await h.close();
     }
+  });
+  function packedSample(key = 'packed', count = 16) {
+    const info = sample(key, null, count); let offset = 0;
+    for (const f of info.frames) { f.offset = offset; offset += f.bytes; }
+    info.framePack = { schema: 1, file: 'frames.pack', bytes: offset, sha256: 'a'.repeat(64) }; return info;
+  }
+  const packedBytes = (info, files) => files.map(file => {
+    const bytes = Buffer.alloc(info.frames.find(f => f.file === file).bytes); bytes[0] = Number(file.slice(1, -4));
+    bytes.writeUInt16LE(info.width, 1); bytes.writeUInt16LE(info.height, 3); return bytes;
+  });
+  await check('packed JPEG batch preloading retains independent frame budgets and unchanged first-frame readiness', async () => {
+    const groups = [], h = harness({ ramBytes: 32 * 1024 ** 2, experimentMode: 'compressed-ram',
+      readFrameBatch: async (info, files) => { groups.push(files); return packedBytes(info, files); } });
+    const info = packedSample(); await h.load(info); info.framePack.file = 'changed';
+    assert.equal(groups.length, 1); assert.equal(groups[0].length, 16); assert.equal(h.player.snapshot().frameId, 0);
+    assert.equal(h.player.info.framePack.file, 'frames.pack'); assert.equal(h.player.snapshot().compressed.warmedFrames, 16);
+    assert(h.player.snapshot().cachePeakBytes <= h.player.snapshot().budget.limit); assert.equal(h.reads.size, 0); await h.close();
+  });
+  await check('closing during a batch keeps real I/O reservations until it settles without transferring stale JPEGs', async () => {
+    const gate = deferred(); let returned;
+    const h = harness({ ramBytes: 32 * 1024 ** 2, experimentMode: 'compressed-ram', readFrameBatch(info, files) { returned = packedBytes(info, files); return gate.promise; } });
+    const load = h.player.load(packedSample()); await flush(); assert(returned); const closing = h.player.dispose(); await flush();
+    assert(h.player.snapshot().cacheBytes > 0); gate.resolve(returned); assert.equal((await load).status, 'superseded'); await closing;
+    assert.equal(h.player.snapshot().cacheBytes, 0); assert.equal(h.player.snapshot().compressed.residentFrames, 0); await h.close();
+  });
+  await check('material replacement waits pending packed read before the next source begins warming', async () => {
+    const gate = deferred(), groups = []; let firstBytes;
+    const h = harness({ ramBytes: 32 * 1024 ** 2, experimentMode: 'compressed-ram', readFrameBatch(info, files) {
+      groups.push(info.source.key); const bytes = packedBytes(info, files); if (groups.length === 1) { firstBytes = bytes; return gate.promise; } return Promise.resolve(bytes);
+    } });
+    const first = h.player.load(packedSample('old')); await flush(); const replacement = h.player.load(packedSample('new')); await flush();
+    assert.deepEqual(groups, ['old']); gate.resolve(firstBytes); assert.equal((await first).status, 'superseded'); await h.settle(replacement);
+    assert.deepEqual(groups, ['old', 'new']); assert.equal(h.player.info.source.key, 'new'); await h.close();
+  });
+  await check('invalid packed batch output drains every reservation and never presents a ready frame', async () => {
+    for (const invalid of [async () => [], async () => { throw Error('packed read failed'); }]) {
+      const h = harness({ ramBytes: 32 * 1024 ** 2, experimentMode: 'compressed-ram', readFrameBatch: invalid });
+      await assert.rejects(h.load(packedSample()), /批次|packed read/); assert.equal(h.player.snapshot().cacheBytes, 0);
+      assert(!h.events.some(e => e.type === 'draw')); await h.close();
+    }
+  });
+  await check('partial packed coverage never batches over skipped byte ranges', async () => {
+    const groups = [], h = harness({ ramBytes: 32 * 1024 ** 2, compressedRamBytes: 30, experimentMode: 'compressed-ram',
+      readFrameBatch: async (info, files) => { groups.push(files); return packedBytes(info, files); } });
+    await h.load(packedSample()); assert.deepEqual(groups, [['f0.jpg'], ['f8.jpg'], ['f15.jpg']]); assert.equal(h.player.snapshot().compressed.warmedBytes, 30); await h.close();
+  });
+  await check('large packed frames use individual reads while following small frames retain batch preloading', async () => {
+    const groups = [], h = harness({ ramBytes: 32 * 1024 ** 2, experimentMode: 'compressed-ram',
+      readFrameBatch: async (info, files) => { groups.push(files); return packedBytes(info, files); } });
+    const info = packedSample('big-packed', 2); info.frames[0].bytes = 1024 ** 2 + 1; info.frames[1].offset = info.frames[0].bytes;
+    info.framePack.bytes = info.frames[0].bytes + info.frames[1].bytes;
+    await h.load(info); assert.deepEqual(groups, [['f1.jpg']]); assert.equal(h.reads.get('big-packed:f0.jpg'), 1); await h.close();
   });
   await check('partial compressed warm is bounded; missing frames use disk and later source has separate ownership', async () => {
     const h = harness({ experimentMode: 'compressed-ram', compressedRamBytes: 30 }); await h.load(sample('first'));

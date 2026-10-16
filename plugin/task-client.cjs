@@ -87,6 +87,7 @@ function createTaskClient(options) {
   }
   const cache = {
     readAsset: (...args) => failure ? Promise.reject(failure) : local.readAsset(...args),
+    readFrameBatch: (...args) => failure ? Promise.reject(failure) : local.readFrameBatch(...args),
     async release(info) { if (!leases.has(info)) return false; local.detachReadLease(info); await ask('release', { leaseId: info.leaseId }); leases.delete(info); return true; },
     clearOther: settings => ask('clearOther', { settings }),
     inventory: local.inventory

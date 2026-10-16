@@ -4,7 +4,7 @@ const fs = require('fs'), path = require('path'), crypto = require('crypto'), { 
 const repo = path.resolve(__dirname, '..'), host = path.join(repo, 'tests/host/t4'), plugin = path.join(repo, 'plugin');
 const OUTPUTS = ['manifest.json', 'index.local.html', 'logo.local.png'];
 const SOURCE_FILES = [
-  'app.js', 'cache.cjs', 'diagnostics.cjs', 'eagle.cjs', 'frame-index.cjs', 'index.html', 'logo.png', 'manifest.json', 'media.cjs',
+  'app.js', 'cache.cjs', 'diagnostics.cjs', 'eagle.cjs', 'frame-index.cjs', 'frame-pack.cjs', 'index.html', 'logo.png', 'manifest.json', 'media.cjs',
   'player.js', 'preferences.cjs', 'process-identity.cjs', 'session.cjs', 'styles.css', 'task-client.cjs', 'task-worker.cjs', 'ui.js',
   'native/task-host.cs', 'native/task-host.local.exe'
 ].map(n => 'plugin/' + n).concat(['scripts/prepare-mvp-host.cjs', 'scripts/build-resource-sampler.cjs',
@@ -27,11 +27,17 @@ function boundaries() {
   if (/^c:/i.test(plugin)) throw new Error('MVP entry must use the actual non-C product path.');
 }
 function sourceHashes() { boundaries(); return Object.fromEntries(SOURCE_FILES.map(n => [n, sha(read(path.join(repo, n)))])); }
-function verify(checkSources = true) {
+function validSources(hashes, allowPrevious = false) {
+  if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes) || Object.values(hashes).some(v => typeof v !== 'string' || !/^[0-9a-f]{64}$/.test(v))) return false;
+  const keys = JSON.stringify(Object.keys(hashes).sort());
+  return keys === JSON.stringify(SOURCE_FILES.slice().sort()) || allowPrevious &&
+    keys === JSON.stringify(SOURCE_FILES.filter(n => n !== 'plugin/frame-pack.cjs').sort());
+}
+function verify(checkSources = true, allowPrevious = false) {
   boundaries(); const marker = JSON.parse(read(path.join(host, 'prepared.local.json')));
   if (marker.schema !== 'mvp-host-prepared-v1' || marker.hostRoot.toLowerCase() !== host.toLowerCase() || marker.pluginRoot.toLowerCase() !== plugin.toLowerCase() ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
-      JSON.stringify(Object.keys(marker.sourceHashes).sort()) !== JSON.stringify(SOURCE_FILES.slice().sort())) throw new Error('Unknown MVP entry ownership.');
+      !validSources(marker.sourceHashes, !checkSources && allowPrevious)) throw new Error('Unknown MVP entry ownership.');
   let bytes = read(path.join(host, 'prepared.local.json')).length;
   for (const name of OUTPUTS) { const b = read(path.join(host, name)); bytes += b.length; if (sha(b) !== marker.files[name]) throw new Error('Prepared MVP entry modified.'); }
   if (bytes > 256 * 1024 || checkSources && JSON.stringify(sourceHashes()) !== JSON.stringify(marker.sourceHashes)) throw new Error('MVP entry source fingerprints changed; reprepare required.');
@@ -56,10 +62,10 @@ function prepare() {
     files: Object.fromEntries(OUTPUTS.map(n => [n, sha(files[n])])) };
   files['prepared.local.json'] = Buffer.from(JSON.stringify(marker, null, 2));
   if (Object.values(files).reduce((n, b) => n + b.length, 0) > 256 * 1024) throw new Error('MVP entry exceeds 256KiB.');
-  if (Object.keys(files).some(n => fs.existsSync(path.join(host, n)))) verify(false);
+  if (Object.keys(files).some(n => fs.existsSync(path.join(host, n)))) verify(false, true);
   for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(host, name), bytes, fs.existsSync(path.join(host, name)) ? {} : { flag: 'wx' });
   return verify();
 }
 if (require.main === module) { try { const result = prepare(); console.log(JSON.stringify({ host, manifest: path.join(host, 'manifest.json'), bytes: result.bytes,
   loadedInEagle: false, metricsExecuted: false })); } catch (e) { console.error(e.stack); process.exitCode = 1; } }
-module.exports = { prepare, verify, sourceHashes, SOURCE_FILES };
+module.exports = { prepare, verify, sourceHashes, SOURCE_FILES, _test: { validSources } };

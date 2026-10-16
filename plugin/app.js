@@ -50,6 +50,7 @@
       const sessionAdapter = { ...adapter };
       sessionAdapter.captureSelected = () => { if (initialSelection) { const captured = initialSelection; initialSelection = null; return captured; } return adapter.captureSelected(); };
       const cache = { readAsset: (...args) => backend.cache.readAsset(...args),
+        readFrameBatch: (...args) => backend.cache.readFrameBatch(...args),
         release: (...args) => backend.cache.release(...args), clearOther: (...args) => backend.cache.clearOther(...args) };
       let preparedMedia = null, discovery = null;
       // Selection is captured by session immediately; tool discovery waits only

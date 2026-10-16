@@ -310,16 +310,17 @@ async function build(job, tools, tx, source, probe, frameIndex) {
     }
     if (pending) line(pending);
   })());
+  let packedFrames = null;
   const video = guarded(job, (async () => {
-    for await (const chunk of child.stdout) {
+    try { for await (const chunk of child.stdout) {
       check(job);
       for (const jpeg of parser.push(chunk)) {
         const id = files.length; if (!Number.isSafeInteger(id)) fail('源帧编号超出整数精度。', 'MEDIA_PTS');
-        const asset = await tx.writeAsset(String(id).padStart(6, '0') + '.jpg', jpeg); check(job);
+        const asset = await (tx.writeFrame || tx.writeAsset)(String(id).padStart(6, '0') + '.jpg', jpeg); check(job);
         files.push({ ...asset, id });
         if (id % 20 === 0) notify(job, { stage: 'decode', frames: files.length });
       }
-    }
+    } } finally { if (tx.finishFrames) packedFrames = await tx.finishFrames(); }
   })());
   const audio = guarded(job, (async () => {
     if (!hasAudio) return null;
@@ -346,7 +347,7 @@ async function build(job, tools, tx, source, probe, frameIndex) {
   const duration = Math.max(indexed.videoDuration, mediaAudio ? mediaAudio.start + mediaAudio.duration : 0);
   const info = { schema: 1, owner: OWNER, recipe: RECIPE,
     source: { sha256: source.sha256, codec: end.stream.codec_name, width: end.stream.width, height: end.stream.height, hasAudioStream: hasAudio },
-    width: 1280, height: 720, duration, frames: indexed.frames, audio: mediaAudio,
+    width: 1280, height: 720, duration, frames: indexed.frames, audio: mediaAudio, ...(packedFrames ? { framePack: packedFrames } : {}),
     metrics: { reused: false, generationMs: exit.metrics.totalMs, tool: exit.metrics, singleVideoDecode: true, args,
       sourceVideoOrigin: ratioSeconds(ratio(indexed.originPtsTicks, timeBase)),
       lastFrameEnd: 'source start_pts + duration_ts, converted with rational time bases',

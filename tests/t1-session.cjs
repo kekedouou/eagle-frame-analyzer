@@ -18,6 +18,7 @@ function harness(settings = {}) {
     return settings.prepare ? settings.prepare(value, options, h) : h.makeInfo(value);
   } };
   const cache = { async readAsset(info, file) { h.reads.push({ info, file }); return Buffer.from('registered asset'); },
+    readFrameBatch: settings.readFrameBatch,
     clearOther: settings.clearOther,
     async release(info) { if (settings.release) await settings.release(info, h); h.released.push(info); h.events.push('release-' + info.source.id); } };
   function createPlayer(options) {
@@ -52,6 +53,12 @@ function harness(settings = {}) {
   return h;
 }
 async function main() {
+  await test('Batch preload delegates the original cache lease rather than the Player manifest copy', async () => {
+    let original, requested;
+    const h = harness({ readFrameBatch: async (info, files) => { original = info; requested = files; return [Buffer.from('frame')]; } });
+    await h.session.loadSelected(); const p = h.players[0]; await p.options.readFrameBatch({ ...p.info }, ['0.jpg']);
+    assert.strictEqual(original, p.info); assert.deepEqual(requested, ['0.jpg']); await h.session.close();
+  });
   await test('Closing while cache clearing is pending suppresses its late result', async () => {
     const issued = deferred(), finish = deferred();
     const h = harness({ clearOther() { issued.resolve(); return finish.promise; } });

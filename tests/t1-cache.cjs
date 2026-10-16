@@ -34,7 +34,7 @@ function memoryFileSystem() {
   const api = {
     existsSync(file) { return nodes.has(normal(file)); },
     lstatSync(file, options) { const value = nodeFor(file), result = stat(value);
-      return options && options.bigint ? { ...result, ino: value.exactIno || BigInt(result.ino), dev: BigInt(result.dev) } : result; },
+      return options && options.bigint ? { ...result, ino: value.exactIno || BigInt(result.ino), dev: BigInt(result.dev), nlink: BigInt(result.nlink), size: BigInt(result.size), mtimeNs: BigInt(result.mtimeMs) * 1000000n } : result; },
     realpathSync(file) { const value = nodeFor(file); return value.real || normal(file); },
     readdirSync(dir) { if (nodeFor(dir).kind !== 'dir') error('ENOTDIR'); return [...nodes.keys()].filter(file => file !== normal(dir) && win.dirname(file) === normal(dir)).map(file => win.basename(file)); },
     mkdirSync(dir) { make(dir, 'dir'); },
@@ -58,7 +58,7 @@ function memoryFileSystem() {
     closeSync(fd) { if (!descriptors.delete(fd)) error('EBADF'); },
     fsyncSync(fd) { descriptor(fd); },
     fstatSync(fd, options) { const value = descriptor(fd).node, result = stat(value);
-      return options && options.bigint ? { ...result, ino: value.exactIno || BigInt(result.ino), dev: BigInt(result.dev) } : result; },
+      return options && options.bigint ? { ...result, ino: value.exactIno || BigInt(result.ino), dev: BigInt(result.dev), nlink: BigInt(result.nlink), size: BigInt(result.size), mtimeNs: BigInt(result.mtimeMs) * 1000000n } : result; },
     writeSync(fd, data, offset, length, position) {
       const value = descriptor(fd).node;
       if (state.zeroWrite) return 0;
@@ -85,7 +85,7 @@ function memoryFileSystem() {
   };
   api.promises = { async open(file, flags) {
     const id = api.openSync(file, flags);
-    return { async stat() { return api.fstatSync(id); }, async read(data, offset, length, position) { return { bytesRead: api.readSync(id, data, offset, length, position) }; }, async close() { api.closeSync(id); } };
+    return { async stat(options) { return api.fstatSync(id, options); }, async read(data, offset, length, position) { return { bytesRead: api.readSync(id, data, offset, length, position) }; }, async close() { api.closeSync(id); } };
   } };
   return { api, nodes, state, descriptors, deleted, normal, make };
 }

@@ -9,6 +9,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { validateIndex } = require('./frame-index.cjs');
 const { createIdentity } = require('./process-identity.cjs');
+const framePack = require('./frame-pack.cjs');
 const OWNER = 'eagle-video-analysis-plugin-v1';
 const RECIPE = 'jpeg-q3-720p-pcm-f32-48000-v1';
 const MIB = 1024 ** 2;
@@ -69,7 +70,7 @@ function frozenCopy(value) {
   function freeze(object) { if (object && typeof object === 'object') { Object.values(object).forEach(freeze); Object.freeze(object); } }
   freeze(result); return result;
 }
-function assets(info) { return [...info.frames, ...(info.audio ? [info.audio] : [])]; }
+function assets(info) { return [...(info.framePack ? [info.framePack] : info.frames), ...(info.audio ? [info.audio] : [])]; }
 function contentSource(source, expectedSha) {
   if (!source || source.sha256 !== expectedSha || typeof source.codec !== 'string' ||
     !Number.isSafeInteger(source.width) || source.width <= 0 || !Number.isSafeInteger(source.height) || source.height <= 0 ||
@@ -81,20 +82,35 @@ function manifestAssets(info, expectedSha) {
     !(info.duration > 0 && info.duration <= LIMITS.duration) || !Array.isArray(info.frames))
     fail('缓存清单格式或处理版本不符。');
   contentSource(info.source, expectedSha); validateIndex(info);
+  const packed = framePack.validate(info, LIMITS.cacheBytes);
+  if (packed) for (const item of info.frames) { safeName(item.file); if (item.bytes > LIMITS.assetBytes) fail('图片包单帧超过安全读取上限。'); }
   const start = Math.min(0, info.audio ? info.audio.start : 0);
   if (info.duration - start > LIMITS.duration) fail('解码后媒体跨度超过30秒。');
   const map = new Map();
   for (const item of assets(info)) {
     safeName(item.file);
     if (['owner.json', 'manifest.json', 'writer.lock'].includes(item.file) || map.has(item.file) ||
-      !Number.isSafeInteger(item.bytes) || item.bytes <= 0 || item.bytes > LIMITS.assetBytes || !/^[0-9a-f]{64}$/.test(item.sha256))
+      !Number.isSafeInteger(item.bytes) || item.bytes <= 0 || item.bytes > (packed && item === packed ? LIMITS.cacheBytes : LIMITS.assetBytes) || !/^[0-9a-f]{64}$/.test(item.sha256))
       fail('缓存资产重复、越界或缺少内容指纹。');
     map.set(item.file, Object.freeze({ file: item.file, bytes: item.bytes, sha256: item.sha256 }));
   }
   return map;
 }
+function readAssetsMap(info, physical) {
+  if (!info.framePack) return physical;
+  const logical = new Map();
+  for (const item of info.frames) {
+    safeName(item.file);
+    if (item.bytes > LIMITS.assetBytes) fail('图片包单帧超过安全读取上限。');
+    logical.set(item.file, Object.freeze({ file: item.file, bytes: item.bytes, sha256: item.sha256,
+      packedFile: info.framePack.file, packedBytes: info.framePack.bytes, offset: item.offset }));
+  }
+  if (info.audio) logical.set(info.audio.file, physical.get(info.audio.file));
+  return logical;
+}
 
 function createCache(options = {}) {
+  if (options.packFrames !== undefined && typeof options.packFrames !== 'boolean') fail('图片包选项无效。');
   const { pluginRoot } = options, diskBytes = options.diskBytes === undefined ? LIMITS.cacheBytes : options.diskBytes;
   if (typeof pluginRoot !== 'string' || !path.isAbsolute(pluginRoot) || !Number.isSafeInteger(diskBytes) || diskBytes < 1 || diskBytes > LIMITS.cacheBytes)
     fail('需要插件绝对路径和不超过5GiB的缓存预算。');
@@ -166,7 +182,7 @@ function createCache(options = {}) {
     for (const file of actual) {
       const stat = regular(path.join(dir, file)), item = map.get(file);
       if (item && stat.size !== item.bytes) { lengthsMatch = false; if (!allowDamaged) fail('缓存资产长度已改变。'); }
-      if (item && stat.size > LIMITS.assetBytes) fail('已有缓存资产超过安全读取上限。');
+      if (item && stat.size > (info.framePack && file === info.framePack.file ? LIMITS.cacheBytes : LIMITS.assetBytes)) fail('已有缓存资产超过安全读取上限。');
       if (!Number.isSafeInteger(stat.size) || stat.size < 0 || !Number.isSafeInteger(totalBytes + stat.size) || totalBytes + stat.size > diskBytes)
         fail('缓存现有容量超过预算。');
       totalBytes += stat.size;
@@ -575,9 +591,9 @@ function createCache(options = {}) {
       // creation, so interruption within file/ledger/owner writes is recoverable.
       directory(dir); const names = fs.readdirSync(dir).sort();
       const captured = names.map(name => {
-        if (!/^(?:owner\.json|transaction\.log|manifest\.json|audio\.wav|\d{6}\.jpg)$/.test(name)) fail('中断任务含未知文件，保留原件。');
+        if (!/^(?:owner\.json|transaction\.log|manifest\.json|audio\.wav|frames\.pack|\d{6}\.jpg)$/.test(name)) fail('中断任务含未知文件，保留原件。');
         const stat = regular(path.join(dir, name));
-        if (stat.size > (name.endsWith('.json') || name === 'transaction.log' ? LIMITS.metadataBytes : LIMITS.assetBytes)) fail('中断任务文件越界，保留原件。');
+        if (stat.size > (name.endsWith('.json') || name === 'transaction.log' ? LIMITS.metadataBytes : name === framePack.FILE ? LIMITS.cacheBytes : LIMITS.assetBytes)) fail('中断任务文件越界，保留原件。');
         return leafSnapshot(path.join(dir, name));
       });
       return ownerValue('cleanup-plan', { token: nonce(), writerToken: writer.token, directory: dir,
@@ -606,7 +622,7 @@ function createCache(options = {}) {
       for (const [name, item] of expected) {
         const stat = regular(path.join(dir, name));
         const exact = fs.lstatSync(path.join(dir, name), { bigint: true });
-        if (ledgerId(exact.dev) !== ledgerId(item.dev) || ledgerId(exact.ino) !== ledgerId(item.ino) || stat.size > (name === 'manifest.json' ? LIMITS.metadataBytes : LIMITS.assetBytes))
+        if (ledgerId(exact.dev) !== ledgerId(item.dev) || ledgerId(exact.ino) !== ledgerId(item.ino) || stat.size > (name === 'manifest.json' ? LIMITS.metadataBytes : name === framePack.FILE ? LIMITS.cacheBytes : LIMITS.assetBytes))
           fail('残留输出身份或容量不符。');
       }
     } else {
@@ -877,7 +893,7 @@ function createCache(options = {}) {
       }
       const marker = verifyOwner(job.partial, 'partial'); if (marker.token !== job.token) fail('临时缓存事务身份已改变。');
     }
-    function openAsset(name, internal = false) {
+    function openAsset(name, internal = false, maximumBytes = LIMITS.assetBytes) {
       safeName(name);
       if ((!internal && (['owner.json', 'manifest.json', 'writer.lock', 'transaction.log'].includes(name) || /^owner\.next(?:-[0-9a-f]{24})?\.json$/.test(name))) || job.files.has(name)) fail('缓存文件已登记或属于保留名称。');
       ensurePartial();
@@ -894,7 +910,7 @@ function createCache(options = {}) {
       return Object.freeze({
         append(data) {
           checkStream(); if (!Buffer.isBuffer(data)) fail('缓存输出只接受Buffer。');
-          if (record.bytes + data.length > (internal ? LIMITS.metadataBytes : LIMITS.assetBytes)) fail('单个缓存资产超过上限。');
+          if (record.bytes + data.length > (internal ? LIMITS.metadataBytes : maximumBytes)) fail('单个缓存资产超过上限。');
           charge(job, data.length); writeAll(fileFd, data, record.bytes, count => { record.bytes += count; });
         },
         readPrefix(maximum = LIMITS.prefixBytes) {
@@ -922,6 +938,26 @@ function createCache(options = {}) {
           return closing;
         }
       });
+    }
+    let packedWriter = null, packedBytes = 0, packedResult = null, packedClosing = null;
+    const packedHash = crypto.createHash('sha256'), packedRecords = new Map();
+    async function writeFrame(name, data) {
+      if (!options.packFrames) return writeAsset(name, data);
+      safeName(name);
+      if (!name.endsWith('.jpg') || packedClosing || packedRecords.has(name) || job.files.has(name) || !Buffer.isBuffer(data) || !data.length || data.length > LIMITS.assetBytes)
+        fail('图片包帧写入无效、重复或已经关闭。');
+      if (!packedWriter) packedWriter = openAsset(framePack.FILE, false, diskBytes);
+      packedWriter.append(data); packedHash.update(data);
+      const asset = Object.freeze({ file: name, bytes: data.length, sha256: sha(data), offset: packedBytes });
+      packedBytes += data.length; packedRecords.set(name, asset); return asset;
+    }
+    function finishFrames() {
+      if (!packedWriter) return Promise.resolve(null);
+      if (!packedClosing) packedClosing = packedWriter.close().then(asset => {
+        if (asset.bytes !== packedBytes || asset.sha256 !== packedHash.digest('hex')) fail('图片包实际内容与生成结果不符。');
+        packedResult = Object.freeze({ schema: 1, ...asset }); return packedResult;
+      });
+      return packedClosing;
     }
     async function writeAsset(name, data, internal = false) {
       safeName(name);
@@ -978,7 +1014,7 @@ function createCache(options = {}) {
         processIdentity: processIdentity.self(), children: [] }));
       const info = { ...JSON.parse(jsonBytes(persisted).toString('utf8')), source: current,
         ...(metrics ? { metrics: JSON.parse(jsonBytes(metrics).toString('utf8')) } : {}), cacheDir: target, leaseId: id };
-      const map = manifestAssets(persisted, sourceSha256), capturedSource = frozenCopy(current);
+      const map = readAssetsMap(persisted, manifestAssets(persisted, sourceSha256)), capturedSource = frozenCopy(current);
       touch(job, target);
       charge(job, data.length); fs.writeFileSync(file, data, { flag: 'wx' });
       live.set(info, { active: true, id, file, cacheDir: target, source: capturedSource,
@@ -1003,6 +1039,11 @@ function createCache(options = {}) {
         source: contentSource(manifest.source, sourceSha256) }).toString('utf8'));
       delete persistent.cacheDir; delete persistent.leaseId;
       const map = manifestAssets(persistent, sourceSha256);
+      if (persistent.framePack) {
+        if (!packedResult || ['schema', 'file', 'bytes', 'sha256'].some(k => persistent.framePack[k] !== packedResult[k]) || persistent.frames.length !== packedRecords.size ||
+            persistent.frames.some(f => { const a = packedRecords.get(f.file); return !a || ['bytes', 'sha256', 'offset'].some(k => a[k] !== f[k]); }))
+          fail('图片包清单必须来自本事务原始帧写入记录。');
+      } else if (packedRecords.size) fail('图片包写入缺少清单声明。');
       if (map.size !== job.files.size || [...map].some(([name, item]) => {
         const record = job.files.get(name); return !record || !record.closed || record.bytes !== item.bytes || record.sha256 !== item.sha256;
       })) fail('缓存清单与本事务已登记输出不符。');
@@ -1051,7 +1092,7 @@ function createCache(options = {}) {
       for (const size of sizes.values()) job.disk -= size;
       job.partial = null; job.files.clear(); return true;
     }
-    return Object.freeze({ readComplete, writeAsset, openAsset, finish, abort, beforeSpawn, childStarted, childClosed, cleanup,
+    return Object.freeze({ readComplete, writeAsset, writeFrame, finishFrames, openAsset, finish, abort, beforeSpawn, childStarted, childClosed, cleanup,
       close() {
         if (job.streams.size || job.closingStreams.size || writer.children.some(child => child.state !== 'closed')) fail('输出流或辅助进程仍未关闭，不能释放写锁。');
         closeLedger(); return releaseWriter(job);
@@ -1079,7 +1120,7 @@ function createCache(options = {}) {
         marker.token !== info.leaseId || marker.cacheDir !== target || marker.sourceSha256 !== info.source.sha256 || !marker.taskOwner) fail('远端缓存占用身份不符。');
     if (expectedTaskOwner && ['key', 'epoch', 'guardPid'].some(key => marker.taskOwner[key] !== expectedTaskOwner[key])) fail('远端占用不属于当前任务负责人。');
     live.set(info, { active: true, remote: true, id: info.leaseId, file, cacheDir: target, source: frozenCopy(info.source),
-      markerSha: sha(data), markerIdentity: regular(file), map: inspected.map, reads: 0 });
+      markerSha: sha(data), markerIdentity: regular(file), map: readAssetsMap(inspected.info, inspected.map), reads: 0 });
     return info;
   }
   function detachReadLease(info) {
@@ -1090,6 +1131,7 @@ function createCache(options = {}) {
   async function readAsset(info, file) {
     const lease = leaseFor(info); safeName(file);
     const asset = lease.map.get(file); if (!asset || asset.bytes > LIMITS.assetBytes) fail('文件不在原始缓存句柄的资产表中。');
+    if (asset.packedFile) return (await readPacked(info, lease, [asset]))[0];
     const absolute = path.join(lease.cacheDir, file), before = regular(absolute); let handle;
     lease.reads++;
     try {
@@ -1102,6 +1144,45 @@ function createCache(options = {}) {
         fail('缓存资产读取期间已改变。');
       leaseFor(info); return data;
     } finally { try { if (handle) await handle.close(); } finally { lease.reads--; } }
+  }
+  async function readPacked(info, lease, items) {
+    const first = items[0], absolute = path.join(lease.cacheDir, first.packedFile);
+    function exact() {
+      const value = fs.lstatSync(absolute, { bigint: true });
+      if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1n || !samePath(realpath(absolute), absolute)) fail('图片包文件身份无效。');
+      return value;
+    }
+    const before = exact(), unchanged = value => value.isFile() && value.nlink === 1n && value.ino === before.ino && value.dev === before.dev &&
+      value.size === before.size && value.mtimeNs === before.mtimeNs;
+    const bytes = items.reduce((n, item) => n + item.bytes, 0); let handle; lease.reads++;
+    try {
+      handle = await fs.promises.open(absolute, 'r');
+      if (before.size !== BigInt(first.packedBytes) || !unchanged(await handle.stat({ bigint: true }))) fail('读取前图片包身份或长度不符。');
+      const data = Buffer.alloc(bytes); let at = 0;
+      while (at < bytes) { const r = await handle.read(data, at, bytes - at, first.offset + at); if (!r.bytesRead) fail('图片包读取不完整。'); at += r.bytesRead; }
+      if (!unchanged(await handle.stat({ bigint: true })) || !unchanged(exact())) fail('读取期间图片包已改变。');
+      const result = []; let offset = 0;
+      for (const item of items) {
+        const part = data.subarray(offset, offset + item.bytes); offset += item.bytes;
+        if (sha(part) !== item.sha256) fail('图片包帧内容指纹不符。');
+        // Independent buffers allow per-frame RAM eviction to release real
+        // storage. The caller reserves both batch input and returned copies.
+        if (items.length === 1) result.push(part);
+        else { const independent = Buffer.alloc(part.length); part.copy(independent); result.push(independent); }
+      }
+      leaseFor(info); return result;
+    } finally { try { if (handle) await handle.close(); } finally { lease.reads--; } }
+  }
+  async function readFrameBatch(info, files) {
+    const lease = leaseFor(info);
+    if (!Array.isArray(files) || !files.length || files.length > 2048 || new Set(files).size !== files.length) fail('图片包预载批次无效。');
+    const items = files.map(file => { safeName(file); const item = lease.map.get(file); if (!item || !item.packedFile) fail('批次必须来自已登记的图片包帧。'); return item; });
+    let end = items[0].offset, bytes = 0;
+    for (const item of items) {
+      if (item.packedFile !== items[0].packedFile || item.offset !== end) fail('批次帧必须连续且属于同一图片包。');
+      end += item.bytes; bytes += item.bytes; if (bytes > framePack.BATCH_BYTES) fail('图片包预载批次超过1MiB。');
+    }
+    return readPacked(info, lease, items);
   }
   function release(info) {
     const lease = info && live.get(info); if (!lease || !lease.active) return false;
@@ -1181,7 +1262,7 @@ function createCache(options = {}) {
     const tx = begin({ ...settings, clearOthers: true });
     try { return tx.cleanup; } finally { tx.close(); }
   }
-  return Object.freeze({ root, begin, readAsset, release, inventory, clearOther, adoptReadLease, detachReadLease });
+  return Object.freeze({ root, begin, readAsset, readFrameBatch, release, inventory, clearOther, adoptReadLease, detachReadLease });
 }
 
 module.exports = { createCache, OWNER, RECIPE, LIMITS };

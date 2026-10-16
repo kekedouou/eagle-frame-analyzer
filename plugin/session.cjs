@@ -103,6 +103,7 @@ function createSession(options) {
       if (!current(request)) { await releaseOwner(owned); return { status: 'superseded' }; }
       const player = createPlayer({ experimentMode: 'compressed-ram',
         readAsset: (_copiedInfo, file) => cache.readAsset(info, file),
+        readFrameBatch: typeof cache.readFrameBatch === 'function' ? (_copiedInfo, files) => cache.readFrameBatch(info, files) : undefined,
         onChange: value => {
           if (!current(request) || owner !== owned) return;
           playback = { ...value };
