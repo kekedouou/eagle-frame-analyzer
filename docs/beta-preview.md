@@ -2,6 +2,8 @@
 
 适用版本：0.1.0-beta.2，Windows x64的Eagle Window插件。固定720p，面向不超过30秒的本地MP4。本版为Beta；核心功能可用，长期内存稳定性和全部素材兼容尚未确认。
 
+本版已发布，安装附件及校验见[GitHub Release](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/v0.1.0-beta.2)。日常解压位置使用仓库外非C盘目录，不在开发dist中长期运行。
+
 ## 安装
 
 1. 准备Eagle 4.0 Build 22+并在Eagle中安装FFmpeg模块。本插件不附FFmpeg，用户不需要另装Node.js。

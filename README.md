@@ -2,7 +2,7 @@
 
 与Eagle素材库关联的短视频分析插件：自动准备720p预览，在独立窗口播放、快速拖动、逐帧观察，并添加Eagle时间点文字标注。保留原视频，不需要替换素材。
 
-**当前版本：0.1.0-beta.2 发布候选，独立安装已由用户人工验收，尚未公开发布。** 核心功能已有测试和人工认可，长期内存稳定性及全部素材兼容仍未确认，不属于稳定版。过时的绿色独立版已撤下公开下载，本项目继续维护Eagle插件。
+**当前版本：[0.1.0-beta.2 · MVP Beta](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/v0.1.0-beta.2)，已发布并完成独立安装用户人工验收。** 核心功能已有测试和人工认可，长期内存稳定性及全部素材兼容仍未确认，不属于稳定版。过时的绿色独立版已撤下公开下载，本项目继续维护Eagle插件。
 
 ## 能做什么
 
@@ -19,7 +19,7 @@
 
 需要Windows x64、Eagle 4.0 Build 22+及Eagle中的FFmpeg模块。已验证的Eagle运行时为Node16.17.1／Chrome108；用户不需要另外安装Node.js。本包不附FFmpeg或视频素材。
 
-1. 从本项目GitHub Release取得 `eagle-video-analysis-0.1.0-beta.2-win-x64.zip`；当前候选尚未发布，请勿把源码ZIP当作插件包。
+1. 从[本版GitHub Release](https://github.com/kekedouou/eagle-frame-analyzer/releases/tag/v0.1.0-beta.2)取得 `eagle-video-analysis-0.1.0-beta.2-win-x64.zip`；请勿把源码ZIP当作插件包。
 2. 完整解压到D、E等非C盘的可写目录，保留 `native/` 等全部文件。
 3. 在Eagle的插件开发功能中选择“载入本地插件”，选择包含 `manifest.json` 的整个文件夹，不选择ZIP或单个文件。
 4. 在Eagle单选一个不超过30秒的本地MP4，打开“视频分析 · MVP Beta”，等待准备完成。

@@ -3,7 +3,7 @@
 ## 身份与入口
 
 - 正式主线是Eagle Window视频分析插件，正式实现只在plugin/；MVP固定720p、短MP4，默认RAM1GiB、512MiB及1～10GiB档位，JPEG池≤总额度1/8，额度不是整个程序内存硬上限。
-- 阶段3A/3B/3C已批准，阶段4主要实现已收尾。R1已接受Beta限定范围，R2独立安装用户人工验收通过；当前先做文档/清理/本地提交，待用户再次确认才执行R3推送/标签/Release。历史路径公开已明确接受；当前尚未发布Beta2，许可证未指定。
+- 阶段3A/3B/3C已批准，阶段4主要实现已收尾。R1已接受Beta限定范围，R2独立安装用户人工验收通过；用户已最终确认R3，Beta2及ZIP/校验已在GitHub发布并实际下载核对。R4归档完成，本轮开发冻结，历史路径公开已明确接受，许可证未指定，不自动进入后续开发。
 - Git根为eagle-video-analysis/，只有一个.git。正式开发入口为plugin/manifest.json；发行入口名为“视频分析 · MVP Beta”，独立ID，不与日常开发入口混为一谈。
 - 原型A/B和S1分别在prototypes/window-player/及playback-clock/，受局部AGENTS约束、默认封存。tests/host为历史专用验证入口，旧T2/T4自动测量入口已停用，不要求用户重新导入或恢复长测。
 - 栈为HTML/CSS/JavaScript、Eagle API、Node内置模块、Eagle现有FFmpeg/ffprobe；小型Windows C#守护使用系统已有.NET Framework编译器，不安装依赖。
@@ -41,7 +41,7 @@ A/B的check.cjs、check-b.cjs、assess-b.cjs --verify-only及S1的check-local/ch
 
 - 既有poc-a-verified、poc-b-performance-verified、phase3c-approved、T1体验/早期技术、T3及生命周期体验标签保留，各自只是限定节点，不是所有R/P通过。
 - 标签固定源码；原始证据另存有界本机记录，用户反馈明确标注来源，不假称Codex亲测。
-- 当前0.1.0-beta.2标签/新Release均尚未创建；预定标签指向包来源9e2fd0d，之后的文档提交记录验收/整理，不改包。
+- 当前v0.1.0-beta.2标签已发布，指向包来源9e2fd0d；后续main文档提交记录验收/整理/交接，不改冻结包。
 - 正式磁盘缓存5GiB，实际插件根下cache，与安装同盘且非C盘。运行缓存1天未用及容量淘汰，与开发生成物清理分开；不能以文件年龄删除写锁。
 - 发行本地清理记录固定verification-runs/release-0.1.0-beta.2，总1MiB/单份128KiB/最多16文件；不挤占或扩大原T4等配额，不进包、不入Git。
 
@@ -82,4 +82,4 @@ A/B的check.cjs、check-b.cjs、assess-b.cjs --verify-only及S1的check-local/ch
 
 ### 工作区整理入口
 
-统一规则见[开发计划F机制](development-plan.md#发行产物统一整理f-01f-05f-06f-072026-10-16-用户批准)，本轮已清理8目标/187文件、911.65MiB，dist余18.67MiB；清单/保留原因见[发布整理记录](releases/v0.1.0-beta.2.md#工作区整理与文档一致性2026-10-16)。日常安装路径由用户指定，实际路径只记本机清理回执，不写进公开包。未重新注册前的旧安装副本保留；唯一待发包/校验工具所需目录待远程确认后清。冻结原型、原始证据及工具链不随dist整理删除。
+统一规则见[开发计划F机制](development-plan.md#发行产物统一整理f-01f-05f-06f-072026-10-16-用户批准)，两次累计已清理278文件、975407862B（约930.22MiB）；dist仅最新ZIP/校验共104994B；清单/保留原因见[发布整理记录](releases/v0.1.0-beta.2.md#工作区整理与文档一致性2026-10-16)。日常安装路径由用户指定，实际路径只记本机清理回执，不写进公开包。用户已确认仓库外新位置载入正常，旧安装/构建目录已退役；verify和verify-install所需暂存目录已不存在，不要直接重跑，复核发行用ZIP/远程摘要及保全回执。冻结原型、原始证据及工具链不随dist整理删除。
