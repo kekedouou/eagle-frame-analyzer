@@ -1,5 +1,7 @@
 # 项目说明
 
+当前接续入口：显式`node scripts/prepare-mvp-host.cjs --preparation-hevc`复用T4，对“喜多郁代”默认1GiB做完整6次准备＋独立Canvas/已有编号片核对，不重跑索尼克或已认可体验。`window-frame-reference.cjs`仅测试源参考与实际Canvas；`preparation-runtime.cjs`明确区分sonic/hevc源profile，仍一次归属/副本/缓存边界。HEVC缩放1→4已有同内容管道收益，完整就绪未实测；[计划](experiments/T4/plan.md#2026-10-16-准确性兼容与长期收尾)及[证据](experiments/T4/report.md#2026-10-16-hevc缩放瓶颈与集中宿主入口准备)为恢复入口。生成前需关闭旧验收窗口；完成/已开始副本不覆盖，正常cache/设置/素材只读。当前阶段整体仍未通过。
+
 2026-10-16当前补充：末帧边界/双向逐帧准备/【/】及实际当前/总帧数已实现，用户三项集中反馈“全部正常”。7份既有/指定输入的后端时间及源JPEG/编号核对通过，不代替实际Canvas/全编码性能/长期，见[T4本轮](experiments/T4/report.md#2026-10-16-末帧边界修复与逐帧体验)。显式`node scripts/verify-frame-accuracy.cjs [--remaining-formats]`在accuracy-scratch生成有界隔离缓存并清理自己产物，不在默认检查执行，不默认重跑已通过数据；旧P-03副本已核对后清理，原配置保留于161。同一T4入口已`--experience`准备，只映射实际正式插件，无自动测量/记录/观察器；日常使用plugin。继续独立画布/真实编码性能/两轮长期，并诊断喜多郁代单次后端准备32.8秒风险，不提前宣称MVP通过。
 
 2026-10-16当前：7dc4fc8准备模式的真实Eagle索尼克/720p/默认1GiB三次首次＋三次复用已通过，独立审计140，首次约9～11秒、复用约2.6秒；证据/范围见[本轮结果](experiments/T4/report.md#2026-10-16-索尼克完整准备计时限定通过)。正式plugin仍21a623f。此单素材首次专项收尾，T2/T4其余矩阵/独立帧参考/长期资源缺口保留，不重测手感或本组6次。入口已一次运行完成、测试cache不存在；约225KiB副本和started/finished暂为配置入口校验及拒重复所需，切换/停用时按F规则处理。当前不要执行无参数prepare（旧拖动）或--preparation覆盖已开始历史；不把准备/模型当真实成绩，不把本次通过外推全产品。

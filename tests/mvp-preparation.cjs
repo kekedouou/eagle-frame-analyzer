@@ -18,13 +18,21 @@ function fixture(settings = {}) {
   h.job = install({ window: h.win, document: h.doc, eagle: h.eagle, hostRoot: host, helpers: {
     verify: () => { if (settings.verifyFailure) throw Error('model-fingerprint-changed'); return { host, marker: { mode: settings.entryChanged && h.calls ? 'performance' : 'preparation', preparation: reference, sourceHashes: {} } }; },
     runtime: {
-      verify: () => ({ source, limits: { diskBytes: 240 * 1024 ** 2 }, original: {}, copied: {} }),
+      verify: () => ({ source, limits: { diskBytes: 240 * 1024 ** 2 }, original: {}, copied: {}, verifyFrames: !!settings.verifyFrames, expectedFrames: 1490 }),
       mark(ref, name, value) { if (name === 'started.json') { if (h.consumed) throw Error('model-already-started'); h.consumed = true; }
         h.marks.push({ name, value }); },
       clear(ref, store, reason) { assert.equal(h.current.state, 'closed'); assert(!settings.holdClose || h.released); h.clears.push(reason); },
       async cleanup() { h.cleaned = true; return { removed: true, bytes: 1 }; }
     },
     select: async () => settings.wrongSelection ? { ...source, itemId: 'other' } : source,
+    async verifySourceFrames(options) { assert.equal(h.calls, 6); assert.equal(h.current.state, 'paused'); assert(!options.signal.aborted);
+      h.sourceFramesChecked = true; h.clock += 1000; return { passed: !settings.failSourceFrames }; },
+    async verifyNumberedFrames(options) { assert.equal(h.calls, 6); assert.equal(h.closes, 6); assert.equal(h.current.state, 'closed');
+      h.numberedFramesChecked = true; if (settings.holdNumbered) {
+        options.onActive({ backend: { beginClose() { h.fixtureCloseArmed = true; } }, player: { dispose() { h.fixtureDisposed = true; return Promise.resolve(); } } });
+        await new Promise((resolve, reject) => { h.numberedPending = true;
+          options.signal.addEventListener('abort', () => reject(Error('model-numbered-aborted')), { once: true }); }); }
+      return { passed: !settings.failNumberedFrames }; },
     createStore: () => ({ start() { if (settings.recordFailure) throw Error('model-record-capacity'); return { runId: 'a'.repeat(32) }; },
       save(kind, payload) { assert(!h.storeClosed); h.records.push({ kind, payload }); return { file: 'model/' + h.records.length }; }, close() { h.storeClosed = true; } }),
     manifest: () => ({ manifestSha256: 'b'.repeat(64), info: { framePack: { schema: 1, file: 'frames.pack', bytes: 1490, sha256: 'a'.repeat(64) },
@@ -71,6 +79,19 @@ async function main() {
     assert.equal(s.rows[0].entry, 'real-SDK-create'); assert.equal(s.rows[1].entry, 'controlled-registered-formal-run');
     assert.equal(s.overallT4Accepted, false); assert.equal(s.userObservations, 'not-recorded'); assert.equal(h.marks.length, 2);
     h.sdk.run(); assert.equal(h.calls, 6); assert(h.job.status().finished); assert.equal(h.subscribers.size, 0);
+  });
+  await test('explicit frame profile checks source before close and numbered Canvas after all formal resources release, outside readiness timing', async () => {
+    const h = fixture({ verifyFrames: true }); await h.start(); assert(h.summary().passed); assert(h.sourceFramesChecked && h.numberedFramesChecked);
+    assert(h.summary().rows.every(r => r.callbackToReadyMs < 100)); assert(h.summary().sourceFrameChecks.passed && h.summary().numberedFrameChecks.passed);
+  });
+  for (const extra of [{ failSourceFrames: true }, { failNumberedFrames: true }]) await test('failed extra Canvas checks cannot produce acceptance ' + JSON.stringify(extra), async () => {
+    const h = fixture({ verifyFrames: true, ...extra }); await h.start(); assert(!h.summary().passed); assert(!h.cleaned); assert.equal(h.closes, 6);
+  });
+  await test('SDK exit during numbered Canvas cancels it without late records or failure popup', async () => {
+    const h = fixture({ verifyFrames: true, holdNumbered: true }), job = h.start();
+    for (let n = 0; !h.numberedPending && n < 40; n++) await flush(); assert(h.numberedPending);
+    const records = h.records.length; await h.sdk.exit(); await job; assert.equal(h.records.length, records); assert(!h.summary());
+    assert(h.fixtureCloseArmed && h.fixtureDisposed);
   });
   for (const settings of [{ noAudio: true }, { badBudget: true }, { badReuse: true }, { badDispose: true }, { closeFailure: true }])
     await test('refuse readiness/reuse/release violation ' + JSON.stringify(settings), async () => {

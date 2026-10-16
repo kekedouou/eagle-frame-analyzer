@@ -8,7 +8,7 @@ const SOURCE_FILES = [
   'player.js', 'preferences.cjs', 'process-identity.cjs', 'session.cjs', 'styles.css', 'task-client.cjs', 'task-worker.cjs', 'ui.js',
   'native/task-host.cs', 'native/task-host.local.exe'
 ].map(n => 'plugin/' + n).concat(['scripts/prepare-mvp-host.cjs', 'scripts/build-resource-sampler.cjs',
-  'tests/host/t4/bootstrap.js', 'tests/support/mvp-launch.cjs', 'tests/support/mvp-preparation.cjs', 'tests/support/preparation-runtime.cjs', 'tests/support/mvp-monitor.cjs', 'tests/support/mvp-resource.cjs',
+  'tests/host/t4/bootstrap.js', 'tests/support/mvp-launch.cjs', 'tests/support/mvp-preparation.cjs', 'tests/support/preparation-runtime.cjs', 'tests/support/window-frame-reference.cjs', 'tests/support/frame-reference.cjs', 'scripts/verify-frame-accuracy.cjs', 'tests/support/mvp-monitor.cjs', 'tests/support/mvp-resource.cjs',
   'tests/support/t4-evidence.cjs', 'tests/support/window-host.cjs', 'tests/support/t0-protocol.cjs', 'tests/support/t0-gate.cjs',
   'tests/support/ram-diagnostic.cjs', 'tests/native/resource-sampler.cs', 'tests/native/resource-sampler.local.exe']);
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -31,8 +31,9 @@ function validSources(hashes, allowPrevious = false) {
   if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes) || Object.values(hashes).some(v => typeof v !== 'string' || !/^[0-9a-f]{64}$/.test(v))) return false;
   const keys = JSON.stringify(Object.keys(hashes).sort());
   const prior = SOURCE_FILES.filter(n => !['tests/support/mvp-preparation.cjs', 'tests/support/preparation-runtime.cjs'].includes(n));
+  const beforeFrames = SOURCE_FILES.filter(n => !['tests/support/window-frame-reference.cjs', 'tests/support/frame-reference.cjs', 'scripts/verify-frame-accuracy.cjs'].includes(n));
   return keys === JSON.stringify(SOURCE_FILES.slice().sort()) || allowPrevious &&
-    [prior, prior.filter(n => n !== 'plugin/frame-pack.cjs')].some(list => keys === JSON.stringify(list.slice().sort()));
+    [beforeFrames, prior, prior.filter(n => n !== 'plugin/frame-pack.cjs')].some(list => keys === JSON.stringify(list.slice().sort()));
 }
 function verify(checkSources = true, allowPrevious = false) {
   boundaries(); const marker = JSON.parse(read(path.join(host, 'prepared.local.json')));
@@ -48,6 +49,7 @@ function verify(checkSources = true, allowPrevious = false) {
   return { host, plugin, marker, bytes };
 }
 function prepare(mode = 'performance') {
+  const profile = mode === 'preparation-hevc' ? 'hevc' : 'sonic'; if (mode === 'preparation-hevc') mode = 'preparation';
   if (!['performance', 'preparation', 'experience'].includes(mode)) throw new Error('Explicit performance/preparation/experience entry required.');
   const previous = ['prepared.local.json', ...OUTPUTS].some(n => fs.existsSync(path.join(host, n))) ? verify(false, true) : null;
   const hashes = sourceHashes(), manifest = JSON.parse(read(path.join(plugin, 'manifest.json')));
@@ -66,8 +68,9 @@ function prepare(mode = 'performance') {
   let preparation;
   if (mode === 'preparation') {
     const runtime = require('../tests/support/preparation-runtime.cjs');
-    if (previous && previous.marker.mode === 'preparation') { runtime.unused(previous.marker.preparation); preparation = previous.marker.preparation; }
-    else preparation = runtime.create();
+    if (previous && previous.marker.mode === 'preparation') {
+      const owner = runtime.unused(previous.marker.preparation); if ((owner.profile || 'sonic') !== profile) throw Error('已准备另一个专项，不覆盖其副本。'); preparation = previous.marker.preparation;
+    } else preparation = runtime.create({ profile });
   }
   const marker = { schema: 'mvp-host-prepared-v1', hostRoot: host, pluginRoot: plugin, mode, sourceHashes: hashes,
     ...(preparation ? { preparation } : {}),
@@ -77,7 +80,7 @@ function prepare(mode = 'performance') {
   for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(host, name), bytes, fs.existsSync(path.join(host, name)) ? {} : { flag: 'wx' });
   return verify();
 }
-if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--experience'].includes(args.join(' '))) throw Error('Use no arguments, --preparation or --experience.');
+if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--preparation-hevc', '--experience'].includes(args.join(' '))) throw Error('Use no arguments, --preparation, --preparation-hevc or --experience.');
   const result = prepare(args.length ? args[0].slice(2) : 'performance'); console.log(JSON.stringify({ host, manifest: path.join(host, 'manifest.json'), mode: result.marker.mode, bytes: result.bytes,
   loadedInEagle: false, metricsExecuted: false })); } catch (e) { console.error(e.stack); process.exitCode = 1; } }
 module.exports = { prepare, verify, sourceHashes, SOURCE_FILES, _test: { validSources } };

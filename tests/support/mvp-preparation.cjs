@@ -1,5 +1,5 @@
 'use strict';
-// Actual-window P-03 only. Never invokes the drag/performance driver.
+// Actual-window P-03; explicit HEVC profile also checks independent Canvas frames.
 const path = require('path');
 function install(options) {
   const win = options.window, doc = options.document, eagle = options.eagle, h = options.helpers || {};
@@ -12,6 +12,12 @@ function install(options) {
   const now = () => win.performance.now(), rows = [], resourcesRefs = [];
   let prepared, reference, owner, store, monitor, runCallback, closeCallback, roundClose, off, failed = null, runId = null, storeReady = false;
   let closing = false, launching = false, started = false, finished = false, activeRound = 0, disposed = 0, abortWait = null;
+  const frameAbort = new AbortController(); let frameWork = null, sourceFrames = null, numberedFrames = null;
+  function stopFrameWork() {
+    frameAbort.abort();
+    if (frameWork) { if (frameWork.player) frameWork.player.dispose().catch(() => {});
+      if (frameWork.backend) { try { frameWork.backend.beginClose(); } catch (_) {} } }
+  }
   const snapshot = () => win.EVADiagnostics && win.EVADiagnostics.snapshot();
   function verifyBound() {
     const current = verify();
@@ -19,7 +25,7 @@ function install(options) {
         JSON.stringify(current.marker.sourceHashes) !== JSON.stringify(prepared.marker.sourceHashes)) throw Error('计时入口或来源在运行期间改变，本轮停止。');
   }
   function message(text, error = false) {
-    if (closing) return; doc.title = '阶段4准备计时 · ' + text;
+    if (closing) return; doc.title = (owner && owner.verifyFrames ? '阶段4验证 · ' : '阶段4准备计时 · ') + text;
     for (const id of ['status', 'notice']) { const el = doc.getElementById(id); if (el) { el.textContent = text; el.hidden = false; } }
     const el = doc.getElementById('error'); if (el) { el.textContent = error ? text : ''; el.hidden = !error; }
   }
@@ -32,10 +38,12 @@ function install(options) {
   }
   function stop(error) {
     failed = failed || error; if (abortWait) abortWait(failed);
+    stopFrameWork();
     if (started && closeCallback) closeProduct().catch(() => {});
   }
   function cancel() {
     if (closing) return; closing = true; if (abortWait) abortWait(Error('user-requested-close'));
+    stopFrameWork();
     if (monitor) monitor.stop(); if (store) store.close(); if (off) off();
     // No writes, await, or preventDefault in SDK/DOM exit notifications.
   }
@@ -98,7 +106,7 @@ function install(options) {
       store = createStore(repo); const reservation = store.start({ reserveBytes: 3 * 1024 ** 2 }); storeReady = true; runId = reservation.runId;
       const selected = await select(); check();
       if (selected.itemId !== owner.source.itemId || path.resolve(selected.filePath).toLowerCase() !== path.resolve(owner.source.filePath).toLowerCase())
-        throw Error('请在Eagle中单选“索尼克”，关闭本窗口后重新打开；本次未生成缓存。');
+        throw Error('请在Eagle中单选“' + (owner.source.name || '指定测试视频') + '”，关闭本窗口后重新打开；本次未生成缓存。');
       runtime.mark(reference, 'started.json', { runId: reservation.runId, at: new Date().toISOString(), pid: process.pid }); started = true;
       if (doc.body) doc.body.inert = true;
       store.save('host', { schema: 'mvp-p03-window-start-v1', at: new Date().toISOString(), pid: process.pid, versions: process.versions,
@@ -123,7 +131,7 @@ function install(options) {
         });
         const registered = manifest(reference.root, loaded.value), info = registered.info;
         require('../../plugin/frame-pack.cjs').validate(info, owner.limits.diskBytes);
-        if (!info.framePack || info.frames.length !== 1490 || !info.audio) throw Error('新JPEG包、全部源帧或音频清单不符。');
+        if (!info.framePack || info.frames.length !== (owner.expectedFrames || 1490) || !info.audio) throw Error('新JPEG包、全部源帧或音频清单不符。');
         const limitMs = loaded.value.duration < 5 ? 5000 : loaded.value.duration * 1000;
         const row = { number: n + 1, pair, kind: reuse ? 'reuse' : 'first', entry: n === 0 ? 'real-SDK-create' : 'controlled-registered-formal-run',
           callbackAt: calledAt, readyAt: loaded.value.loadMetrics.readyAt, observedAt: loaded.observedAt,
@@ -132,11 +140,26 @@ function install(options) {
           sourceIdentity: loaded.value.sourceIdentity, frameId: loaded.value.playback.frameId, audioAvailable: loaded.value.playback.audioAvailable,
           budget: loaded.value.playback.budget, compressed: loaded.value.playback.compressed,
           manifestSha256: registered.manifestSha256, frames: info.frames.length, pack: info.framePack, audio: info.audio };
+        if (owner.verifyFrames && n === 5) {
+          store.save('host', { schema: 'mvp-p03-final-ready-before-frame-checks-v1', ...row });
+          message('准备计时完成，正在独立核对源画面和逐帧操作，请勿操作');
+          sourceFrames = await (h.verifySourceFrames || require('./window-frame-reference.cjs').verifySource)({ window: win, document: doc,
+            bridge: win.EVADiagnostics, info, source: owner.source, check, signal: frameAbort.signal });
+          if (!sourceFrames || !sourceFrames.passed) throw Error('源画布独立核对未通过。');
+          store.save('host', sourceFrames); check();
+        }
         const before = disposed; row.closeResult = await closeProduct(); check();
         if (disposed !== before + 1) throw Error('未观察到本轮Player真实释放完成。');
         row.disposedBudgetBytes = 0; row.afterCloseState = snapshot().state;
         if (row.afterCloseState !== 'closed') throw Error('关闭后正式会话未结束。');
         row.receipt = store.save('host', { schema: 'mvp-p03-window-round-v1', ...row }); rows.push(row);
+      }
+      if (owner.verifyFrames) {
+        message('正在核对3段已有编号短片的真实画布，请勿操作');
+        numberedFrames = await (h.verifyNumberedFrames || require('./window-frame-reference.cjs').verifyNumbered)({ window: win, document: doc,
+          runtimeRoot: reference.root, check, signal: frameAbort.signal, onActive: value => { frameWork = value; } });
+        if (!numberedFrames || !numberedFrames.passed) throw Error('编号片实际画布未通过。');
+        store.save('host', numberedFrames); check();
       }
       sequenceComplete = true;
     } catch (failure) { error = String(failure.message || failure); }
@@ -160,13 +183,15 @@ function install(options) {
         const passed = complete && rows.filter(r => r.kind === 'first').every(r => r.firstRequirementPassed);
         const receipt = store.save('host', { schema: 'mvp-p03-window-summary-v1', runId, source: owner && owner.source, reference,
           complete, passed, error: error || failed && failed.message || resources && resources.issue, rows, sourceHashes: prepared && prepared.marker.sourceHashes,
-          resources: resources && resources.observer, resourceChunks: resourcesRefs, cleanup, userObservations: 'not-recorded', overallT2Accepted: false, overallT4Accepted: false,
+          resources: resources && resources.observer, resourceChunks: resourcesRefs, cleanup,
+          sourceFrameChecks: sourceFrames, numberedFrameChecks: numberedFrames, userObservations: 'not-recorded', overallT2Accepted: false, overallT4Accepted: false,
           limitations: ['Actual Eagle SDK/render/audio; isolated copied runtime with only a declared 240MiB worker disk ceiling.',
             'First actual SDK create, next five controlled calls to registered formal run, each after actual session/Player/worker shutdown; not six physical window opens.',
-            'No OS cache flush, no measurement before the SDK callback, no drag/physical display/audio listening or long resource retest.'] });
+            owner && owner.verifyFrames ? 'Extra Canvas source/numbered-frame checks are separate from six readyAt timings; small step samples do not replace complete P-01/P-02 or physical display/audio/long acceptance.'
+              : 'No OS cache flush, no measurement before the SDK callback, no drag/physical display/audio listening or long resource retest.'] });
         if (started) runtime.mark(reference, 'finished.json', { receipt, complete, passed });
         finished = true;
-        message(complete ? (passed ? '6次准备计时已完成，记录已保存。请关闭本窗口。' : '6次计时已保存，首次等待仍超目标。请关闭本窗口。') : '计时停止，记录已保存：' + (error || failed && failed.message || resources && resources.issue || '资源记录不完整'), !passed);
+        message(complete ? (passed ? (owner.verifyFrames ? '准备与画面核对已完成，记录已保存。请关闭本窗口。' : '6次准备计时已完成，记录已保存。请关闭本窗口。') : '6次计时已保存，首次等待仍超目标。请关闭本窗口。') : '验证停止，记录已保存：' + (error || failed && failed.message || resources && resources.issue || '资源记录不完整'), !passed);
       } catch (failure) { finished = true; message('计时/清理记录未完成：' + String(failure.message || failure) + '；现场已保留。', true); }
       finally { if (store) store.close(); }
     }

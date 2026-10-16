@@ -4,6 +4,8 @@ const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const repo = path.resolve(__dirname, '../..'), plugin = path.join(repo, 'plugin');
 const ROOT = path.join(repo, 'tests/host/t4/preparation-scratch'), DISK = 240 * 1024 ** 2, TOTAL = 256 * 1024 ** 2;
 const SOURCE_ID = 'MV3FZJJ7AC1CI', SOURCE_SHA = '0823a48f0d7b365163297206e8e8c66591c3aa6cf4c30253b3187d19c9644cba';
+const PROFILES = Object.freeze({ sonic: { id: SOURCE_ID, sha256: SOURCE_SHA, frames: 1490, name: '索尼克' },
+  hevc: { id: 'MV6H7OK0MBGX2', sha256: 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658', frames: 1596, name: '喜多郁代' } });
 const FILES = ['task-client.cjs', 'task-worker.cjs', 'cache.cjs', 'frame-pack.cjs', 'frame-index.cjs', 'media.cjs',
   'process-identity.cjs', 'session.cjs', 'eagle.cjs', 'preferences.cjs', 'diagnostics.cjs',
   'native/task-host.cs', 'native/task-host.local.exe', 'native/task-host.local.json'];
@@ -19,16 +21,23 @@ function read(file, maximum = 1024 ** 2) {
   const bytes = fs.readFileSync(file); if (JSON.stringify(node(file)) !== JSON.stringify(before) || bytes.length !== before.bytes) throw Error('准备计时文件读取时发生变化。');
   return bytes;
 }
-function source() {
+function source(profile) {
+  if (profile === 'hevc') {
+    const cfg = JSON.parse(read(path.join(repo, 'tests/host/t0/config.local.json'))), sample = PROFILES.hevc;
+    const dir = path.join(path.dirname(path.dirname(cfg.sources.find(s => s.key === 'baseline').file)), sample.id + '.info');
+    node(dir, true); const names = fs.readdirSync(dir).filter(n => n.toLowerCase().endsWith('.mp4')); if (names.length !== 1) throw Error('已指定HEVC源缺失或不唯一。');
+    return { id: sample.id, itemId: sample.id, name: sample.name, filePath: path.join(dir, names[0]), ext: 'mp4', sha256: sample.sha256 };
+  }
   const file = path.join(repo, 'verification-runs/t4/slot-047/record.json'), bytes = read(file);
   const value = require('./t4-evidence.cjs').createStore(repo).readReceipt({ file, bytes: bytes.length, sha256: sha(bytes) }).source;
   if (value.itemId !== SOURCE_ID || value.sha256 !== SOURCE_SHA || !path.isAbsolute(value.filePath)) throw Error('首次准备固定素材记录不符。');
   return value;
 }
-function create() {
+function create(options = {}) {
+  const profile = options.profile || 'sonic'; if (!Object.hasOwn(PROFILES, profile)) throw Error('未批准的准备样本。');
   node(path.dirname(ROOT), true); node(plugin, true);
   if (fs.existsSync(ROOT)) throw Error('已有准备计时副本；先核对记录，不能覆盖或重复运行。');
-  const selected = source(), sourceIdentity = node(selected.filePath), original = {}, copied = {};
+  const selected = source(profile), sourceIdentity = node(selected.filePath), original = {}, copied = {};
   const data = FILES.map(file => {
     const bytes = read(path.join(plugin, file)); original[file] = sha(bytes);
     if (file !== 'task-worker.cjs') return [file, bytes];
@@ -41,6 +50,7 @@ function create() {
   for (const [file, bytes] of data) { fs.writeFileSync(path.join(ROOT, file), bytes, { flag: 'wx' }); copied[file] = { bytes: bytes.length, sha256: sha(bytes) }; }
   const s = node(ROOT, true), owner = { schema: 'mvp-window-preparation-runtime-v1', root: ROOT, plugin,
     directoryIdentity: { ino: s.ino, dev: s.dev }, nonce: crypto.randomBytes(12).toString('hex'), source: selected, sourceIdentity,
+    profile, expectedFrames: PROFILES[profile].frames, verifyFrames: profile === 'hevc',
     original, copied, limits: { diskBytes: DISK, totalBytes: TOTAL, ramBytes: 1024 ** 3 } };
   const bytes = Buffer.from(JSON.stringify(owner)); fs.writeFileSync(path.join(ROOT, 'runtime-owner.json'), bytes, { flag: 'wx' });
   return { root: ROOT, ownerSha256: sha(bytes) };
@@ -50,8 +60,10 @@ function verify(reference) {
   node(path.dirname(ROOT), true); const s = node(ROOT, true), bytes = read(path.join(ROOT, 'runtime-owner.json'));
   if (sha(bytes) !== reference.ownerSha256) throw Error('准备计时副本归属记录已改变。');
   const owner = JSON.parse(bytes);
+  const profile = PROFILES[owner.profile || 'sonic'];
   if (owner.schema !== 'mvp-window-preparation-runtime-v1' || owner.root !== ROOT || owner.plugin !== plugin ||
-      owner.directoryIdentity.ino !== s.ino || owner.directoryIdentity.dev !== s.dev || owner.source.itemId !== SOURCE_ID || owner.source.sha256 !== SOURCE_SHA ||
+      !profile || owner.directoryIdentity.ino !== s.ino || owner.directoryIdentity.dev !== s.dev || owner.source.itemId !== profile.id || owner.source.sha256 !== profile.sha256 ||
+      owner.expectedFrames !== undefined && owner.expectedFrames !== profile.frames || owner.verifyFrames !== undefined && owner.verifyFrames !== (owner.profile === 'hevc') ||
       JSON.stringify(owner.limits) !== JSON.stringify({ diskBytes: DISK, totalBytes: TOTAL, ramBytes: 1024 ** 3 }) ||
       JSON.stringify(Object.keys(owner.copied).sort()) !== JSON.stringify(FILES.slice().sort()) ||
       JSON.stringify(Object.keys(owner.original).sort()) !== JSON.stringify(FILES.slice().sort())) throw Error('准备计时目录、来源或预算不符。');
@@ -107,4 +119,4 @@ async function cleanup(reference, store) {
   const s = node(cacheRoot, true); if (s.ino !== dir.ino || s.dev !== dir.dev) throw Error('测试清理目录已替换。');
   for (const f of files) fs.unlinkSync(f.file); fs.rmdirSync(cacheRoot); return { removed: true, bytes, receipt };
 }
-module.exports = { create, verify, unused, mark, clear, cleanup, ROOT, SOURCE_ID, SOURCE_SHA, FILES };
+module.exports = { create, verify, unused, mark, clear, cleanup, ROOT, SOURCE_ID, SOURCE_SHA, FILES, PROFILES };

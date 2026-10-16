@@ -274,7 +274,7 @@ async function main() {
       for (const codec of ['h264', 'hevc', 'vp9']) {
         const expected = [...base];
         expected[expected.indexOf('-threads') + 1] = codec === 'vp9' ? '2' : '8';
-        expected[expected.indexOf('-filter_threads') + 1] = codec === 'h264' ? '2' : '1';
+        expected[expected.indexOf('-filter_threads') + 1] = codec === 'h264' ? '2' : codec === 'hevc' ? '4' : '1';
         assert.deepStrictEqual(Array.from(pure.ffmpegArgs(sourcePath, audio, codec)), expected);
       }
     }
