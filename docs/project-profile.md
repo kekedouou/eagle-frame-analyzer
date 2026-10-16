@@ -1,8 +1,8 @@
 # 项目说明
 
-2026-10-16当前接续：Codex已执行`node scripts/prepare-mvp-host.cjs --preparation`，同T4入口改为准备专用模式，自动3组首次→复用、只动有界隔离运行副本/缓存，不再运行window-host拖动驱动。mvp-preparation负责计量/生命周期，preparation-runtime负责副本身份/一次运行/清理；正式plugin无变更。21组模型和6项Node16/Windows文件检查通过，实际窗口待用户打开一次，见[准备结果](experiments/T4/report.md#2026-10-16-完整p-03入口准备待真实eagle运行)和[权限](experiments/T4/plan.md#2026-10-16-完整准备计时入口)。无参数prepare仍为旧拖动模式，当前不要执行；仅已核对且无缓存/started/finished的同一副本允许刷新入口，已开始的禁止重复准备/覆盖。真实窗口尚未运行，入口准备/模型不等于P-03通过。
+2026-10-16当前：7dc4fc8准备模式的真实Eagle索尼克/720p/默认1GiB三次首次＋三次复用已通过，独立审计140，首次约9～11秒、复用约2.6秒；证据/范围见[本轮结果](experiments/T4/report.md#2026-10-16-索尼克完整准备计时限定通过)。正式plugin仍21a623f。此单素材首次专项收尾，T2/T4其余矩阵/独立帧参考/长期资源缺口保留，不重测手感或本组6次。入口已一次运行完成、测试cache不存在；约225KiB副本和started/finished暂为配置入口校验及拒重复所需，切换/停用时按F规则处理。当前不要执行无参数prepare（旧拖动）或--preparation覆盖已开始历史；不把准备/模型当真实成绩，不把本次通过外推全产品。
 
-2026-10-16工作入口：首次准备专项已按正序/反序收益证据接入JPEG图片包/批量预载；新`plugin/frame-pack.cjs`仅负责纯布局校验，cache负责物理I/O/安全，media负责写帧，Player准备时批量读原JPEG，task/session/app只接线。旧完整散图继续复用、关闭交接/画质/预算不变；[A-08](architecture.md#a-08-jpeg集中存储与批量预载2026-10-16)、[T4结果与限制](experiments/T4/report.md#2026-10-16-首次准备优化jpeg集中存储与批量预载)为恢复入口。未测实际窗口完整就绪，不宣称P-03通过，不按下面历史安排重开流畅度或要求重复手测。
+2026-10-16实现入口：首次准备专项已按正序/反序收益证据接入JPEG图片包/批量预载；新`plugin/frame-pack.cjs`仅负责纯布局校验，cache负责物理I/O/安全，media负责写帧，Player准备时批量读原JPEG，task/session/app只接线。旧完整散图继续复用、关闭交接/画质/预算不变；[A-08](architecture.md#a-08-jpeg集中存储与批量预载2026-10-16)、[后端结果与限制](experiments/T4/report.md#2026-10-16-首次准备优化jpeg集中存储与批量预载)为恢复入口。完整窗口后续已在索尼克限定验证，其他素材保留缺口；不按下面历史安排重开流畅度或要求重复手测。
 
 显式专项工具`scripts/verify-preparation-pack.cjs compare [--reverse]`生成/清理自己的隔离配对缓存，`scripts/verify-packed-runtime.cjs`使用自有运行副本验证真实守护/媒体/恢复；后者的`--resume-owned`仅用于已留存且身份/内容完整匹配的本次失败，不是普通重试。两者有媒体/清理副作用，不在默认检查执行；预算、所有权及源以[T4计划](experiments/T4/plan.md#2026-10-16-首次准备专项集中存储与批量预载)为准，现有成功数据不需默认重跑。新T4入口指纹包括frame-pack；日常使用plugin，不需要重新导入或打开自动拖动入口。
 
