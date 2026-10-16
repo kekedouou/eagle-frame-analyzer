@@ -27,6 +27,7 @@ class ResourceSampler {
   [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageNameW(IntPtr handle, uint flags, StringBuilder name, ref int size);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr handle, out long creation, out long exit, out long kernel, out long user);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint milliseconds);
   [StructLayout(LayoutKind.Sequential)]
   struct MemoryCounters {
     public uint size, pageFaultCount;
@@ -49,26 +50,64 @@ class ResourceSampler {
   }
   static string Key(int pid,long ticks) { return pid+":"+ticks; }
   static string Identity(Process process) { return Key(process.Id,process.StartTime.ToUniversalTime().Ticks); }
+  // Keep the identity and exit check bound to the same kernel process object.
+  // Never turn access-denied alone into evidence of a normal exit.
+  static Exception QueryFailure(int code,string message,IntPtr handle,long expected) {
+    string state="unavailable"; int? checkError=null;
+    if(handle!=IntPtr.Zero) {
+      // A failed image query can overlap the last few milliseconds of teardown.
+      // This bounded wait confirms exit; it never retries/ignores a live denial.
+      uint result=WaitForSingleObject(handle,10);
+      if(result==0) return new InvalidOperationException("Exact process exited during observation.");
+      if(result==258) state="alive";
+      else if(result==0xffffffff) checkError=Marshal.GetLastWin32Error();
+    }
+    var failure=new Win32Exception(code,message);
+    failure.Data["exitCheck"]=state; failure.Data["startTicks"]=expected.ToString();
+    failure.Data["exitCheckErrorCode"]=checkError;
+    return failure;
+  }
+  static void Active(IntPtr handle,long expected) {
+    uint result=WaitForSingleObject(handle,0);
+    if(result==0) throw new InvalidOperationException("Exact process already exited.");
+    if(result!=258) throw QueryFailure(Marshal.GetLastWin32Error(),"Process exit query failed.",handle,expected);
+  }
+  static Exception OpenFailure(Process process,int code,string message,long expected) {
+    // No native handle was acquired. Recheck presence/creation before claiming
+    // exit; a still-live or unqueryable identity keeps the original failure.
+    var failure=QueryFailure(code,message,IntPtr.Zero,expected);
+    try { using(var current=Process.GetProcessById(process.Id)) {
+      if(current.StartTime.ToUniversalTime().Ticks!=expected) return new InvalidOperationException("Exact process identity replaced.");
+      if(current.HasExited) return new InvalidOperationException("Exact process exited before opening query handle.");
+      failure.Data["exitCheck"]="alive";
+    } } catch(ArgumentException) { return new InvalidOperationException("Exact process disappeared before opening query handle."); }
+    catch(InvalidOperationException) { return new InvalidOperationException("Exact process exited before opening query handle."); }
+    catch(Exception e) { var native=e as Win32Exception; failure.Data["exitCheckErrorCode"]=native==null ? (int?)null : native.NativeErrorCode; }
+    return failure;
+  }
   // MainModule can be null before the child's loader has initialized. Query the
   // kernel's executable identity instead, with only limited-query permission.
   static string Image(Process process) {
     long expected=process.StartTime.ToUniversalTime().Ticks;
-    var handle=OpenProcess(0x1000,false,process.Id);
-    if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"OpenProcess limited query failed.");
+    var handle=OpenProcess(0x101000,false,process.Id);
+    if(handle==IntPtr.Zero) throw OpenFailure(process,Marshal.GetLastWin32Error(),"OpenProcess query/synchronize failed.",expected);
     try {
+      Active(handle,expected);
       long creation,exit,kernel,user;
-      if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) throw new Win32Exception(Marshal.GetLastWin32Error(),"Process identity query failed.");
+      if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) throw QueryFailure(Marshal.GetLastWin32Error(),"Process identity query failed.",handle,expected);
       if(DateTime.FromFileTimeUtc(creation).Ticks!=expected) throw new InvalidOperationException("Process identity disappeared or changed.");
       var name=new StringBuilder(32768); int size=name.Capacity;
-      if(!QueryFullProcessImageNameW(handle,0,name,ref size)) throw new Win32Exception(Marshal.GetLastWin32Error(),"Process image query failed.");
+      if(!QueryFullProcessImageNameW(handle,0,name,ref size)) throw QueryFailure(Marshal.GetLastWin32Error(),"Process image query failed.",handle,expected);
       if(size<1) throw new IOException("Process image query returned an empty name.");
       return name.ToString();
     } finally { CloseHandle(handle); }
   }
-  static object Error(int pid,Exception error,string operation) {
+  static object Error(int pid,Exception error,string operation,int? parentPid=null,string startTicks=null) {
     var native=error as Win32Exception;
     return new {pid=pid,reason=error.GetType().Name,operation=operation,message=error.Message,
-      nativeErrorCode=native==null ? (int?)null : native.NativeErrorCode};
+      nativeErrorCode=native==null ? (int?)null : native.NativeErrorCode,parentPid=parentPid,
+      startTicks=error.Data["startTicks"] ?? startTicks,exitCheck=error.Data["exitCheck"] ?? "unavailable",
+      exitCheckErrorCode=error.Data["exitCheckErrorCode"]};
   }
   static Dictionary<int,int> Parents() {
     var result=new Dictionary<int,int>(); var handle=CreateToolhelp32Snapshot(2,0);
@@ -113,7 +152,7 @@ class ResourceSampler {
           }
         }
       } catch(ArgumentException) { } catch(InvalidOperationException) { }
-      catch(Exception e) { errors.Add(Error(root.pid,e,"root-identity")); }
+      catch(Exception e) { errors.Add(Error(root.pid,e,"root-identity",null,root.ticks.ToString())); }
       if(compact) statuses.Add(new object[] {CompactId(root,additions),alive});
       else statuses.Add(new {pid=root.pid,startTicks=root.ticks.ToString(),role=root.role,alive=alive});
     }
@@ -125,7 +164,7 @@ class ResourceSampler {
       try { using(var process=Process.GetProcessById(member.pid)) {
         if(Identity(process)==pair.Key) members.Add(member.pid,member); else known.Remove(pair.Key);
       } } catch(ArgumentException) { known.Remove(pair.Key); } catch(InvalidOperationException) { known.Remove(pair.Key); }
-      catch(Exception e) { errors.Add(Error(member.pid,e,"retained-identity")); }
+      catch(Exception e) { errors.Add(Error(member.pid,e,"retained-identity",null,member.ticks.ToString())); }
     }
     bool changed=true; int iterations=0;
     while(changed && ++iterations<=32) {
@@ -133,14 +172,16 @@ class ResourceSampler {
       foreach(var pair in parents) {
         if(members.ContainsKey(pair.Key) || !members.ContainsKey(pair.Value)) continue;
         var parent=members[pair.Value];
+        long? childTicks=null;
         try { using(var process=Process.GetProcessById(pair.Key)) {
           long ticks=process.StartTime.ToUniversalTime().Ticks;
+          childTicks=ticks;
           if(ticks<parent.ticks) continue;
           string image=Image(process);
           var child=new Member {pid=pair.Key,ticks=ticks,image=image,role=Role(image,parent.role),root=parent.root};
           members.Add(child.pid,child); known[Key(child.pid,child.ticks)]=child; changed=true;
         } } catch(ArgumentException) { } catch(InvalidOperationException) { }
-        catch(Exception e) { errors.Add(Error(pair.Key,e,"child-image")); }
+        catch(Exception e) { errors.Add(Error(pair.Key,e,"child-image",pair.Value,childTicks.HasValue ? childTicks.Value.ToString() : null)); }
       }
     }
     if(changed || members.Count>64 || errors.Count>64) throw new IOException("Owned process observation exceeds boundary.");
@@ -148,28 +189,27 @@ class ResourceSampler {
     foreach(var member in members.Values) {
       try { using(var process=Process.GetProcessById(member.pid)) {
         if(Identity(process)!=Key(member.pid,member.ticks)) continue;
-        var handle=OpenProcess(0x1000,false,member.pid);
+        var handle=OpenProcess(0x101000,false,member.pid);
         if(handle==IntPtr.Zero) {
           int code=Marshal.GetLastWin32Error();
-          if(process.HasExited) continue;
-          throw new Win32Exception(code,"Resource process query failed.");
+          throw OpenFailure(process,code,"Resource process query failed.",member.ticks);
         }
         try {
+          Active(handle,member.ticks);
           long creation,exit,kernel,user;
-          if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) throw new Win32Exception(Marshal.GetLastWin32Error(),"Resource time query failed.");
-          if(DateTime.FromFileTimeUtc(creation).Ticks!=member.ticks || exit!=0) continue;
+          if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) throw QueryFailure(Marshal.GetLastWin32Error(),"Resource time query failed.",handle,member.ticks);
+          if(DateTime.FromFileTimeUtc(creation).Ticks!=member.ticks) continue;
           var memory=new MemoryCounters(); memory.size=(uint)Marshal.SizeOf(typeof(MemoryCounters));
           if(!GetProcessMemoryInfo(handle,ref memory,memory.size)) {
             int code=Marshal.GetLastWin32Error();
-            if(process.HasExited) continue;
-            throw new Win32Exception(code,"Resource memory query failed.");
+            throw QueryFailure(code,"Resource memory query failed.",handle,member.ticks);
           }
           if(compact) rows.Add(new object[] {CompactId(member,additions),memory.workingSet.ToUInt64(),(kernel+user)/10000.0});
           else rows.Add(new {pid=member.pid,startTicks=member.ticks.ToString(),role=member.role,root=member.root,
             image=Path.GetFileName(member.image),imagePath=member.image,rssBytes=memory.workingSet.ToUInt64(),cpuMs=(kernel+user)/10000.0});
         } finally { CloseHandle(handle); }
       } } catch(ArgumentException) { } catch(InvalidOperationException) { }
-      catch(Exception e) { errors.Add(Error(member.pid,e,"resource-counters")); }
+      catch(Exception e) { errors.Add(Error(member.pid,e,"resource-counters",null,member.ticks.ToString())); }
     }
     if(compact) return new {schema="mvp-process-compact-v1",atMs=elapsed,sampleDurationMs=sampling.Elapsed.TotalMilliseconds,
       additions=additions,processes=rows,roots=statuses,errors=errors};

@@ -1,8 +1,8 @@
 # 项目说明
 
-当前恢复入口：stability-vp9首轮已运行并于约35分钟因监测工具child-image/Windows错误5主动中止，原件209～220、无损复算与独立审计221见[T4失败核对](experiments/T4/report.md#2026-10-16-首轮长期验证中断原因核对)。不是RAM停止线或播放器错误触发，后半段缺数据/关闭后未观察不能记泄漏或通过。先修工具退出分类、失败上下文和加载中取消判读，短验证后再准备长期；本次未改正式plugin，既有P-03/帧准确性/人工体验保留，不重测。唯一stability-scratch已started/finished失败、cache现场保留，不能直接重开/覆盖；更换入口前按F规则核对归属/占用。现余33槽不足同时按19槽预留两轮，须先核查证据容量，不自动扩容或删原件。实际两轮长期与T2/T4/MVP整体仍未通过，下方“未启动”是历史描述。
+当前恢复入口：用户授权开始后的观察器退出/加载取消/释放判读修复及无损轨迹v2已通过226完整检查、Windows短验证和Eagle Node16兼容，见[T4修复记录](experiments/T4/report.md#2026-10-16-观察器退出处理修复与短验证通过)。原失败209～221保留；旧测试媒体224、失效副本/入口225已按F规则退役，正常plugin/缓存/设置/素材/标注不改。同一T4已重新准备stability-vp9，11009B/42指纹，唯一副本未启动/无cache；用户单选索尼克、打开既有阶段4入口，自动60＋5分钟，可覆盖、暂不最小化，无重新导入/命令/重复手感。剩28槽按每轮14槽预检，不增加32MiB/255槽或删旧证据。实际长期与T2/T4/MVP未整体通过，不重测既有P-03/帧/人工体验；下方旧“现场保留/待修工具”是历史。
 
-测试模块：mvp-stability负责宿主协调，stability-runtime负责唯一stability-scratch副本及两素材归属，window-resource复用原工作循环，mvp-monitor负责短/长外部采样，long-trace负责无损有界轨迹及读取。原T4 readReceipt仍验证封装/摘要，长段用long-trace.decode还原窗口与外部原始行后按mvp-resource和window-resource趋势规则复算；旧audit-resource的T2文件入口不适用于新T4长段。14份运行副本仅worker磁盘缩至240MiB，正常plugin5GiB/偏好不动；第一轮核对后再按F规则切换--stability-hevc（索尼克＋喜多郁代），不覆盖started/finished。阶段记录、失败及清理分别引用报告，不把模型或短Windows检查当65分钟Eagle成绩。
+测试模块：mvp-stability负责宿主协调，stability-runtime负责唯一stability-scratch副本及两素材归属，window-resource复用原工作循环，mvp-monitor负责短/长外部采样，long-trace负责无损有界轨迹及读取（新写Brotli-v2，旧binary-v1保留读取）。原T4 readReceipt仍验证封装/摘要，长段用long-trace.decode还原窗口与外部原始行后按mvp-resource和window-resource趋势规则复算；旧audit-resource的T2文件入口不适用于新T4长段。14份运行副本仅worker磁盘缩至240MiB，正常plugin5GiB/偏好不动；第一轮核对后再按F规则切换--stability-hevc（索尼克＋喜多郁代），不覆盖started/finished。阶段记录、失败及清理分别引用报告，不把模型或短Windows检查当65分钟Eagle成绩。
 
 最新事实：VP9完整六次准备已通过并由205独立审计，测试cache清完；三种代表编码完整P-03专项已有结果，见[T4报告](experiments/T4/report.md#2026-10-16-vp9完整准备计时通过)。当前不重跑--preparation-vp9、HEVC或索尼克；接续只准备新后台结构的两轮60分钟＋5分钟长期证据，正式plugin保持f35fb8c，T2/T4整体未通过。下方待VP9运行描述为历史。
 

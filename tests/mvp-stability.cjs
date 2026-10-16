@@ -59,6 +59,11 @@ function fixture(settings = {}) {
   h.originalSelection = originalSelection; return h;
 }
 async function main() {
+  const release = require('./support/mvp-stability.cjs')._test.releaseObservation;
+  assert.equal(release(null).status, 'not-observed');
+  assert.equal(release({ issue: 'query failed', lastSample: { processes: [{ role: 'task-worker' }] } }).status, 'not-observed');
+  assert.equal(release({ issue: null, lastSample: { processes: [{ role: 'task-worker' }] } }).status, 'not-released');
+  assert.equal(release({ issue: null, lastSample: { processes: [{ role: 'renderer' }] } }).status, 'released');
   const normal = fixture(); await normal.start(); assert(normal.summary().passed); assert(normal.cleaned && normal.flushed && normal.stopped);
   assert.equal(normal.loads, 4); assert.equal(normal.closes, 1); assert.equal(normal.eagle.item.getSelected, normal.originalSelection);
   assert.equal(normal.driverOptions.evidenceStage, 'T4'); assert.equal(normal.monitorOptions.long, true);
@@ -72,6 +77,8 @@ async function main() {
   }
   for (const settings of [{ changed: true }, { observeFailure: true }, { groupAlive: true }, { badTrend: true }, { workIncomplete: true }, { badCleanup: true }, { saveFailure: true }]) {
     const h = fixture(settings); await h.start(); assert(!h.summary()?.passed); assert.equal(h.eagle.item.getSelected, h.originalSelection);
+    if (settings.observeFailure) assert.equal(h.summary().nativeRelease.status, 'not-observed');
+    if (settings.groupAlive) assert.equal(h.summary().nativeRelease.status, 'not-released');
   }
   const closed = fixture({ holdWarm: true }), pending = closed.start();
   while (!closed.warmPending) await flush(); const writes = closed.records.length;

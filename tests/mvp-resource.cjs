@@ -43,6 +43,10 @@ assert.strictEqual(helper.summary().peaks.pluginRssBytes, 1000);
 assert.throws(() => sample(make(0, [{ ...processRow(1, 'renderer', 1), imagePath: 'relative.exe' }])), /Invalid/);
 const incomplete = createAggregation();
 assert(incomplete.add(make(0, [], [{ pid: 1, reason: 'AccessDenied' }])).stopRequested);
+const liveDenied = createAggregation();
+assert(liveDenied.add(make(0, [processRow(1, 'renderer', 1)], [{ pid: 2, operation: 'child-image',
+  nativeErrorCode: 5, parentPid: 1, startTicks: ticks, exitCheck: 'alive', exitCheckErrorCode: null }])).stopRequested);
+assert.deepStrictEqual(liveDenied.summary().stopReasons, ['owned-observation-incomplete']);
 const cpu = createAggregation(); cpu.add(make(0, [processRow(1, 'renderer', 1, 100)]));
 assert.throws(() => cpu.add(make(100, [processRow(1, 'renderer', 1, 99)])), /counter/);
 const multicore = createAggregation(), detached = make(0, [processRow(1, 'renderer', 1, 0)]);

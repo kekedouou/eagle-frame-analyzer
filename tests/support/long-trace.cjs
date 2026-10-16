@@ -2,9 +2,9 @@
 // Test-only, lossless trace compaction. No dropped rows or rounded counters.
 const zlib = require('zlib');
 const { sample, identity, ROLES } = require('./mvp-resource.cjs');
-const MAX = Object.freeze({ catalogue: 1024, events: 10000, pendingBytes: 12 * 1024 ** 2, rawBytes: 1800 * 1024, packedBytes: 85 * 1024, chunks: 16 });
+const MAX = Object.freeze({ catalogue: 1024, events: 10000, pendingBytes: 12 * 1024 ** 2, rawBytes: 1800 * 1024, packedBytes: 90 * 1024, chunks: 11 });
 function binaryRows(rows) {
-  const bytes = []; const counters = new Map(); let previousRenderer = null;
+  const bytes = []; const counters = new Map(); let previousRenderer = null, previousNative = null;
   const uint = value => { if (!Number.isSafeInteger(value) || value < 0) throw Error('Invalid binary integer.');
     do { const digit = value % 128; value = Math.floor(value / 128); bytes.push(digit + (value ? 128 : 0)); } while (value); };
   const zig = value => uint(value >= 0 ? value * 2 : -value * 2 - 1);
@@ -22,18 +22,30 @@ function binaryRows(rows) {
   }
   const string = text => { const b = Buffer.from(text); uint(b.length); for (const byte of b) bytes.push(byte); };
   const delta = (value, prior) => typeof value === 'number' && typeof prior === 'number' && Object.is(prior + (value - prior), value);
+  function difference(value, prior) {
+    const exact = value - prior;
+    // A shorter decimal is used only if adding it restores the original bits.
+    for (const scale of [10, 10000]) { const short = Math.round(exact * scale) / scale;
+      if (Object.is(prior + short, value)) return short; }
+    return exact;
+  }
   for (const row of rows) {
     bytes.push(row[0]);
     if (row[0] === 1) {
       const r = row[1], numeric = r.filter((_, i) => i !== 1), prior = previousRenderer;
       let mask = 0; numeric.forEach((n, i) => { if (prior && delta(n, prior[i])) mask |= 1 << i; });
-      uint(mask); string(r[1]); numeric.forEach((n, i) => number(mask & 1 << i ? n - prior[i] : n)); previousRenderer = numeric;
+      uint(mask); string(r[1]); numeric.forEach((n, i) => number(mask & 1 << i ? difference(n, prior[i]) : n)); previousRenderer = numeric;
     } else {
-      number(row[1]); const c = row[2];
-      if (c && JSON.stringify(Object.keys(c).sort()) === '["elapsedMs","phase","sample"]') {
-        bytes.push(1); number(c.elapsedMs); string(c.phase); number(c.sample);
+      const c = row[2], structured = c && JSON.stringify(Object.keys(c).sort()) === '["elapsedMs","phase","sample"]';
+      const times = [row[1], structured ? c.elapsedMs : null, row[3]];
+      let mask = 0; times.forEach((value, i) => { if (previousNative && delta(value, previousNative[i])) mask |= 1 << i; });
+      uint(mask);
+      const time = i => number(mask & 1 << i ? difference(times[i], previousNative[i]) : times[i]);
+      time(0);
+      if (structured) {
+        bytes.push(1); time(1); string(c.phase); number(c.sample);
       } else { bytes.push(0); string(JSON.stringify(c)); }
-      number(row[3]); number(row[4]); uint(row[5].length);
+      time(2); previousNative = times; number(row[4]); uint(row[5].length);
       for (const p of row[5]) { uint(p[0]); const prior = counters.get(p[0]);
         const mask = (prior && delta(p[1], prior[0]) ? 1 : 0) | (prior && delta(p[2], prior[1]) ? 2 : 0);
         bytes.push(mask); number(mask & 1 ? p[1] - prior[0] : p[1]); number(mask & 2 ? p[2] - prior[1] : p[2]); counters.set(p[0], p.slice(1)); }
@@ -43,10 +55,10 @@ function binaryRows(rows) {
   }
   return Buffer.from(bytes).toString('base64');
 }
-function readBinaryRows(data, count) {
+function readBinaryRows(data, count, version) {
   if (typeof data !== 'string' || data.length > 2400 * 1024 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data) ||
       !Number.isSafeInteger(count) || count < 0 || count > MAX.events) throw Error('Invalid binary trace boundary.');
-  const b = Buffer.from(data, 'base64'), rows = [], counters = new Map(); let at = 0, priorRenderer = null;
+  const b = Buffer.from(data, 'base64'), rows = [], counters = new Map(); let at = 0, priorRenderer = null, priorNative = null;
   const byte = () => { if (at >= b.length) throw Error('Truncated binary trace.'); return b[at++]; };
   function uint() { let value = 0, factor = 1, digit;
     do { digit = byte(); value += (digit & 127) * factor; factor *= 128;
@@ -62,9 +74,14 @@ function readBinaryRows(data, count) {
       const nums = Array.from({ length: 11 }, (_, j) => { const n = number(); return mask & 1 << j ? priorRenderer[j] + n : n; });
       rows.push([1, [nums[0], phase, ...nums.slice(1)]]); priorRenderer = nums;
     } else if (type === 0) {
-      const received = number(), contextKind = byte(); if (contextKind > 1) throw Error('Invalid context kind.');
-      const context = contextKind ? { elapsedMs: number(), phase: string(), sample: number() } : JSON.parse(string());
-      const elapsed = number(), duration = number(), n = uint();
+      const mask = version === 2 ? uint() : 0;
+      if (mask > 7 || mask && !priorNative) throw Error('Invalid native delta.');
+      const time = i => { const value = number();
+        if (mask & 1 << i && (typeof value !== 'number' || typeof priorNative[i] !== 'number')) throw Error('Invalid native time delta.');
+        return mask & 1 << i ? priorNative[i] + value : value; };
+      const received = time(0), contextKind = byte(); if (contextKind > 1 || !contextKind && mask & 2) throw Error('Invalid context kind.');
+      const context = contextKind ? { elapsedMs: time(1), phase: string(), sample: number() } : JSON.parse(string());
+      const elapsed = time(2), duration = number(), n = uint(); priorNative = [received, contextKind ? context.elapsedMs : null, elapsed];
       if (n > 64) throw Error('Binary process count exceeded.'); const processes = [];
       for (let p = 0; p < n; p++) { const id = uint(), mask = byte(), prior = counters.get(id);
         if (mask > 3 || mask && !prior) throw Error('Invalid process delta.'); const rss = number(), cpu = number();
@@ -108,13 +125,18 @@ function encode(events, index) {
       n.processes.map(p => [get([p.pid, p.startTicks, p.role, p.root, p.image, p.imagePath ?? null], processes, processIds), p.rssBytes, p.cpuMs]),
       n.roots.map(p => [get([p.pid, p.startTicks, p.role], roots, rootIds), p.alive]), n.errors];
   });
-  return { schema: 'mvp-long-resource-chunk-v1', index, processes, roots, encoding: 'lossless-binary-base64-v1', events: rows.length, data: binaryRows(rows) };
+  const binary = Buffer.from(binaryRows(rows), 'base64');
+  const compressed = zlib.brotliCompressSync(binary, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } });
+  return { schema: 'mvp-long-resource-chunk-v1', index, processes, roots, encoding: 'lossless-brotli-base64-v2', events: rows.length, data: compressed.toString('base64') };
 }
 function decode(chunk) {
   if (!chunk || chunk.schema !== 'mvp-long-resource-chunk-v1' || !Array.isArray(chunk.processes) || !Array.isArray(chunk.roots) ||
-      chunk.encoding !== 'lossless-binary-base64-v1' || chunk.processes.length > MAX.catalogue || chunk.roots.length > MAX.catalogue) throw Error('Invalid long trace.');
+      !['lossless-binary-base64-v1', 'lossless-binary-base64-v2', 'lossless-brotli-base64-v2'].includes(chunk.encoding) || chunk.processes.length > MAX.catalogue || chunk.roots.length > MAX.catalogue) throw Error('Invalid long trace.');
   const get = (list, id, length) => { const p = list[id]; if (!Number.isSafeInteger(id) || !Array.isArray(p) || p.length !== length) throw Error('Invalid long trace identity.'); return p; };
-  return readBinaryRows(chunk.data, chunk.events).map(r => {
+  if (typeof chunk.data !== 'string' || chunk.data.length > 2400 * 1024 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk.data)) throw Error('Invalid binary trace boundary.');
+  const data = chunk.encoding === 'lossless-brotli-base64-v2'
+    ? zlib.brotliDecompressSync(Buffer.from(chunk.data, 'base64'), { maxOutputLength: MAX.rawBytes }).toString('base64') : chunk.data;
+  return readBinaryRows(data, chunk.events, chunk.encoding.endsWith('v2') ? 2 : 1).map(r => {
     if (r[0] === 1 && r.length === 2) { if (!Array.isArray(r[1]) || r[1].length !== 12) throw Error('Invalid renderer trace.'); return { kind: 'renderer', row: r[1] }; }
     if (r[0] !== 0 || r.length !== 8) throw Error('Invalid long trace event.');
     return { kind: 'native', receivedAtMs: r[1], context: r[2], native: sample({ schema: 'mvp-process-sample-v1', atMs: r[3], sampleDurationMs: r[4], errors: r[7],
@@ -130,7 +152,7 @@ function recorder(store) {
   function flush(all = true) {
     if (failed) throw failed;
     while (pending.length) {
-      if (chunks.length >= MAX.chunks) throw Error('长期轨迹达到本轮16槽上限，停止并保留已存记录。');
+      if (chunks.length >= MAX.chunks) throw Error('长期轨迹达到本轮11槽上限，停止并保留已存记录。');
       let count = pending.length, candidate = fits(pending);
       if (!candidate.fits) { let lo = 1, hi = count;
         while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(pending.slice(0, mid)).fits) lo = mid; else hi = mid - 1; }

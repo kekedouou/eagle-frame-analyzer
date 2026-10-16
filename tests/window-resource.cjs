@@ -159,6 +159,16 @@ async function main() {
     const f = model({ remainingBudget: true }); await api.execute(f.options, MODEL).done;
     assert(!f.saved.find(v => v.type === 'resource-summary').cleanup.verified);
   });
+  await test('load cancellation preserves its root cause and does not wait for load timeout or invent a zero budget', async () => {
+    const f = model({ hangLoad: true, missingFinalEvent: true }), job = api.execute(f.options, MODEL);
+    while (!f.inspect().reloaded) await new Promise(resolve => setImmediate(resolve));
+    job.cancel(Error('native-query-access-denied'));
+    const result = await job.done, summary = f.saved.find(v => v.type === 'resource-summary');
+    assert(!result.complete); assert.match(summary.error, /native-query-access-denied/);
+    assert.equal(summary.cleanup.closePhase, 'load'); assert.equal(summary.cleanup.budgetObservation, 'not-observed-during-load');
+    assert.equal(summary.cleanup.sessionCloseVerified, true); assert.equal(summary.cleanup.disposedBudgetBytes, null);
+    assert(!summary.cleanup.verified); assert.equal(f.inspect().observers, 0); assert.equal(f.inspect().intervals, 0);
+  });
   await test('final summary write failure preserves existing chunks and exposes a failed in-memory receipt', async () => {
     const f = model({ summarySaveFailure: true }), job = api.execute(f.options, MODEL);
     await assert.rejects(job.done, /evidence full/);

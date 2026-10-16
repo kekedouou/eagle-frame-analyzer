@@ -71,6 +71,20 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
       owned.set(fixtureExe, { bytes: bytes.length, sha256: sha(bytes), ino: stat.ino.toString(), dev: stat.dev.toString() });
     }
     if (compiled.error || compiled.status !== 0) throw new Error('Owned startup fixture compilation failed: ' + compiled.stdout + compiled.stderr);
+    write('exit-fixture.cs', fs.readFileSync(path.join(repo, 'tests/native/resource-exit-fixture.cs')));
+    const exitExe = path.join(scratch, 'native/exit-fixture.local.exe');
+    const exitBuild = spawnSync(compiler, ['/nologo', '/optimize+', '/target:exe', '/reference:System.Web.Extensions.dll',
+      '/out:' + exitExe, path.join(scratch, 'exit-fixture.cs')], { windowsHide: true, shell: false, encoding: 'utf8', timeout: 10000, maxBuffer: 32768 });
+    if (fs.existsSync(exitExe)) {
+      const bytes = fs.readFileSync(exitExe), stat = fs.lstatSync(exitExe, { bigint: true });
+      if (bytes.length > 32 * 1024 || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) throw Error('Owned exit fixture exceeds boundary.');
+      owned.set(exitExe, { bytes: bytes.length, sha256: sha(bytes), ino: stat.ino.toString(), dev: stat.dev.toString() });
+    }
+    if (exitBuild.error || exitBuild.status !== 0) throw Error('Exit fixture compilation failed: ' + exitBuild.stdout + exitBuild.stderr);
+    const exitRun = spawnSync(exitExe, [verify(), process.execPath], { windowsHide: true, shell: false, encoding: 'utf8', timeout: 15000, maxBuffer: 32768 });
+    if (exitRun.error || exitRun.status !== 0) throw Error('Real Windows exit query check failed: ' + exitRun.stdout + exitRun.stderr);
+    const exitQueries = JSON.parse(exitRun.stdout.replace(/^\uFEFF/, ''));
+    assert(exitQueries.passed && exitQueries.exitedChildren === 16);
     const fixtureEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', EVA_TEST_IDENTITY_MODULE: path.join(repo, 'plugin/process-identity.cjs') }; delete fixtureEnv.NODE_OPTIONS;
     fixture = spawn(fixtureExe, ['G:\\Assets\\Eagle\\Eagle.exe'], { env: fixtureEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     let fixtureError = ''; fixture.stderr.on('data', b => { fixtureError = (fixtureError + b.toString()).slice(-4096); });
@@ -118,7 +132,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
       complete = true;
       console.log(JSON.stringify({ schema: 'mvp-real-windows-startup-observer-check-v1', passed: startup.observer.stopReasons.length === 0 && preLoader.observer.stopReasons.length === 0,
       preLoader, startup, productCacheTouched: false, realEagleGuiExecuted: false, mediaGenerated: false,
-        scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0), limitation: 'Isolated guard/worker startup diagnostic, not real-player performance or long-run P-04.' }));
+        exitQueries, scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0), limitation: 'Isolated guard/worker startup diagnostic, not real-player performance or long-run P-04.' }));
       return;
     }
     assert.strictEqual(startup.starts.length, 8); assert(startup.workerStartsObserved >= 4, 'Startup observer must actually see workers.');
@@ -153,7 +167,7 @@ send({type:'ready',pid:process.pid,taskOwner,node:process.versions.node});
       cases: ['real-guard-worker-observed-separately', 'observer-overhead-separated', 'wrong-creation-time-excluded',
         'renderer-proxy-descendants-discovered', 'owned-task-closes-while-observer-stays-open', 'observer-before-eight-worker-starts-and-exits',
         'suspended-child-image-readable-before-mainmodule-is-available', 'real-production-identity-powershell-observed-and-budgeted'],
-      observer: result, dynamicObserver: dynamicAggregate.summary(), preLoader, startup, scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0),
+      observer: result, dynamicObserver: dynamicAggregate.summary(), preLoader, startup, exitQueries, scratchBytes: [...owned.values()].reduce((n, x) => n + x.bytes, 0),
       productCacheTouched: false, realEagleGuiExecuted: false, mediaGenerated: false,
       limitation: 'Short isolated processes, including a Node renderer proxy and eight worker startups; not real-player RSS, peak FFmpeg, long-run P-04 or performance acceptance.' }));
   } finally {

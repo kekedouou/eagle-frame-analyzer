@@ -112,11 +112,14 @@ function execute(options, protocol) {
   const timeline = doc.getElementById('timeline');
   let pointerId = 732, sampleFault = null;
   const playerFailures = [];
+  let rejectCancelled;
+  const cancelled = new Promise((_, reject) => { rejectCancelled = reject; }); cancelled.catch(() => {});
+  let closePhase = null;
   function requestClose() {
-    if (!closeJob) { disposedBudget = null; try { closeJob = Promise.resolve(options.closeSession()); } catch (error) { closeJob = Promise.reject(error); } closeJob.catch(() => {}); }
+    if (!closeJob) { closePhase = phase; disposedBudget = null; try { closeJob = Promise.resolve(options.closeSession()); } catch (error) { closeJob = Promise.reject(error); } closeJob.catch(() => {}); }
     return closeJob;
   }
-  const fail = message => { if (!issue) issue = new Error(message); requestClose(); };
+  const fail = message => { if (!issue) { issue = new Error(message); rejectCancelled(issue); } requestClose(); };
   function guard() {
     if (issue) throw issue;
     const value = bridge.snapshot();
@@ -250,7 +253,7 @@ function execute(options, protocol) {
         // Promise rejection and deadline are consumed even if the SDK callback is synchronous.
         let loadTimer;
         try {
-          await Promise.race([Promise.resolve().then(options.reloadSelected), new Promise((_, reject) => {
+          await Promise.race([cancelled, Promise.resolve().then(options.reloadSelected), new Promise((_, reject) => {
             loadTimer = win.setTimeout(() => reject(new Error('换片超过120秒。')), protocol.loadTimeoutMs);
           })]);
         } finally { win.clearTimeout(loadTimer); }
@@ -279,6 +282,8 @@ function execute(options, protocol) {
           closeTimer = win.setTimeout(() => reject(new Error('正常退出清理超过30秒，未确认释放。')), 30000);
         })]); const value = bridge.snapshot();
         cleanup = { state: value && value.state, result: result && result.status, error: result && result.error,
+          closePhase, budgetObservation: disposedBudget === null ? (closePhase === 'load' ? 'not-observed-during-load' : 'not-observed') : 'observed',
+          sessionCloseVerified: !!result && result.status === 'closed' && value && value.state === 'closed' && !value.error,
           disposedBudgetBytes: disposedBudget, verified: !!result && result.status === 'closed' && value && value.state === 'closed' && !value.error && disposedBudget === 0 };
       } catch (error) { cleanup = { verified: false, error: String(error.message).slice(0, 1024) }; }
       finally { win.clearTimeout(closeTimer); }
@@ -313,7 +318,7 @@ function execute(options, protocol) {
     } finally { store.close(); }
   }
   const done = executeRound();
-  return Object.freeze({ done, cancel() { fail('资源验证已取消。'); }, unsavedEvidence: () => unsaved,
+  return Object.freeze({ done, cancel(reason) { fail(reason ? String(reason.message || reason).slice(0, 2048) : '资源验证已取消。'); }, unsavedEvidence: () => unsaved,
     status: () => ({ phase, sample: sampleIndex, elapsedMs: recording ? now() - begin : null }) });
 }
 module.exports = { run, PROTOCOL, _test: { execute, trends, median, packRows, selections, hashSource } };

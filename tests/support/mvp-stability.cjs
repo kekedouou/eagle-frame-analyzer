@@ -1,6 +1,11 @@
 'use strict';
 // Real Eagle long workload coordinator. The normal product never imports it.
 const path = require('path');
+function releaseObservation(observed) {
+  if (!observed || observed.issue || !observed.lastSample) return { status: 'not-observed', reason: observed && observed.issue || 'no-final-sample' };
+  const remaining = observed.lastSample.processes.filter(p => !['renderer', 'observer', 'observer-child'].includes(p.role));
+  return { status: remaining.length ? 'not-released' : 'released', atMs: observed.lastSample.atMs, remaining };
+}
 function install(options) {
   const win = options.window, doc = options.document, eagle = options.eagle, h = options.helpers || {}, repo = path.resolve(__dirname, '../..');
   const runtime = h.runtime || require('./stability-runtime.cjs'), verify = h.verify || (() => require('../../scripts/prepare-mvp-host.cjs').verify());
@@ -20,7 +25,7 @@ function install(options) {
     if (!closeTask) { try { closeTask = Promise.resolve(closeCallback ? closeCallback() : { status: 'closed' }); }
       catch (e) { closeTask = Promise.reject(e); } closeTask.catch(() => {}); } return closeTask;
   }
-  function stop(error) { failed = failed || error; if (abortWait) abortWait(failed); if (driver) driver.cancel(); if (started) closeProduct().catch(() => {}); }
+  function stop(error) { failed = failed || error; if (abortWait) abortWait(failed); if (driver) driver.cancel(failed); if (started) closeProduct().catch(() => {}); }
   function cancel() {
     if (closing) return; closing = true; if (abortWait) abortWait(Error('user-requested-close'));
     if (driver) driver.cancel(); if (monitor) monitor.stop(); restore(); if (store) store.close();
@@ -75,7 +80,7 @@ function install(options) {
           !runCallback || !closeCallback) throw Error('长期宿主入口/SDK回调不完整。');
       owner = runtime.unused(reference);
       store = (h.createStore || require('./t4-evidence.cjs').createStore)(repo);
-      reservation = store.start({ reserveBytes: 19 * 128 * 1024 });
+      reservation = store.start({ reserveBytes: (traceApi.MAX.chunks + 3) * 128 * 1024 });
       const capture = h.capture || (() => require('../../plugin/eagle.cjs').captureSelected(eagle));
       const actual = await capture(); check();
       if (actual.itemId !== owner.sources[0].id || actual.filePath !== owner.sources[0].filePath) throw Error('请单选“索尼克”，关闭本窗口后再打开；本轮未启动。');
@@ -150,13 +155,13 @@ function install(options) {
       try {
         if (trace) trace.flush();
         const nativeTrend = resource._test.trends(nativeRows), traceState = trace && trace.summary();
-        const released = !!(observed && observed.lastSample && observed.lastSample.processes.every(p => ['renderer', 'observer', 'observer-child'].includes(p.role)));
+        const nativeRelease = releaseObservation(observed), released = nativeRelease.status === 'released';
         const complete = !!(outcome && outcome.complete && !error && !failed && observed && !observed.issue && !observed.observer.stopReasons.length && observed.observer.samples >= 39000 && released && cleanup && cleanup.removed && traceState && !traceState.pendingEvents);
         const passed = complete && outcome.resourceGatePassed && nativeTrend.passed;
         const receipt = store.save('host', { schema: 'mvp-stability-summary-v1', runId: reservation.runId, reference, profile: owner && owner.profile,
           complete, passed, error: error || failed && failed.message || observed && observed.issue, sourceHashes: prepared && prepared.marker.sourceHashes,
           sources: owner && owner.sources, workload: outcome && outcome.summary, observer: observed && observed.observer, nativeTrend,
-          trace: traceState, nativeGroupReleased: released, cleanup, userObservations: 'not-recorded', overallT2Accepted: false, overallT4Accepted: false,
+          trace: traceState, nativeGroupReleased: released, nativeRelease, cleanup, userObservations: 'not-recorded', overallT2Accepted: false, overallT4Accepted: false,
           limitations: ['Two different approved two-source sets require two independent launches; one run cannot close P04.',
             'Native scope/phase context is sampled at renderer receipt, not the exact native counter read; 100ms samples may miss peaks.',
             'The same production player runs in Eagle with test-only fixed SDK snapshots and a copied 240MiB disk runtime; real Eagle selection and normal cache are unchanged.',
@@ -169,4 +174,4 @@ function install(options) {
   }
   return Object.freeze({ cancel, status: () => ({ started, closing, finished, failed: failed && failed.message }) });
 }
-module.exports = { install };
+module.exports = { install, _test: { releaseObservation } };

@@ -1,5 +1,21 @@
 # 阶段4验收执行记录
 
+## 2026-10-16 观察器退出处理修复与短验证通过
+
+用户在221失败核对后授权“开始”。只修测试工具，正式plugin无改动，原默认1GiB/128MiB、720p/q3、插件集合1.5GiB/FFmpeg独立1GiB及两轮60＋5协议不变。resource-sampler以query＋synchronize句柄绑定实际进程，在查询前检查存活，失败后最多等10ms确认同一对象已退出；未能打开句柄则复核存在/创建身份，仍活着或无法核实仍保留原错误。Error新增parentPid/startTicks/exitCheck/exitCheckErrorCode，不把访问拒绝本身当退出；所有留存errors仍失败，旧格式语义不变。
+
+window-resource在换片等待中也立即响应取消，保留传入根因，解除监听/采样定时器；最终disposed缺失不填0，单列sessionCloseVerified、closePhase及budgetObservation。mvp-stability新增nativeRelease=released/not-released/not-observed；观察已经中止时按not-observed解释旧nativeGroupReleased=false，不称已证实泄漏或关不掉。正常完整通过仍要求closed＋实际账本0＋健康观察到后台退出，不放宽关卡。
+
+容量复核发现旧v1真实35分钟轨迹外推65分钟约17.53/16槽，存在第二个工具阻塞。long-trace新增精确时间差＋Brotli v2，旧v1读取保留；没有丢行/降采样/舍入。原32MiB/255槽/单槽128KiB不变，使用每段≤90KiB外层gzip、每轮最多11轨迹＋3辅助槽，减少预留。写入端、读取端及边界见[修复计划](plan.md#2026-10-16-长期观察中断修复)；不把压缩优化算作播放器提速。
+
+[最终检查226](../../../verification-runs/t4/slot-226/record.json)，SHA `5ff928de5e62bc5eb897056b3af459102fd098ade870f93a764d7f428a366553`：完整默认检查通过；Eagle Node16.17.1的协调、20项工作循环、资源分析、监测、压缩兼容检查通过。真实Windows8类既有guard/worker/启动/关闭观察及新增16个自有子程序正常退出通过，注入存活拒绝/无句柄/不同创建身份仍正确分类；真实受保护进程未尝试，不宣称重现原PID21612的具体错误5。最终采样构建27136B，源码SHA `8a085cc3e71d2e27805cd447b5def25478012425cd9560b6d80f53f76ab7907a`，exe SHA `1d86e9e5542e501196ac961a7dd0a9426d6ee9d6efd03b8fc90faf8a836e0ef7`；隔离53409B短验证产物已清，resource-scratch不存在。中间222/223构建验证记录原样保留，不将它们冒充最终源码或Eagle长测。
+
+226还保留了旧210～219全部轨迹的有界读取和时间平移容量模型：39000条native＋38641条renderer，共77641行，经11/11槽保存/读取原样一致，外层gzip969324B、无待写行；CPU/阶段重复是人为构造，只验证尺寸和还原，不算长期资源验收。原浮点/创建身份/错误上下文与固定v1旧载荷均回归；另一39200＋39200合成计量模型8/11槽。未来任意数据熵、进程短峰值及真实长期仍有边界，不保证任意轨迹都压得下。
+
+[媒体清理224](../../../verification-runs/t4/slot-224/record.json)，SHA `de16bef16b6609ff52db0faf44b2d0cad7116b98fe44d72a5ce79853853870a1`：核对失败标记/原源全SHA、两份缓存归属、0 lease/无writer及旧窗口/后台PID不存在后，清掉自身媒体和4134B清理账本，cache目录不存在。[失效副本退役225](../../../verification-runs/t4/slot-225/record.json)，SHA `564acbf31c4e65eb33e3745162f95d83c8252289f3460a304bf630c5272feff4`：保存owner/started/finished/prepared内容及逐文件身份/SHA清单后定点移除21文件238139B；209～223原件、源视频、标注、正常缓存/偏好均保留。一次内联CommonJS命令误用顶层await在解析前失败，未执行清理/写记录；改为async封装后完成，已写226，不隐去这项工具操作错误。
+
+同一T4目录/ID已重新准备stability-vp9，11009B/42来源指纹，唯一新运行副本尚未启动、无cache/started/finished。检查后余28槽，可覆盖两轮14槽预检；不再消耗额外无关记录。用户仅需Eagle单选索尼克、打开既有“视频分析 · 阶段4验收”，自动60分钟＋静置5分钟；可被其他应用覆盖，暂不最小化/操作/关闭。无需重新导入、命令或重复手感测试。**修复及本地短验证通过，真实长期尚未重跑，P-04/T2/T4/MVP整体未通过。**
+
 ## 2026-10-16 首轮长期验证中断原因核对
 
 用户报告“记录已保存，分析未通过原因”。Codex只读核对真实Eagle启动209、轨迹210～219、汇总220及一次完成标记，未重跑Eagle或修改播放器。汇总220 SHA `b4162f7fdcb704ea36077fda2edcab5234359ae4b81f82876905ca8289262cf1`；[独立失败审计221](../../../verification-runs/t4/slot-221/record.json) SHA `d18628c9a6d748784c155b96efa19a255f7110ae31061382414e87c656689c7f`，保留所有原件。全部封装/SHA和无损轨迹读取通过，复算21023条外部、20739条窗口数据，共41762条，与汇总及两类趋势、峰值完全一致，无待保存行、记录超额或证据丢失。
