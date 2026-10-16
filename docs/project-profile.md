@@ -1,5 +1,7 @@
 # 项目说明
 
+当前恢复点：R2候选包来源b3bc597，ZIP/独立解压/真实自有Windows后台启动通过248/249；等待用户唯一必要的Eagle包加载体验。独立目录为dist/install-check-0.1.0-beta.2-中文 空格下的eagle-video-analysis-0.1.0-beta.2-win-x64，入口“视频分析 · MVP Beta”，不是旧T4测量入口。不要再build覆盖包或重新测量；只读核对用package-release的verify/verify-install。结果、SHA、范围与R3历史路径待确认见[当前发布记录](releases/v0.1.0-beta.2.md#r2当前实际验证与交接)。当前没有新标签/推送/Release，正常缓存/设置/素材只读。
+
 Beta2构建入口：`node scripts/package-release.cjs build|verify|extract|verify-install`，实际执行时选一个子命令，不直接输入竖线。build仅干净已提交来源，白名单21运行文件＋README/CHANGELOG/BUILD-INFO，目录/ZIP各≤2MiB；包与独立解压根均在dist，不覆盖既有包/数据。verify核对逐项ZIP/摘要/依赖；extract仅新建独立中文/空格目录，verify-install仅核对不可变运行文件与本机守护，不把它记作Eagle通过。旧package-beta只核验历史Beta1。原自有Windows技术验证脚本的Eagle程序位置改由本机环境EVA_EAGLE_EXECUTABLE明确提供（只影响开发工具）；这些命令不会自动运行，路径不进入公开代码。`scripts/audit-publication.cjs`只读检查当前内容与待推对象，不输出匹配秘密原文；扫描报警不是自动清除许可。
 
 2026-10-16当前阶段为R2：用户确认以0.1.0-beta.2预发行收尾，既有长期资源/全矩阵限制保留。发布准备及恢复看[Beta2记录](releases/v0.1.0-beta.2.md)，本轮不开发功能、不自动授权R3推送。旧绿色版Release已按用户要求转草稿并匿名核对撤下下载，源码标签/历史保留。旧T4短资源入口已完成，不再重复运行。新包独立解压/Eagle加载尚待验证；许可证未指定。
