@@ -71,7 +71,7 @@ function validateRuntime(files) {
   return { runtimeFiles: RUNTIME.length, dependenciesChecked: true, guardVerified: true };
 }
 function ps(source, extra = {}) {
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; " + source], {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; " + source], {
     cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: 30000, maxBuffer: 1024 ** 2,
     env: { ...process.env, EVA_RELEASE_FOLDER: folder, EVA_RELEASE_ZIP: zip, EVA_RELEASE_NAME: NAME, EVA_RELEASE_INSTALL: installParent, ...extra }
   });
@@ -128,6 +128,7 @@ function build() {
   files['BUILD-INFO.json'] = Buffer.from(JSON.stringify(info, null, 2) + '\n');
   assert(Object.values(files).reduce((n, b) => n + b.length, 0) <= LIMIT);
   for (const [n, b] of Object.entries(files)) if (/\.(?:js|cjs|cs|json|html|css|md|exe)$/.test(n)) scanText(b, n);
+  assert.equal(ps('Write-Output ([IO.Compression.ZipArchiveMode]::Create.ToString())'), 'Create', 'Archive support unavailable; no output created.');
   fs.mkdirSync(folder); fs.mkdirSync(path.join(folder, 'native'));
   for (const name of NAMES) fs.writeFileSync(path.join(folder, name), files[name], { flag: 'wx' });
   ps(`Add-Type -AssemblyName System.IO.Compression.FileSystem;
