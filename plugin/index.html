@@ -25,9 +25,9 @@
         </div>
         <div class="controls">
           <button id="play" type="button" title="播放 / 暂停（空格）" disabled>播放</button>
-          <button id="previous" type="button" title="上一帧" disabled>上一帧</button>
-          <button id="next" type="button" title="下一帧" disabled>下一帧</button>
-          <span class="time-readout"><output id="currentTime">0:00.000</output><span class="muted"> / </span><output id="duration">0:00.000</output></span>
+          <button id="previous" type="button" title="上一帧（【 / [）" disabled>上一帧</button>
+          <button id="next" type="button" title="下一帧（】 / ]）" disabled>下一帧</button>
+          <span class="time-readout"><output id="frameReadout" class="frame-readout">帧：—</output><span><output id="currentTime">0:00.000</output><span class="muted"> / </span><output id="duration">0:00.000</output></span></span>
         </div>
       </div>
     </section>

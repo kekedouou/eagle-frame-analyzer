@@ -39,7 +39,7 @@ function verify(checkSources = true, allowPrevious = false) {
   if (marker.schema !== 'mvp-host-prepared-v1' || marker.hostRoot.toLowerCase() !== host.toLowerCase() || marker.pluginRoot.toLowerCase() !== plugin.toLowerCase() ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
       !validSources(marker.sourceHashes, !checkSources && allowPrevious)) throw new Error('Unknown MVP entry ownership.');
-  if (!['performance', 'preparation'].includes(marker.mode || 'performance')) throw new Error('Unknown MVP entry mode.');
+  if (!['performance', 'preparation', 'experience'].includes(marker.mode || 'performance')) throw new Error('Unknown MVP entry mode.');
   let bytes = read(path.join(host, 'prepared.local.json')).length;
   for (const name of OUTPUTS) { const b = read(path.join(host, name)); bytes += b.length; if (sha(b) !== marker.files[name]) throw new Error('Prepared MVP entry modified.'); }
   if (bytes > 256 * 1024 || checkSources && JSON.stringify(sourceHashes()) !== JSON.stringify(marker.sourceHashes)) throw new Error('MVP entry source fingerprints changed; reprepare required.');
@@ -48,7 +48,7 @@ function verify(checkSources = true, allowPrevious = false) {
   return { host, plugin, marker, bytes };
 }
 function prepare(mode = 'performance') {
-  if (!['performance', 'preparation'].includes(mode)) throw new Error('Explicit performance/preparation entry required.');
+  if (!['performance', 'preparation', 'experience'].includes(mode)) throw new Error('Explicit performance/preparation/experience entry required.');
   const previous = ['prepared.local.json', ...OUTPUTS].some(n => fs.existsSync(path.join(host, n))) ? verify(false, true) : null;
   const hashes = sourceHashes(), manifest = JSON.parse(read(path.join(plugin, 'manifest.json')));
   manifest.id = 'EVAMVPACCEPT20261015'; manifest.name = '视频分析 · 阶段4验收'; manifest.logo = '/logo.local.png'; manifest.main.url = 'index.local.html';
@@ -59,7 +59,7 @@ function prepare(mode = 'performance') {
     html = html.replace(token, attribute + '="' + pathToFileURL(path.join(plugin, name)).href + '?verify=' + hashes['plugin/' + name] + '"');
   }
   html = html.replace(/(<script src="[^"\n]*\/app\.js\?verify=[^"\n]+"><\/script>)/,
-    '<script src="bootstrap.js"></script>\n  $1').replace('<title>视频分析</title>', '<title>阶段4验收 · 视频分析</title>');
+    '<script src="bootstrap.js"></script>\n  $1').replace('<title>视频分析</title>', mode === 'experience' ? '<title>阶段4体验 · 视频分析</title>' : '<title>阶段4验收 · 视频分析</title>');
   if (!html.includes('src="bootstrap.js"')) throw new Error('Formal app entry missing.');
   const files = { 'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2)), 'index.local.html': Buffer.from(html),
     'logo.local.png': read(path.join(plugin, 'logo.png')) };
@@ -77,7 +77,7 @@ function prepare(mode = 'performance') {
   for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(host, name), bytes, fs.existsSync(path.join(host, name)) ? {} : { flag: 'wx' });
   return verify();
 }
-if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && args.join(' ') !== '--preparation') throw Error('Use no arguments or --preparation.');
-  const result = prepare(args.length ? 'preparation' : 'performance'); console.log(JSON.stringify({ host, manifest: path.join(host, 'manifest.json'), mode: result.marker.mode, bytes: result.bytes,
+if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--experience'].includes(args.join(' '))) throw Error('Use no arguments, --preparation or --experience.');
+  const result = prepare(args.length ? args[0].slice(2) : 'performance'); console.log(JSON.stringify({ host, manifest: path.join(host, 'manifest.json'), mode: result.marker.mode, bytes: result.bytes,
   loadedInEagle: false, metricsExecuted: false })); } catch (e) { console.error(e.stack); process.exitCode = 1; } }
 module.exports = { prepare, verify, sourceHashes, SOURCE_FILES, _test: { validSources } };

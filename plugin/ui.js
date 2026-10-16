@@ -24,9 +24,17 @@
     // This custom timeline has no native Space action; other controls retain theirs.
     return !control || control === timeline;
   }
+  function frameStepKey(event) {
+    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return 0;
+    const target = event.target;
+    if (target && (target.isContentEditable || typeof target.closest === 'function' && target.closest('input,textarea,select,[contenteditable],[role="textbox"]'))) return 0;
+    if (event.code === 'BracketLeft' || event.key === '[' || event.key === '【') return -1;
+    if (event.code === 'BracketRight' || event.key === ']' || event.key === '】') return 1;
+    return 0;
+  }
   function createUI(options = {}) {
     const doc = options.document || document, win = options.window || window, now = options.now || (() => performance.now());
-    const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'sourceName', 'memoryUsage', 'status', 'error', 'retry',
+    const ids = ['picture', 'notice', 'timeline', 'progress', 'thumb', 'timeHint', 'play', 'previous', 'next', 'currentTime', 'duration', 'frameReadout', 'sourceName', 'memoryUsage', 'status', 'error', 'retry',
       'commentMarkers', 'commentList', 'commentStatus', 'commentAdd', 'commentEditor', 'commentTime', 'commentText', 'commentSave', 'commentCancel',
       'memoryMiB', 'memoryApply', 'memoryAllowance', 'memoryStatus', 'cacheClearOther', 'cacheClearStatus'];
     const el = Object.fromEntries(ids.map(id => [id, doc.getElementById(id)]));
@@ -144,6 +152,11 @@
     on(el.next, 'click', () => { if (interactive()) { clearHint(); invoke(() => session.step(1)); } });
     on(el.retry, 'click', () => { if (session) invoke(() => session.retry()); });
     on(win, 'keydown', event => {
+      const delta = frameStepKey(event);
+      if (delta) {
+        if (interactive() && !gesture) { event.preventDefault(); clearHint(); invoke(() => session.step(delta)); }
+        return;
+      }
       if (!spaceAllowed(event, el.timeline)) return;
       event.preventDefault(); if (interactive() && !gesture && ['paused', 'playing'].includes(state.state)) { clearHint(); invoke(() => session.toggle()); }
     });
@@ -215,6 +228,9 @@
       attribute('aria-disabled', String(!ready)); attribute('aria-valuemax', String(state.duration || 0));
       attribute('aria-valuenow', String(time)); attribute('aria-valuetext', formatTime(time));
       set(el.currentTime, 'textContent', formatTime(time)); set(el.duration, 'textContent', formatTime(state.duration));
+      const ordinal = state.playback && state.playback.frameOrdinal, count = state.playback && state.playback.frameCount;
+      set(el.frameReadout, 'textContent', Number.isSafeInteger(ordinal) && ordinal >= 0 && Number.isSafeInteger(count) && ordinal < count
+        ? '第 ' + (ordinal + 1) + ' / ' + count + ' 帧' : '帧：—');
       set(el.sourceName, 'textContent', state.source ? state.source.name : '未载入视频');
       const messages = { empty: '等待素材', preparing: '正在准备视频', paused: '已暂停', playing: '播放中', seeking: '正在定位', error: '无法继续', closed: '已关闭' };
       const progress = state.progress && Number.isSafeInteger(state.progress.frames) ? '（' + state.progress.frames + ' 帧）' : '';

@@ -159,6 +159,17 @@ function ratioSeconds(value) {
   const seconds = Number(value.n / value.d) + Number(value.n % value.d) / Number(value.d);
   if (!Number.isFinite(seconds)) fail('相对媒体时间无法表示。', 'MEDIA_TIME'); return seconds;
 }
+function resolveVideoEnd(end, lastFrame, decodedTimeBase, durationTicks) {
+  const last = ratio(lastFrame.ptsTicks, decodedTimeBase), declared = ratio(end.lastFrameEndTicks, end.timeBase);
+  if (ratioCompare(declared, last) > 0) return { ...end, method: 'source start_pts + duration_ts, converted with rational time bases' };
+  // Some MP4 edit/duration metadata ends before its final decoded presentation.
+  // Only the decoder's explicit final duration may repair it; never infer FPS,
+  // repeat the previous interval, drop a frame, or silently add an epsilon.
+  if (typeof durationTicks !== 'string' || !/^\d+$/.test(durationTicks) || BigInt(durationTicks) <= 0n)
+    fail('文件记录的结束时间早于末帧，且末帧没有可确认的时长，无法准确定位。', 'MEDIA_VIDEO_TIME');
+  return { ...end, timeBase: decodedTimeBase, lastFrameEndTicks: String(BigInt(lastFrame.ptsTicks) + BigInt(durationTicks)),
+    method: 'decoded final PTS + explicit decoded frame duration (stream boundary inconsistent)' };
+}
 function streamRatio(stream, field, fallback) {
   const integer = stream[field], base = String(stream.time_base || '').split('/').map(Number);
   if (integer != null && /^-?\d+$/.test(String(integer)) && base.length === 2 && base.every(value => Number.isSafeInteger(value) && value > 0)) {
@@ -290,7 +301,7 @@ async function build(job, tools, tx, source, probe, frameIndex) {
   const end = videoEnd(probe), hasAudio = probe.streams.some(value => value.codec_type === 'audio'),
     args = ffmpegArgs(source.filePath, hasAudio, probe.streams.find(value => value.codec_type === 'video').codec_name);
   const { child, finish } = childProcess(job, tools.ffmpeg, args, ['ignore', 'pipe', 'pipe', hasAudio ? 'pipe' : 'ignore'], true);
-  const parser = new JpegParser(), files = [], pts = []; let timeBase = null, audioFirst = null, stderrBytes = 0, pending = '', tail = '';
+  const parser = new JpegParser(), files = [], pts = []; let timeBase = null, lastDurationTicks = null, audioFirst = null, stderrBytes = 0, pending = '', tail = '';
   function line(value) {
     if (value.includes('showinfo@v')) {
       const base = /config in time_base:\s*(\d+)\/(\d+)/.exec(value); if (base) timeBase = [Number(base[1]), Number(base[2])];
@@ -298,6 +309,8 @@ async function build(job, tools, tx, source, probe, frameIndex) {
       if (frame) {
         if (!Number.isSafeInteger(Number(frame[1])) || Number(frame[1]) !== pts.length) fail('源帧编号或时间顺序不完整。', 'MEDIA_PTS');
         pts.push({ id: Number(frame[1]), ptsTicks: frame[2] });
+        const duration = /\bduration:\s*(-?\d+)(?:\s|$)/.exec(value);
+        lastDurationTicks = duration ? duration[1] : null;
       }
     }
     if (value.includes('ashowinfo@a') && audioFirst === null) { const first = /n:\s*0\s+pts:\s*(-?\d+)\s+pts_time:/.exec(value); if (first) audioFirst = first[1]; }
@@ -337,7 +350,8 @@ async function build(job, tools, tx, source, probe, frameIndex) {
   for (const result of results) if (result.status === 'rejected') throw result.reason;
   if (exit.error || exit.code !== 0) throw exit.error || Object.assign(new Error('视频缓存生成失败：' + tail), { code: 'MEDIA_FFMPEG_EXIT' });
   if (!timeBase || !pts.length || pts.length !== files.length || parser.buffer.length) fail('预览图片与源帧时间索引不完整。', 'MEDIA_INCOMPLETE');
-  const indexed = frameIndex.buildIndex(pts.map((value, i) => ({ ...value, ...files[i] })), { timeBase, lastFrameEndTicks: end.lastFrameEndTicks, endTimeBase: end.timeBase });
+  const resolvedEnd = resolveVideoEnd(end, pts[pts.length - 1], timeBase, lastDurationTicks);
+  const indexed = frameIndex.buildIndex(pts.map((value, i) => ({ ...value, ...files[i] })), { timeBase, lastFrameEndTicks: resolvedEnd.lastFrameEndTicks, endTimeBase: resolvedEnd.timeBase });
   let mediaAudio = results[1].value;
   if (mediaAudio) {
     if (audioFirst === null) fail('解码后的音频时间原点缺失。', 'MEDIA_AUDIO_TIME');
@@ -350,7 +364,7 @@ async function build(job, tools, tx, source, probe, frameIndex) {
     width: 1280, height: 720, duration, frames: indexed.frames, audio: mediaAudio, ...(packedFrames ? { framePack: packedFrames } : {}),
     metrics: { reused: false, generationMs: exit.metrics.totalMs, tool: exit.metrics, singleVideoDecode: true, args,
       sourceVideoOrigin: ratioSeconds(ratio(indexed.originPtsTicks, timeBase)),
-      lastFrameEnd: 'source start_pts + duration_ts, converted with rational time bases',
+      lastFrameEnd: resolvedEnd.method, declaredVideoEndTicks: end.lastFrameEndTicks, declaredVideoTimeBase: end.timeBase,
       audioMapping: 'first decoded/resampled audio PTS minus first displayed video PTS',
       frameBytes: files.reduce((sum, value) => sum + value.bytes, 0), audioBytes: mediaAudio ? mediaAudio.bytes : 0, stderrBytes } };
   frameIndex.validateIndex(info); info.metrics.decodedMediaSpanSeconds = validateDecodedSpan(info); return info;
@@ -433,4 +447,4 @@ function createMedia(options) {
   return Object.freeze({ prepare });
 }
 module.exports = { createMedia, LIMITS,
-  _test: { boundedAdd, snapshotCopy, JpegParser, patchWav, videoEnd, validateProbe, validateDecodedSpan, ffmpegArgs, ratioSeconds, ratioSubtract, ratio } };
+  _test: { boundedAdd, snapshotCopy, JpegParser, patchWav, videoEnd, resolveVideoEnd, validateProbe, validateDecodedSpan, ffmpegArgs, ratioSeconds, ratioSubtract, ratio } };

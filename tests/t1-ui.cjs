@@ -29,6 +29,29 @@ function harness() {
   ui.bindSession(session); ui.update(state);
   return { ui, el: id => doc.getElementById(id), win, calls, state, doc };
 }
+test('Bracket shortcuts step globally, repeat safely, and protect text, composing and modifier input', () => {
+  const h = harness();
+  for (const [values, delta] of [[{ code: 'BracketLeft', key: '[' }, -1], [{ key: '】' }, 1], [{ key: '【', repeat: true }, -1], [{ code: 'BracketRight', key: ']' }, 1]]) {
+    const event = h.win.fire('keydown', { ...values, target: h.el('next') });
+    assert(event.prevented); assert.deepStrictEqual(h.calls[h.calls.length - 1], ['step', delta]);
+  }
+  const before = h.calls.length;
+  for (const values of [{ isComposing: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { metaKey: true },
+    { target: target('textarea') }, { target: target('input') }, { target: { isContentEditable: true } }])
+    h.win.fire('keydown', { code: 'BracketLeft', key: '[', ...values });
+  assert.strictEqual(h.calls.length, before);
+  h.ui.update({ ...h.state, state: 'preparing' }); h.win.fire('keydown', { key: ']' }); assert.strictEqual(h.calls.length, before);
+  h.ui.destroy(); h.win.fire('keydown', { key: '[' }); assert.strictEqual(h.calls.length, before);
+});
+test('Frame readout uses the actually displayed ordinal, not pending time, IDs or average FPS', () => {
+  const h = harness();
+  h.ui.update({ ...h.state, playback: { time: 2, frameId: 900, frameOrdinal: 5, frameCount: 56 } });
+  assert.strictEqual(h.el('frameReadout').textContent, '第 6 / 56 帧');
+  h.ui.update({ ...h.state, state: 'seeking', playback: { time: 2, frameId: 900, frameOrdinal: 5, frameCount: 56, targetFrameId: 999 } });
+  assert.strictEqual(h.el('frameReadout').textContent, '第 6 / 56 帧');
+  h.ui.update({ ...h.state, state: 'empty', playback: null }); assert.strictEqual(h.el('frameReadout').textContent, '帧：—');
+  h.ui.destroy();
+});
 test('Time formatting rounds presentation only; pointer mapping clamps actual track bounds', () => {
   assert.strictEqual(formatTime(4.2509), '0:04.250'); assert.strictEqual(formatTime(61), '1:01.000');
   assert.strictEqual(pointerTime(50, { left: 100, width: 200 }, 10), 0);

@@ -281,6 +281,31 @@ async function run() {
     assert.equal((await h.settle(h.player.seek(0.7, { final: true, kind: 'release' }))).status, 'reused');
     assert.equal(h.reads.get('sample:f8.jpg'), 1); assert(h.player.snapshot().activeImageTasks <= 2); await h.close();
   });
+  await check('paused stepping warms both adjacent sides, follows direction and reports actual source ordinal', async () => {
+    const h = harness(); await h.load(sample('both', null, 40));
+    await h.settle(h.player.seek(2, { final: true }));
+    for (let n = 0; n < 10; n++) await h.frame();
+    assert.equal(h.reads.get('both:f19.jpg'), 1, 'Previous frame must be ready before backwards input.');
+    assert.equal(h.reads.get('both:f21.jpg'), 1);
+    const start = h.events.length;
+    for (const [delta, ordinal] of [[-1, 19], [-1, 18], [1, 19], [1, 20]]) {
+      const result = await h.settle(h.player.step(delta));
+      assert.equal(result.frameId, ordinal); assert.equal(h.player.snapshot().frameOrdinal, ordinal);
+      assert.equal(h.player.snapshot().frameCount, 40);
+    }
+    assert(h.events.slice(start).filter(e => e.type === 'ready' && e.phase === 'effective-target-available').every(e => e.cacheHit));
+    assert(h.maxDecodes() <= 2); await h.close();
+  });
+  await check('rapid repeated step and reversal accumulate latest ordinal without a late image overwrite', async () => {
+    const h = harness(); await h.load(sample()); const gate = h.gate(10);
+    const jump = h.player.seek(1, { final: true }); await flush();
+    const first = h.player.step(1), second = h.player.step(1), reverse = h.player.step(-1);
+    assert.equal((await h.settle(reverse)).frameId, 11);
+    gate.resolve(); await flush(); await h.frame();
+    assert.equal(h.player.snapshot().frameOrdinal, 11);
+    assert.equal((await jump).status, 'superseded'); assert.equal((await first).status, 'superseded'); assert.equal((await second).status, 'superseded');
+    assert(!h.events.some(e => e.type === 'draw' && e.frameId === 10)); await h.close();
+  });
   await check('injected slow service finishes obsolete decodes for bounded reuse without drawing them', async () => {
     const h = harness(); await h.load(sample()); h.player.setDecodeDelay(60);
     const first = h.player.seek(0.7, { kind: 'rapid' }); await flush();

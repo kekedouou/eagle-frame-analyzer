@@ -1,0 +1,11 @@
+'use strict';
+const assert = require('assert'), { compare } = require('./support/frame-reference.cjs'), index = require('../plugin/frame-index.cjs');
+const built = index.buildIndex([100, 100, 120, 175].map((p, n) => ({ id: 90 + n * 10, ptsTicks: String(p), timeBase: [1, 100], file: n + '.jpg', bytes: 10 })), { lastFrameEndTicks: '200' });
+const info = { ...built, duration: built.videoDuration }, probe = { streams: [{ time_base: '1/1000' }], frames: [1000, 1000, 1200, 1750].map(pts => ({ pts, duration: 250 })) };
+assert(compare(info, probe).passed);
+assert.throws(() => compare(info, { ...probe, frames: probe.frames.slice(0, -1) }), /count/);
+assert.throws(() => compare(info, { ...probe, frames: probe.frames.map((f, i) => i === 2 ? { ...f, pts: f.pts + 1 } : f) }), /differ/);
+assert.throws(() => compare(info, { ...probe, frames: probe.frames.map((f, i) => i === 0 ? { pts: 9007199254740992 } : f) }), /Unsafe/);
+const fraction = index.buildIndex([0, 44, 89].map((p, n) => ({ id: n, ptsTicks: String(p), timeBase: [1, 30], file: n + '.jpg', bytes: 10 })), { lastFrameEndTicks: '90' });
+assert(compare({ ...fraction, duration: fraction.videoDuration }, { streams: [{ time_base: '1/30' }], frames: [0, 44, 89].map(pts => ({ pts })) }).passed);
+console.log('frame-reference: count, exact rational times, duplicate instants, all step/boundary queries and unsafe timestamps checked; no actual media or Eagle.');

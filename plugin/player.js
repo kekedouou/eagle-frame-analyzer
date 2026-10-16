@@ -104,6 +104,7 @@
     snapshot() {
       const ledger = this.budget.snapshot(), frame = this.info && this.currentIndex !== null ? this.info.frames[this.currentIndex] : null;
       return { state: this.state, time: this.time, frameId: frame ? frame.id : null, frameOrdinal: this.currentIndex,
+        frameCount: this.info ? this.info.frames.length : 0,
         targetTime: this.targetTime, targetFrameId: this.info && this.target ? this.info.frames[this.target.index].id : null,
         pendingTargets: this.target && this.target.resolve ? 1 : 0, activeImageTasks: this.tasks.size,
         cacheBytes: ledger.used, cachePeakBytes: ledger.peak, budget: ledger, audioAvailable: !!this.audioBuffer,
@@ -191,6 +192,7 @@
       let target;
       const promise = new Promise(resolve => { target = { index: ordinal, frameId: frame.id, epoch, targetTime,
         requestId: ++this.requestId, inputAt: options.inputAt, kind: options.kind, final: !!options.final, resolve, effectiveEmitted: false, readyEmitted: false }; });
+      if (options.kind === 'step') target.stepDirection = options.stepDirection;
       // One speculative frame can make the next pointer target a RAM hit. Without
       // it, input immediately before every rAF can supersede each completed image.
       const moving = !target.final && ['drag', 'rapid'].includes(target.kind);
@@ -235,7 +237,7 @@
       const base = this.target && this.target.resolve ? this.target.index : (this.currentIndex === null ? 0 : this.currentIndex);
       const ordinal = this.index.stepIndex(this.info.frames, base, delta);
       this._halt(false); this.lastIssue = null; this.lastErrorCode = null;
-      return this._request(this.info.frames[ordinal].time, { index: ordinal, final: true, kind: 'step', inputAt: this.env.now() });
+      return this._request(this.info.frames[ordinal].time, { index: ordinal, final: true, kind: 'step', stepDirection: Math.sign(delta), inputAt: this.env.now() });
     }
     async _prime(ordinal, epoch, token) {
       while (this._playValid(epoch, token)) {
@@ -626,9 +628,14 @@
       if (this.target && this.target.resolve) return;
       if (this.state !== 'playing' && this.target && !this.target.final && ['drag', 'rapid'].includes(this.target.kind)) return;
       const base = this.currentIndex, playing = this.state === 'playing';
-      const maximumTasks = playing ? 2 : 1, ahead = playing ? 12 : 3;
-      for (let offset = 1; base !== null && offset <= ahead && base + offset < this.info.frames.length && this.tasks.size < maximumTasks; offset++) {
+      const maximumTasks = playing ? 2 : 1, direction = this.target && this.target.stepDirection || 1;
+      // Reserve the spare task slot for new input. Paused inspection prepares
+      // both sides, prioritising the most recent stepping direction.
+      const offsets = playing ? Array.from({ length: 12 }, (_, i) => i + 1) : [direction, -direction, direction * 2, -direction * 2, direction * 3, -direction * 3];
+      for (const offset of offsets) {
+        if (base === null || this.tasks.size >= maximumTasks) break;
         const ordinal = base + offset;
+        if (ordinal < 0 || ordinal >= this.info.frames.length) continue;
         if (playing && this.info.frames[ordinal].time - this.info.frames[base].time > 0.3) break;
         if (!this.cache.has(ordinal) && !this.tasks.has(this.epoch + ':' + ordinal) && !this.prefetchFailed.has(ordinal)) this._decode(ordinal, playing ? 'play-ahead' : 'neighbour', null);
       }

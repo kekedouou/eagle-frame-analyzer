@@ -77,7 +77,8 @@ function harness(settings = {}) {
       if (child.kind === 'monitor') return;
       const stamps = settings.stamps || ['1000', '1250'];
       const rows = ['[showinfo@v] config in time_base: 1/1000, frame_rate: 60/1',
-        ...stamps.map((stamp, n) => '[showinfo@v] n: ' + n + ' pts: ' + stamp + ' pts_time: 1.0'),
+        ...stamps.map((stamp, n) => '[showinfo@v] n: ' + n + ' pts: ' + stamp + ' pts_time: 1.0' +
+          (settings.frameDuration === undefined ? '' : ' duration: ' + settings.frameDuration + ' duration_time: 0.016667')),
         ...(settings.audio ? ['[ashowinfo@a] n: 0 pts: 72000 pts_time: 1.5'] : [])];
       if (!settings.holdDecode) {
         child.stdout.end(Buffer.concat(stamps.map(() => image)));
@@ -223,6 +224,26 @@ async function main() {
     const value = probe(); value.streams[0].duration_ts = '30000'; assert.strictEqual(pure.validateProbe(value).mediaSpan, 30);
     value.streams[0].duration_ts = '30001'; assert.throws(() => pure.validateProbe(value), /30/);
     const audio = probe(true); audio.streams[1].start_pts = '-1440000'; assert.throws(() => pure.validateProbe(audio), /30/);
+  });
+  await test('decoded last-frame duration repairs a declared end before the final picture without losing frames', async () => {
+    const p = probe(); p.streams[0].time_base = '1/90000'; p.streams[0].start_pts = '0'; p.streams[0].duration_ts = '872910';
+    const fixed = pure.resolveVideoEnd(pure.videoEnd(p), { ptsTicks: '873000' }, [1, 90000], '1500');
+    assert.strictEqual(fixed.lastFrameEndTicks, '874500'); assert.deepStrictEqual(fixed.timeBase, [1, 90000]);
+    const intact = pure.resolveVideoEnd(pure.videoEnd(p), { ptsTicks: '100' }, [1, 1000], '16');
+    assert.strictEqual(intact.lastFrameEndTicks, '872910');
+    assert.throws(() => pure.resolveVideoEnd(pure.videoEnd(p), { ptsTicks: '873000' }, [1, 90000], '0'), /末帧/);
+    assert.throws(() => pure.resolveVideoEnd(pure.videoEnd(p), { ptsTicks: '873000' }, [1, 90000], null), /末帧/);
+    for (const duration of ['-1', 'NaN', 1500]) assert.throws(() => pure.resolveVideoEnd(pure.videoEnd(p), { ptsTicks: '873000' }, [1, 90000], duration), /末帧/);
+    const exact = pure.resolveVideoEnd(pure.videoEnd(p), { ptsTicks: '465600' }, [1, 48000], '800');
+    assert.strictEqual(exact.lastFrameEndTicks, '466400'); assert.deepStrictEqual(exact.timeBase, [1, 48000]);
+    const crossing = probe(); crossing.streams[0].start_pts = '0'; crossing.streams[0].duration_ts = '1000';
+    const model = harness({ probe: crossing, stamps: ['0', '1000'], frameDuration: '17' });
+    const info = await model.media.prepare(model.snapshot);
+    assert.strictEqual(info.frames.length, 2); assert.strictEqual(info.frames[1].time, 1); assert.strictEqual(info.frames[1].end, 1.017);
+    assert.strictEqual(info.metrics.lastFrameEnd, 'decoded final PTS + explicit decoded frame duration (stream boundary inconsistent)');
+    const over = probe(); over.streams[0].start_pts = '0'; over.streams[0].duration_ts = '30000';
+    const beyond = harness({ probe: over, stamps: ['0', '30000'], frameDuration: '17' });
+    await assert.rejects(beyond.media.prepare(beyond.snapshot), /30/); assert(!beyond.events.includes('finish')); assert(beyond.state.aborted);
   });
   await test('T1 audio fallback cannot guess an unknown nonzero time origin', () => {
     const value = probe(true); delete value.streams[1].duration_ts; value.streams[1].duration = 'N/A';

@@ -20,7 +20,8 @@ canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
 .thumb { position: absolute; left: 0; top: 7px; width: 4px; height: 12px; background: #eee; border-radius: 2px; transform: translateX(-50%); }
 .time-hint { position: absolute; top: -21px; left: 0; transform: translateX(-50%); padding: 1px 5px; border: 1px solid #555; border-radius: 3px; background: #292929; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
 .controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-.time-readout { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; color: #d0d0d0; }
+.time-readout { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; color: #d0d0d0; display: flex; flex-wrap: wrap; justify-content: flex-end; column-gap: 14px; row-gap: 3px; }
+.frame-readout { color: #aaa; }
 .muted { color: #aaa; }
 .sidebar { border-left: 1px solid #3b3b3b; padding: 20px 18px; background: #292929; overflow-y: auto; }
 .sidebar h1 { font-size: 13px; font-weight: 600; margin: 0 0 16px; color: #aaa; }

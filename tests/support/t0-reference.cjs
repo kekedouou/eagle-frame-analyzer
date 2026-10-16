@@ -147,7 +147,9 @@ async function verifyJpegReference(backend, info, options = {}) {
   if (!source) throw new Error('Unregistered JPEG reference source');
   const sourceHash = () => createHash('sha256').update(fs.readFileSync(source.file)).digest('hex');
   const before = sourceHash(); if (before !== source.sha256) throw new Error('JPEG reference source SHA mismatch');
-  const indices = selectedIndices(info.frames.length);
+  const indices = options.indices === undefined ? selectedIndices(info.frames.length) : options.indices;
+  if (!Array.isArray(indices) || !indices.length || indices.length > 102 || new Set(indices).size !== indices.length ||
+      indices.some(n => !Number.isSafeInteger(n) || n < 0 || n >= info.frames.length)) throw new Error('Invalid bounded source reference ordinals');
   const expanded = [...new Set(indices.flatMap(index => [Math.max(0, index - 1), index, Math.min(info.frames.length - 1, index + 1)]))].sort((a, b) => a - b);
   const select = `select='${expanded.map(index => 'eq(n,' + index + ')').join('+')}'`;
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-copyts', '-threads', '2', '-i', source.file,
