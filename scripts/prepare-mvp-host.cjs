@@ -48,9 +48,14 @@ function verify(checkSources = true, allowPrevious = false) {
   if (marker.mode === 'preparation') require('../tests/support/preparation-runtime.cjs').verify(marker.preparation);
   return { host, plugin, marker, bytes };
 }
-function prepare(mode = 'performance') {
-  const profile = mode === 'preparation-hevc' ? 'hevc' : 'sonic'; if (mode === 'preparation-hevc') mode = 'preparation';
-  if (!['performance', 'preparation', 'experience'].includes(mode)) throw new Error('Explicit performance/preparation/experience entry required.');
+function entryMode(mode) {
+  const profiles = { preparation: 'sonic', 'preparation-hevc': 'hevc', 'preparation-vp9': 'vp9' };
+  if (Object.hasOwn(profiles, mode)) return { mode: 'preparation', profile: profiles[mode] };
+  if (mode === 'performance' || mode === 'experience') return { mode, profile: null };
+  throw new Error('Explicit performance/preparation/experience entry required.');
+}
+function prepare(requested = 'performance') {
+  const { mode, profile } = entryMode(requested);
   const previous = ['prepared.local.json', ...OUTPUTS].some(n => fs.existsSync(path.join(host, n))) ? verify(false, true) : null;
   const hashes = sourceHashes(), manifest = JSON.parse(read(path.join(plugin, 'manifest.json')));
   manifest.id = 'EVAMVPACCEPT20261015'; manifest.name = '视频分析 · 阶段4验收'; manifest.logo = '/logo.local.png'; manifest.main.url = 'index.local.html';
@@ -80,7 +85,7 @@ function prepare(mode = 'performance') {
   for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(host, name), bytes, fs.existsSync(path.join(host, name)) ? {} : { flag: 'wx' });
   return verify();
 }
-if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--preparation-hevc', '--experience'].includes(args.join(' '))) throw Error('Use no arguments, --preparation, --preparation-hevc or --experience.');
+if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--preparation-hevc', '--preparation-vp9', '--experience'].includes(args.join(' '))) throw Error('Use no arguments, --preparation, --preparation-hevc, --preparation-vp9 or --experience.');
   const result = prepare(args.length ? args[0].slice(2) : 'performance'); console.log(JSON.stringify({ host, manifest: path.join(host, 'manifest.json'), mode: result.marker.mode, bytes: result.bytes,
   loadedInEagle: false, metricsExecuted: false })); } catch (e) { console.error(e.stack); process.exitCode = 1; } }
-module.exports = { prepare, verify, sourceHashes, SOURCE_FILES, _test: { validSources } };
+module.exports = { prepare, verify, sourceHashes, SOURCE_FILES, _test: { validSources, entryMode } };

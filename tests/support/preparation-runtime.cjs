@@ -5,7 +5,8 @@ const repo = path.resolve(__dirname, '../..'), plugin = path.join(repo, 'plugin'
 const ROOT = path.join(repo, 'tests/host/t4/preparation-scratch'), DISK = 240 * 1024 ** 2, TOTAL = 256 * 1024 ** 2;
 const SOURCE_ID = 'MV3FZJJ7AC1CI', SOURCE_SHA = '0823a48f0d7b365163297206e8e8c66591c3aa6cf4c30253b3187d19c9644cba';
 const PROFILES = Object.freeze({ sonic: { id: SOURCE_ID, sha256: SOURCE_SHA, frames: 1490, name: '索尼克' },
-  hevc: { id: 'MV6H7OK0MBGX2', sha256: 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658', frames: 1596, name: '喜多郁代' } });
+  hevc: { id: 'MV6H7OK0MBGX2', sha256: 'd7bbab0b425381c880adacb9f8d95d900aa162c4c5c9308cf9a3f8482ff67658', frames: 1596, name: '喜多郁代' },
+  vp9: { id: 'MUXL6QI4AJIAG', sha256: '1482d4d245564789866a00dcd8993a3cd3154df49b92d719962762f67e051931', frames: 828, name: '地狱野蛮之锤' } });
 const FILES = ['task-client.cjs', 'task-worker.cjs', 'cache.cjs', 'frame-pack.cjs', 'frame-index.cjs', 'media.cjs',
   'process-identity.cjs', 'session.cjs', 'eagle.cjs', 'preferences.cjs', 'diagnostics.cjs',
   'native/task-host.cs', 'native/task-host.local.exe', 'native/task-host.local.json'];
@@ -22,10 +23,19 @@ function read(file, maximum = 1024 ** 2) {
   return bytes;
 }
 function source(profile) {
-  if (profile === 'hevc') {
-    const cfg = JSON.parse(read(path.join(repo, 'tests/host/t0/config.local.json'))), sample = PROFILES.hevc;
+  if (profile === 'hevc' || profile === 'vp9') {
+    const cfg = JSON.parse(read(path.join(repo, 'tests/host/t0/config.local.json'))), sample = PROFILES[profile];
+    if (profile === 'vp9') {
+      // This Eagle item also contains an unrelated historical MP4. Use the
+      // explicitly registered file, never pick the first file in its folder.
+      const baseline = cfg.sources.find(s => s.key === 'baseline');
+      if (!baseline || baseline.sha256 !== sample.sha256 || !path.isAbsolute(baseline.file) ||
+          path.basename(path.dirname(baseline.file)) !== sample.id + '.info') throw Error('已登记VP9源身份或路径不符。');
+      node(baseline.file);
+      return { id: sample.id, itemId: sample.id, name: sample.name, filePath: baseline.file, ext: 'mp4', sha256: sample.sha256 };
+    }
     const dir = path.join(path.dirname(path.dirname(cfg.sources.find(s => s.key === 'baseline').file)), sample.id + '.info');
-    node(dir, true); const names = fs.readdirSync(dir).filter(n => n.toLowerCase().endsWith('.mp4')); if (names.length !== 1) throw Error('已指定HEVC源缺失或不唯一。');
+    node(dir, true); const names = fs.readdirSync(dir).filter(n => n.toLowerCase().endsWith('.mp4')); if (names.length !== 1) throw Error('已指定视频源缺失或不唯一。');
     return { id: sample.id, itemId: sample.id, name: sample.name, filePath: path.join(dir, names[0]), ext: 'mp4', sha256: sample.sha256 };
   }
   const file = path.join(repo, 'verification-runs/t4/slot-047/record.json'), bytes = read(file);

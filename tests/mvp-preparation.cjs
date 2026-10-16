@@ -3,9 +3,10 @@
 const assert = require('assert'), path = require('path'), fs = require('fs'), vm = require('vm');
 const { install } = require('./support/mvp-preparation.cjs');
 const runtime = require('./support/preparation-runtime.cjs'), host = path.resolve(__dirname, 'host/t4');
-const source = { itemId: runtime.SOURCE_ID, sha256: runtime.SOURCE_SHA, filePath: 'G:\\素材\\索尼克.mp4' };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture(settings = {}) {
+  const profile = runtime.PROFILES[settings.profile || 'sonic'], frames = profile.frames;
+  const source = { itemId: profile.id, sha256: profile.sha256, filePath: 'G:\\素材\\' + profile.name + '.mp4' };
   const h = { sdk: {}, records: [], marks: [], timers: new Map(), calls: 0, closes: 0, clears: [], disposed: 0, subscribers: new Set(), current: null, clock: 100, consumed: settings.consumed };
   let serial = 0, closeTask = null;
   const reference = { root: runtime.ROOT, ownerSha256: 'a'.repeat(64) };
@@ -18,7 +19,7 @@ function fixture(settings = {}) {
   h.job = install({ window: h.win, document: h.doc, eagle: h.eagle, hostRoot: host, helpers: {
     verify: () => { if (settings.verifyFailure) throw Error('model-fingerprint-changed'); return { host, marker: { mode: settings.entryChanged && h.calls ? 'performance' : 'preparation', preparation: reference, sourceHashes: {} } }; },
     runtime: {
-      verify: () => ({ source, limits: { diskBytes: 240 * 1024 ** 2 }, original: {}, copied: {}, verifyFrames: !!settings.verifyFrames, expectedFrames: 1490 }),
+      verify: () => ({ source, limits: { diskBytes: 240 * 1024 ** 2 }, original: {}, copied: {}, verifyFrames: !!settings.verifyFrames, expectedFrames: frames }),
       mark(ref, name, value) { if (name === 'started.json') { if (h.consumed) throw Error('model-already-started'); h.consumed = true; }
         h.marks.push({ name, value }); },
       clear(ref, store, reason) { assert.equal(h.current.state, 'closed'); assert(!settings.holdClose || h.released); h.clears.push(reason); },
@@ -35,8 +36,8 @@ function fixture(settings = {}) {
       return { passed: !settings.failNumberedFrames }; },
     createStore: () => ({ start() { if (settings.recordFailure) throw Error('model-record-capacity'); return { runId: 'a'.repeat(32) }; },
       save(kind, payload) { assert(!h.storeClosed); h.records.push({ kind, payload }); return { file: 'model/' + h.records.length }; }, close() { h.storeClosed = true; } }),
-    manifest: () => ({ manifestSha256: 'b'.repeat(64), info: { framePack: { schema: 1, file: 'frames.pack', bytes: 1490, sha256: 'a'.repeat(64) },
-      frames: Array.from({ length: 1490 }, (_, n) => ({ id: n, file: String(n).padStart(6, '0') + '.jpg', offset: n, bytes: 1, sha256: 'a'.repeat(64) })), audio: { file: 'audio.wav' } } }),
+    manifest: () => ({ manifestSha256: 'b'.repeat(64), info: { framePack: { schema: 1, file: 'frames.pack', bytes: frames, sha256: 'a'.repeat(64) },
+      frames: Array.from({ length: frames }, (_, n) => ({ id: n, file: String(n).padStart(6, '0') + '.jpg', offset: n, bytes: 1, sha256: 'a'.repeat(64) })), audio: { file: 'audio.wav' } } }),
     startMonitor(options) { h.monitorOptions = options; return { issue: settings.resourceIssue || null, async stop() { return { rows: [1, 2], issue: settings.resourceIssue || null,
       observer: { samples: 15, stopReasons: settings.resourceIssue ? ['model-resource-incomplete'] : [] } }; } }; }
   } });
@@ -70,6 +71,17 @@ function fixture(settings = {}) {
 }
 async function main() {
   let count = 0; async function test(name, body) { await body(); count++; console.log('ok P03 ' + name); }
+  await test('explicit VP9 profile binds all 828 frames without repeating accepted Canvas checks', async () => {
+    const h = fixture({ profile: 'vp9' }); await h.start(); assert(h.summary().passed);
+    assert.equal(h.calls, 6); assert.equal(h.closes, 6); assert.equal(h.clears.length, 3);
+    assert(h.summary().rows.every(r => r.frames === 828 && r.sourceIdentity.itemId === runtime.PROFILES.vp9.id));
+    assert(!h.sourceFramesChecked && !h.numberedFramesChecked);
+    const { entryMode } = require('../scripts/prepare-mvp-host.cjs')._test;
+    assert.deepEqual(entryMode('preparation-vp9'), { mode: 'preparation', profile: 'vp9' });
+    assert.deepEqual(entryMode('preparation-hevc'), { mode: 'preparation', profile: 'hevc' });
+    assert.deepEqual(entryMode('preparation'), { mode: 'preparation', profile: 'sonic' });
+    for (const mode of ['__proto__', 'preparation-h264', '--preparation-vp9']) assert.throws(() => entryMode(mode));
+  });
   await test('six complete loads, alternate real generation/reuse, explicit readiness boundaries and release-before-reset', async () => {
     const h = fixture(); await h.start(); const s = h.summary();
     assert(s.complete && s.passed); assert.equal(h.calls, 6); assert.equal(h.closes, 6); assert.equal(h.disposed, 6);

@@ -1,5 +1,9 @@
 # 项目说明
 
+最新接续：已`--preparation-vp9`准备同一tests/host/t4目录/ID，固定“地狱野蛮之锤”/MUXL6QI4AJIAG/828帧，默认1GiB，只补完整P-03六次首次/复用，不重复Canvas/拖动/人工体验。统一检查与Eagle Node26项协调检查通过，入口10584B/38源指纹，未启动/无cache。用户仅需选中该源、打开既有阶段4验收；[准备/整理回执](experiments/T4/report.md#2026-10-16-vp9补验入口准备)190/189。旧HEVC副本/生成入口已核对归属后退役，原件169～188保留，正常plugin/设置/缓存未改；不要重开--preparation-hevc或以本地检查当实际运行成绩。
+
+当前恢复入口：f35fb8c的HEVC完整准备/实际Canvas已在Eagle通过并由188独立审计。喜多郁代首次约8.1～8.8秒、复用约1.7秒；24处主画布原源对比及206张既有编号片实际Canvas通过，测试cache清完。详细范围与原件见[T4结果](experiments/T4/report.md#2026-10-16-hevc完整准备与实际画布核对通过)。当前入口已一次运行完成，不再次执行--preparation-hevc覆盖；后续合并补VP9完整窗口与两轮长期的新后台资源证据，T2/T4整体未通过。以下待运行描述保留为历史，不要求重复已完成步骤。
+
 当前接续入口：显式`node scripts/prepare-mvp-host.cjs --preparation-hevc`复用T4，对“喜多郁代”默认1GiB做完整6次准备＋独立Canvas/已有编号片核对，不重跑索尼克或已认可体验。`window-frame-reference.cjs`仅测试源参考与实际Canvas；`preparation-runtime.cjs`明确区分sonic/hevc源profile，仍一次归属/副本/缓存边界。HEVC缩放1→4已有同内容管道收益，完整就绪未实测；[计划](experiments/T4/plan.md#2026-10-16-准确性兼容与长期收尾)及[证据](experiments/T4/report.md#2026-10-16-hevc缩放瓶颈与集中宿主入口准备)为恢复入口。生成前需关闭旧验收窗口；完成/已开始副本不覆盖，正常cache/设置/素材只读。当前阶段整体仍未通过。
 
 2026-10-16当前补充：末帧边界/双向逐帧准备/【/】及实际当前/总帧数已实现，用户三项集中反馈“全部正常”。7份既有/指定输入的后端时间及源JPEG/编号核对通过，不代替实际Canvas/全编码性能/长期，见[T4本轮](experiments/T4/report.md#2026-10-16-末帧边界修复与逐帧体验)。显式`node scripts/verify-frame-accuracy.cjs [--remaining-formats]`在accuracy-scratch生成有界隔离缓存并清理自己产物，不在默认检查执行，不默认重跑已通过数据；旧P-03副本已核对后清理，原配置保留于161。同一T4入口已`--experience`准备，只映射实际正式插件，无自动测量/记录/观察器；日常使用plugin。继续独立画布/真实编码性能/两轮长期，并诊断喜多郁代单次后端准备32.8秒风险，不提前宣称MVP通过。
