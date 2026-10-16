@@ -1,5 +1,7 @@
 # 项目说明
 
+最新R2状态：独立宿主加载未通过，原因已复现为Node16 native realpath对266字符路径误报ENOENT，文件实际存在。最小修复使用Windows扩展路径输入，安全规则/格式不变；长路径发布/复用/读图模型及原链接保护通过。旧b3bc597包已完整移入dist/rejected-0.1.0-beta.2-b3bc597，旧安装/缓存现场保留；不要再打开旧候选。新独立目录使用普通install-check-0.1.0-beta.2，实际媒体/包验收待补。250及[发布记录](releases/v0.1.0-beta.2.md)是本轮恢复入口，下方旧“等待一次加载”为失败前历史。
+
 当前恢复点：R2候选包来源b3bc597，ZIP/独立解压/真实自有Windows后台启动通过248/249；等待用户唯一必要的Eagle包加载体验。独立目录为dist/install-check-0.1.0-beta.2-中文 空格下的eagle-video-analysis-0.1.0-beta.2-win-x64，入口“视频分析 · MVP Beta”，不是旧T4测量入口。不要再build覆盖包或重新测量；只读核对用package-release的verify/verify-install。结果、SHA、范围与R3历史路径待确认见[当前发布记录](releases/v0.1.0-beta.2.md#r2当前实际验证与交接)。当前没有新标签/推送/Release，正常缓存/设置/素材只读。
 
 Beta2构建入口：`node scripts/package-release.cjs build|verify|extract|verify-install`，实际执行时选一个子命令，不直接输入竖线。build仅干净已提交来源，白名单21运行文件＋README/CHANGELOG/BUILD-INFO，目录/ZIP各≤2MiB；包与独立解压根均在dist，不覆盖既有包/数据。verify核对逐项ZIP/摘要/依赖；extract仅新建独立中文/空格目录，verify-install仅核对不可变运行文件与本机守护，不把它记作Eagle通过。旧package-beta只核验历史Beta1。原自有Windows技术验证脚本的Eagle程序位置改由本机环境EVA_EAGLE_EXECUTABLE明确提供（只影响开发工具）；这些命令不会自动运行，路径不进入公开代码。`scripts/audit-publication.cjs`只读检查当前内容与待推对象，不输出匹配秘密原文；扫描报警不是自动清除许可。

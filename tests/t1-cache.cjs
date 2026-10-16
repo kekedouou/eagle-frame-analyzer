@@ -89,8 +89,9 @@ function memoryFileSystem() {
   } };
   return { api, nodes, state, descriptors, deleted, normal, make };
 }
-function harness(options = {}) {
+function harness(options = {}, filesystemSetup = null) {
   const memory = memoryFileSystem();
+  if (filesystemSetup) filesystemSetup(memory);
   const identity = { self: () => ({ pid: 4242, startTicks: '638958000000000000', image: 'D:\\fixtures\\Eagle.exe' }),
     child: pid => ({ pid, startTicks: '638958000010000000', image: 'D:\\fixtures\\ffmpeg.exe' }),
     inspect: () => ({ safe: false, reason: 'model-process-alive' }) };

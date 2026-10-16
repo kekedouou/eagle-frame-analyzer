@@ -11,7 +11,7 @@ const RUNTIME = Object.freeze(['manifest.json', 'index.html', 'styles.css', 'log
 const NAMES = [...RUNTIME, 'README.md', 'CHANGELOG.md', 'BUILD-INFO.json'].sort();
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const dist = path.join(ROOT, 'dist'), folder = path.join(dist, NAME), zip = folder + '.zip';
-const installParent = path.join(dist, 'install-check-' + VERSION + '-中文 空格'), install = path.join(installParent, NAME);
+const installParent = path.join(dist, 'install-check-' + VERSION), install = path.join(installParent, NAME);
 function node(file, directory = false) {
   const s = fs.lstatSync(file, { bigint: true });
   assert(!s.isSymbolicLink() && (directory ? s.isDirectory() : s.isFile()) &&

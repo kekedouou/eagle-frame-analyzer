@@ -3,9 +3,13 @@
 // Formal cache ownership, bounded I/O and guarded cache maintenance.
 // Unknown locks/partials remain protected, never inferred dead from a PID.
 const fs = require('fs');
-// Same canonical-path checks, using the OS implementation available in Node16.
-const realpath = typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native : fs.realpathSync;
 const path = require('path');
+// Node16's Windows native realpath may reject existing long ordinary paths.
+// Extended input retains OS canonicalization; resolved paths still face the same guards.
+const nativeRealpath = fs.realpathSync.native;
+const realpath = typeof nativeRealpath === 'function'
+  ? file => nativeRealpath(process.platform === 'win32' ? path.toNamespacedPath(file) : file)
+  : fs.realpathSync;
 const crypto = require('crypto');
 const { validateIndex } = require('./frame-index.cjs');
 const { createIdentity } = require('./process-identity.cjs');
