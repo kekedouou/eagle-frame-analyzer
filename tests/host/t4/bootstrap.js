@@ -8,5 +8,7 @@
     local = new URL('file:///' + entry.pathname.replace(/^\/+/, ''));
   else if (entry.protocol !== 'file:') throw new Error('阶段4入口需要本地Eagle插件地址。');
   const hostRoot = path.dirname(fileURLToPath(local.href));
-  require(path.resolve(hostRoot, '../../support/mvp-launch.cjs')).install({ window, document, eagle, hostRoot });
+  const prepared = require(path.resolve(hostRoot, '../../../scripts/prepare-mvp-host.cjs')).verify();
+  const module = prepared.marker.mode === 'preparation' ? 'mvp-preparation.cjs' : 'mvp-launch.cjs';
+  require(path.resolve(hostRoot, '../../support', module)).install({ window, document, eagle, hostRoot });
 })();
