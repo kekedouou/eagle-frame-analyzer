@@ -1,6 +1,6 @@
 # 项目说明
 
-当前恢复入口：已显式`node scripts/prepare-mvp-host.cjs --stability-vp9`准备同一T4目录/ID，固定“索尼克”＋“地狱野蛮之锤”、默认1GiB；用户仅单选索尼克、打开既有阶段4验收，自动60分钟＋5分钟，可被其他应用覆盖但暂不最小化。11009B/42源指纹、未启动/无cache，207/208检查及未验边界见[T4准备结果](experiments/T4/report.md#2026-10-16-两轮长期入口本地准备完成)。不要执行已完成P-03或旧T2入口；实际两轮长期与总验收未通过。
+当前恢复入口：stability-vp9首轮已运行并于约35分钟因监测工具child-image/Windows错误5主动中止，原件209～220、无损复算与独立审计221见[T4失败核对](experiments/T4/report.md#2026-10-16-首轮长期验证中断原因核对)。不是RAM停止线或播放器错误触发，后半段缺数据/关闭后未观察不能记泄漏或通过。先修工具退出分类、失败上下文和加载中取消判读，短验证后再准备长期；本次未改正式plugin，既有P-03/帧准确性/人工体验保留，不重测。唯一stability-scratch已started/finished失败、cache现场保留，不能直接重开/覆盖；更换入口前按F规则核对归属/占用。现余33槽不足同时按19槽预留两轮，须先核查证据容量，不自动扩容或删原件。实际两轮长期与T2/T4/MVP整体仍未通过，下方“未启动”是历史描述。
 
 测试模块：mvp-stability负责宿主协调，stability-runtime负责唯一stability-scratch副本及两素材归属，window-resource复用原工作循环，mvp-monitor负责短/长外部采样，long-trace负责无损有界轨迹及读取。原T4 readReceipt仍验证封装/摘要，长段用long-trace.decode还原窗口与外部原始行后按mvp-resource和window-resource趋势规则复算；旧audit-resource的T2文件入口不适用于新T4长段。14份运行副本仅worker磁盘缩至240MiB，正常plugin5GiB/偏好不动；第一轮核对后再按F规则切换--stability-hevc（索尼克＋喜多郁代），不覆盖started/finished。阶段记录、失败及清理分别引用报告，不把模型或短Windows检查当65分钟Eagle成绩。
 
