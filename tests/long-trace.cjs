@@ -34,6 +34,17 @@ assert.throws(() => decode({ ...encode(events, 0), data: encode(events, 0).data.
 const saved = [], records = recorder({ save(kind, payload) { saved.push(payload); return { index: saved.length }; } });
 for (const event of events) records.append(event); records.flush(); assert.equal(saved.length, 1); assert.deepStrictEqual(decode(saved[0]), events);
 assert.equal(records.summary().pendingEvents, 0);
+const delayedPayloads = [], delayed = recorder({ save(kind, payload) { delayedPayloads.push(payload); return { index: delayedPayloads.length }; } }, { deferred: true });
+const zlib = require('zlib'), originalCompress = zlib.brotliCompressSync; let compressCalls = 0;
+try {
+  zlib.brotliCompressSync = (...args) => { compressCalls++; return originalCompress(...args); };
+  for (let i = 0; i < 4000; i++) delayed.append(events[0]);
+  assert.equal(compressCalls, 0); assert.equal(delayedPayloads.length, 0);
+  assert.throws(() => delayed.append(events[0]), /短回归记录超过/);
+  assert.equal(delayed.summary().pendingEvents, 4000); assert.equal(delayed.summary().limits.chunks, 2);
+  delayed.flush(); assert(compressCalls > 0); assert.equal(delayed.summary().pendingEvents, 0);
+  assert.equal(delayedPayloads.reduce((n, p) => n + decode(p).length, 0), 4000);
+} finally { zlib.brotliCompressSync = originalCompress; }
 let attempts = 0; const broken = recorder({ save() { attempts++; throw Error('model-full'); } }); broken.append(events[0]);
 assert.throws(() => broken.flush(), /model-full/); assert.throws(() => broken.flush(), /model-full/); assert.equal(attempts, 1); assert.equal(broken.summary().pendingEvents, 1);
 let cappedSlots = 0; const capped = recorder({ save() { return { slot: ++cappedSlots }; } });

@@ -154,12 +154,12 @@ async function main() {
     const source = fs.readFileSync(path.join(host, 'bootstrap.js'), 'utf8');
     const fileUrl = require('url').pathToFileURL(path.join(host, 'index.local.html')).href;
     const eagleUrl = 'eagleplugin:///' + new URL(fileUrl).pathname.replace(/^\/+/, '');
-    for (const mode of ['preparation', 'performance', 'stability']) for (const href of [fileUrl, eagleUrl]) {
+    for (const mode of ['preparation', 'performance', 'stability', 'resource-short']) for (const href of [fileUrl, eagleUrl]) {
       let loaded = null;
       vm.runInNewContext(source, { window: { location: { href } }, document: {}, eagle: {}, require(name) {
         if (name === 'path' || name === 'url') return require(name);
         if (name === path.resolve(host, '../../../scripts/prepare-mvp-host.cjs')) return { verify: () => ({ marker: { mode } }) };
-        if (name === path.resolve(host, '../../support', mode === 'preparation' ? 'mvp-preparation.cjs' : mode === 'stability' ? 'mvp-stability.cjs' : 'mvp-launch.cjs')) return { install(options) { assert.equal(options.hostRoot, host); loaded = mode; } };
+        if (name === path.resolve(host, '../../support', mode === 'preparation' ? 'mvp-preparation.cjs' : ['stability', 'resource-short'].includes(mode) ? 'mvp-stability.cjs' : 'mvp-launch.cjs')) return { install(options) { assert.equal(options.hostRoot, host); loaded = mode; } };
         throw Error('Unexpected bootstrap module: ' + name);
       } }); assert.equal(loaded, mode);
     }

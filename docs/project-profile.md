@@ -1,6 +1,6 @@
 # 项目说明
 
-当前恢复入口：第二次长期227～234因真实集合RSS1.507614GiB越1.5GiB线停止，视频预算＜1GiB、native/Player无错误。235诊断及只读Eagle Node重放提示窗口内同步记录处理的临时内存/阻塞嫌疑，见[T4第二次中断](experiments/T4/report.md#2026-10-16-第二次长期验证触发进程内存保护)。先隔离记录处理并补真实负载叠加的短检查，候选未实施；不直接请求再长测或提高RAM。唯一stability-scratch已started/finished失败、cache保留，原件不覆盖。余19槽不足两轮14槽预检，后续必须明确记录空间，不能自动扩容/删失败证据。产品/门槛未改，既有P-03/帧/人工体验保留，T2/T4/MVP仍未整体通过；下方“未启动/28槽”是上轮历史。
+当前恢复入口：新resource-short已通过238本地/真实Eagle Node兼容并准备同T4目录/ID，见[当前结果](experiments/T4/report.md#2026-10-16-短资源回归入口准备完成)。用户单选索尼克、打开原阶段4入口，自动120秒工作＋30秒静置，含准备约3分钟；可覆盖，暂不最小化，不需重新导入/命令。deferred记录播放中不编码压缩、关闭确认后才汇总；5分钟保护期限。唯一stability-scratch未启动/无cache，11014B/42指纹，余16槽，每轮预检5槽。旧副本236/237按归属退役，227～235失败/诊断保留。正式plugin/额度/保护线未改，实际短回归、当前超线根因和长期稳定性未充分验证，不判T2/T4/MVP整体通过；正常使用观察工具尚未实现，下方两轮长测为历史。
 
 测试模块：mvp-stability负责宿主协调，stability-runtime负责唯一stability-scratch副本及两素材归属，window-resource复用原工作循环，mvp-monitor负责短/长外部采样，long-trace负责无损有界轨迹及读取（新写Brotli-v2，旧binary-v1保留读取）。原T4 readReceipt仍验证封装/摘要，长段用long-trace.decode还原窗口与外部原始行后按mvp-resource和window-resource趋势规则复算；旧audit-resource的T2文件入口不适用于新T4长段。14份运行副本仅worker磁盘缩至240MiB，正常plugin5GiB/偏好不动；第一轮核对后再按F规则切换--stability-hevc（索尼克＋喜多郁代），不覆盖started/finished。阶段记录、失败及清理分别引用报告，不把模型或短Windows检查当65分钟Eagle成绩。
 

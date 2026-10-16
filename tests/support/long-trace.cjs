@@ -145,14 +145,16 @@ function decode(chunk) {
       roots: r[6].map(a => { const p = get(chunk.roots, a[0], 3); return { pid: p[0], startTicks: p[1], role: p[2], alive: a[1] }; }) }) };
   });
 }
-function recorder(store) {
+function recorder(store, options = {}) {
+  const deferred = options.deferred === true;
+  const limits = deferred ? { ...MAX, chunks: 2, events: 4000, pendingBytes: 8 * 1024 ** 2 } : MAX;
   let pending = [], pendingBytes = 0, total = 0, failed = null; const chunks = [];
   function fits(rows) { const payload = encode(rows, chunks.length), raw = Buffer.from(JSON.stringify(payload));
     return { payload, fits: raw.length <= MAX.rawBytes && zlib.gzipSync(raw).length <= MAX.packedBytes }; }
   function flush(all = true) {
     if (failed) throw failed;
     while (pending.length) {
-      if (chunks.length >= MAX.chunks) throw Error('长期轨迹达到本轮11槽上限，停止并保留已存记录。');
+      if (chunks.length >= limits.chunks) throw Error('资源轨迹达到本轮' + limits.chunks + '槽上限，停止并保留已存记录。');
       let count = pending.length, candidate = fits(pending);
       if (!candidate.fits) { let lo = 1, hi = count;
         while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(pending.slice(0, mid)).fits) lo = mid; else hi = mid - 1; }
@@ -169,9 +171,13 @@ function recorder(store) {
     if (event.kind !== 'native' && event.kind !== 'renderer') throw Error('Unknown long event.');
     const bytes = Buffer.byteLength(JSON.stringify(event));
     if (bytes > MAX.pendingBytes) throw Error('Long row exceeds memory boundary.');
+    if (deferred) {
+      if (pending.length >= limits.events || pendingBytes + bytes > limits.pendingBytes) throw Error('短回归记录超过内存边界，停止并在释放后保存已有记录。');
+      pending.push(event); pendingBytes += bytes; total++; return;
+    }
     while (pending.length >= MAX.events || pendingBytes + bytes > MAX.pendingBytes) flush(false);
     pending.push(event); pendingBytes += bytes; total++;
     if (pending.length % 1000 === 0 && !fits(pending).fits) flush(false);
-  }, flush, summary: () => ({ chunks: chunks.slice(), totalEvents: total, pendingEvents: pending.length, pendingBytes, limits: MAX }) };
+  }, flush, summary: () => ({ chunks: chunks.slice(), totalEvents: total, pendingEvents: pending.length, pendingBytes, deferred, limits }) };
 }
 module.exports = { compactDecoder, encode, decode, recorder, MAX };

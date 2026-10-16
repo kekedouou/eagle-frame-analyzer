@@ -19,6 +19,6 @@
     };
     return;
   }
-  const module = prepared.marker.mode === 'preparation' ? 'mvp-preparation.cjs' : prepared.marker.mode === 'stability' ? 'mvp-stability.cjs' : 'mvp-launch.cjs';
+  const module = prepared.marker.mode === 'preparation' ? 'mvp-preparation.cjs' : ['stability', 'resource-short'].includes(prepared.marker.mode) ? 'mvp-stability.cjs' : 'mvp-launch.cjs';
   require(path.resolve(hostRoot, '../../support', module)).install({ window, document, eagle, hostRoot });
 })();

@@ -1,13 +1,13 @@
 'use strict';
 // Accelerated model only: no Eagle, video reads, waits of 65 minutes, or evidence writes.
 const assert = require('assert'), zlib = require('zlib');
-const { _test: api, PROTOCOL } = require('./support/window-resource.cjs');
+const { _test: api, PROTOCOL, SHORT_PROTOCOL } = require('./support/window-resource.cjs');
 const MODEL = { ...PROTOCOL, workMs: 2000, idleMs: 300, cycleMs: 200, sampleMs: 10, actionMs: 5, loadTimeoutMs: 100, settleMs: 40 };
 const MIB = 1024 ** 2;
 let count = 0;
 function model(settings = {}) {
   let clock = 0, next = 0, epoch = 1, state = 'paused', source = 0, selected = 0, closed = false, restored = false, storeClosed = false;
-  let sampleCount = 0, writes = 0, reloaded = 0, frame = 0;
+  let sampleCount = 0, writes = 0, reloaded = 0, frame = 0, lastPlayTick = -1;
   const observers = new Set(), timers = new Map(), intervals = new Map(), saved = [];
   const samples = [0, 1].map(i => ({ id: 'item-' + i, sha256: String(i).repeat(64) }));
   const snapshot = () => ({ state, epoch, libraryEpoch: 0, loadMetrics: { reused: true }, sourceIdentity: { itemId: samples[source].id, sha256: samples[source].sha256 },
@@ -22,7 +22,8 @@ function model(settings = {}) {
         const end = clock + ms;
         for (let at = clock + 1; at <= end; at++) {
           clock = at;
-          if (state === 'playing' && clock % 10 === 0 && !settings.noPlayDraws) { frame = (frame + 1) % 60; emit({ type: 'draw' }); }
+          const playTick = Math.floor(clock / 10);
+          if (state === 'playing' && playTick !== lastPlayTick && !settings.noPlayDraws) { lastPlayTick = playTick; frame = (frame + 1) % 60; emit({ type: 'draw' }); }
           for (const interval of intervals.values()) if (clock >= interval.next) { interval.next += interval.ms; interval.callback(); }
         }
         clock = end; callback();
@@ -158,6 +159,14 @@ async function main() {
   await test('nonzero disposed budget cannot pass resource cleanup', async () => {
     const f = model({ remainingBudget: true }); await api.execute(f.options, MODEL).done;
     assert(!f.saved.find(v => v.type === 'resource-summary').cleanup.verified);
+  });
+  await test('approved short protocol checks real activities, timing and release without claiming historical long stability', async () => {
+    const f = model(); f.options.evidenceStage = 'T4'; f.options.verifyActivities = true; f.options.onSample = () => {};
+    const result = await api.execute(f.options, SHORT_PROTOCOL).done, summary = f.saved.find(v => v.type === 'resource-summary');
+    assert(result.shortResourceGatePassed, JSON.stringify(summary)); assert(!result.resourceGatePassed);
+    assert.equal(summary.protocolKind, 'short-resource'); assert.equal(summary.modelRun, false);
+    assert(summary.workElapsedMs >= 120000 && summary.idleElapsedMs >= 30000);
+    assert.equal(summary.activities.length, 12); assert.equal(summary.loads.length, 4); assert(summary.cleanup.verified);
   });
   await test('load cancellation preserves its root cause and does not wait for load timeout or invent a zero budget', async () => {
     const f = model({ hangLoad: true, missingFinalEvent: true }), job = api.execute(f.options, MODEL);

@@ -42,19 +42,20 @@ function verify(checkSources = true, allowPrevious = false) {
   if (marker.schema !== 'mvp-host-prepared-v1' || marker.hostRoot.toLowerCase() !== host.toLowerCase() || marker.pluginRoot.toLowerCase() !== plugin.toLowerCase() ||
       JSON.stringify(Object.keys(marker.files).sort()) !== JSON.stringify(OUTPUTS.slice().sort()) ||
       !validSources(marker.sourceHashes, !checkSources && allowPrevious)) throw new Error('Unknown MVP entry ownership.');
-  if (!['performance', 'preparation', 'experience', 'stability'].includes(marker.mode || 'performance')) throw new Error('Unknown MVP entry mode.');
+  if (!['performance', 'preparation', 'experience', 'stability', 'resource-short'].includes(marker.mode || 'performance')) throw new Error('Unknown MVP entry mode.');
   let bytes = read(path.join(host, 'prepared.local.json')).length;
   for (const name of OUTPUTS) { const b = read(path.join(host, name)); bytes += b.length; if (sha(b) !== marker.files[name]) throw new Error('Prepared MVP entry modified.'); }
   if (bytes > 256 * 1024 || checkSources && JSON.stringify(sourceHashes()) !== JSON.stringify(marker.sourceHashes)) throw new Error('MVP entry source fingerprints changed; reprepare required.');
   require('../plugin/task-client.cjs').verifyGuard(plugin); require('./build-resource-sampler.cjs').verify();
   if (marker.mode === 'preparation') require('../tests/support/preparation-runtime.cjs').verify(marker.preparation);
-  if (marker.mode === 'stability') require('../tests/support/stability-runtime.cjs').verify(marker.stability);
+  if (['stability', 'resource-short'].includes(marker.mode)) require('../tests/support/stability-runtime.cjs').verify(marker.stability);
   return { host, plugin, marker, bytes };
 }
 function entryMode(mode) {
   const profiles = { preparation: 'sonic', 'preparation-hevc': 'hevc', 'preparation-vp9': 'vp9' };
   if (Object.hasOwn(profiles, mode)) return { mode: 'preparation', profile: profiles[mode] };
   if (mode === 'stability-vp9' || mode === 'stability-hevc') return { mode: 'stability', profile: mode.slice('stability-'.length) };
+  if (mode === 'resource-short' || mode === 'resource-short-hevc') return { mode: 'resource-short', profile: mode === 'resource-short' ? 'vp9' : 'hevc' };
   if (mode === 'performance' || mode === 'experience') return { mode, profile: null };
   throw new Error('Explicit performance/preparation/experience entry required.');
 }
@@ -81,10 +82,10 @@ function prepare(requested = 'performance') {
       const owner = runtime.unused(previous.marker.preparation); if ((owner.profile || 'sonic') !== profile) throw Error('已准备另一个专项，不覆盖其副本。'); preparation = previous.marker.preparation;
     } else preparation = runtime.create({ profile });
   }
-  if (mode === 'stability') {
+  if (['stability', 'resource-short'].includes(mode)) {
     const runtime = require('../tests/support/stability-runtime.cjs');
-    if (previous && previous.marker.mode === 'stability') {
-      const owner = runtime.unused(previous.marker.stability); if (owner.profile !== profile) throw Error('已准备另一个长期专项，不覆盖。'); stability = previous.marker.stability;
+    if (previous && ['stability', 'resource-short'].includes(previous.marker.mode)) {
+      const owner = runtime.unused(previous.marker.stability); if (owner.profile !== profile || previous.marker.mode !== mode) throw Error('已准备另一个资源专项，不覆盖。'); stability = previous.marker.stability;
     } else stability = runtime.create(profile);
   }
   const marker = { schema: 'mvp-host-prepared-v1', hostRoot: host, pluginRoot: plugin, mode, sourceHashes: hashes,
@@ -96,7 +97,7 @@ function prepare(requested = 'performance') {
   for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(host, name), bytes, fs.existsSync(path.join(host, name)) ? {} : { flag: 'wx' });
   return verify();
 }
-if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--preparation-hevc', '--preparation-vp9', '--experience', '--stability-vp9', '--stability-hevc'].includes(args.join(' '))) throw Error('Use explicit --preparation[-hevc|-vp9], --stability-vp9, --stability-hevc or --experience.');
+if (require.main === module) { try { const args = process.argv.slice(2); if (args.length && !['--preparation', '--preparation-hevc', '--preparation-vp9', '--experience', '--stability-vp9', '--stability-hevc', '--resource-short', '--resource-short-hevc'].includes(args.join(' '))) throw Error('Use explicit preparation/experience/resource-short entry.');
   const result = prepare(args.length ? args[0].slice(2) : 'performance'); console.log(JSON.stringify({ host, manifest: path.join(host, 'manifest.json'), mode: result.marker.mode, bytes: result.bytes,
   loadedInEagle: false, metricsExecuted: false })); } catch (e) { console.error(e.stack); process.exitCode = 1; } }
 module.exports = { prepare, verify, sourceHashes, SOURCE_FILES, _test: { validSources, entryMode } };

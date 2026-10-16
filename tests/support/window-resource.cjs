@@ -7,6 +7,7 @@ const { _test: { registeredManifest } } = require('./window-host.cjs');
 const MIB = 1024 ** 2;
 const PROTOCOL = Object.freeze({ workMs: 3600000, idleMs: 300000, cycleMs: 60000,
   sampleMs: 100, actionMs: 1000 / 120, loadTimeoutMs: 120000, settleMs: 10000 });
+const SHORT_PROTOCOL = Object.freeze({ ...PROTOCOL, workMs: 120000, idleMs: 30000, cycleMs: 30000 });
 const KNOWN = Object.freeze([
   { id: 'MV3FZJJ7AC1CI', sha256: '0823a48f0d7b365163297206e8e8c66591c3aa6cf4c30253b3187d19c9644cba' },
   { id: 'MV3FZ0Z86KYBH', sha256: 'aabf057017744c38737f65c4e7a983a1f8d9e5258c178bcc3e723dcdb56ccc53' }
@@ -87,7 +88,7 @@ function packRows(rows) {
   if (bytes.length > 48 * 1024) throw new Error('资源记录压缩段超过48KiB，保留既有证据。');
   return { encoding: 'gzip-base64', rows: rows.length, rawBytes: raw.length, sha256: sha(bytes), data: bytes.toString('base64') };
 }
-function run(options) { return execute(options, PROTOCOL); }
+function run(options) { return execute(options, options.shortResource === true ? SHORT_PROTOCOL : PROTOCOL); }
 function execute(options, protocol) {
   const { bridge, document: doc, window: win, pluginRoot } = options;
   const stage = options.evidenceStage || 'T2';
@@ -292,9 +293,15 @@ function execute(options, protocol) {
     try {
       if (selection && !saveFailed) { try { flush(); } catch (error) { failure = failure || error.message; } }
       const trend = trends(comparisonRows, protocol);
+      const shortActivities = !!options.verifyActivities && [0, 1].every(sample => ['drag', 'play', 'step'].every(phase =>
+        activities.some(a => a.sample === sample && a.phase === phase && (phase === 'step' ? a.checkedOperations > 0 : a.draws > 0)))) &&
+        [0, 1].every(sample => loads.some(load => load.sample === sample));
       const summary = { schema: 'window-resource-summary-v1', stage, type: 'resource-summary', complete: complete && !issue && !saveFailed,
         resourceGatePassed: complete && !issue && !saveFailed && trend.passed && !!cleanup && cleanup.verified && protocol === PROTOCOL,
-        protocol, modelRun: protocol !== PROTOCOL, workElapsedMs, idleElapsedMs, launchContext: options.launchContext, error: failure || issue && issue.message,
+        shortResourceGatePassed: protocol === SHORT_PROTOCOL && complete && !issue && !saveFailed && shortActivities && !!cleanup && cleanup.verified &&
+          workElapsedMs >= SHORT_PROTOCOL.workMs && idleElapsedMs >= SHORT_PROTOCOL.idleMs,
+        protocolKind: protocol === SHORT_PROTOCOL ? 'short-resource' : protocol === PROTOCOL ? 'historical-long-resource' : 'model',
+        protocol, modelRun: protocol !== PROTOCOL && protocol !== SHORT_PROTOCOL, workElapsedMs, idleElapsedMs, launchContext: options.launchContext, error: failure || issue && issue.message,
         samples: selection ? selection.samples : [], sourceSelection: 'test-only fixed snapshots from real SDK; Eagle selection itself is unchanged',
         chunks, externalTrace, activityChecks: !!options.verifyActivities, activities, loads, trend, cleanup, totalSamples, maxSampleGapMs, peakRendererRssBytes: peakRss, peakManagedBytes: peakManaged, managedLimitBytes: managedLimit,
         totalDrawSubmissions: measuredFrames, playerErrors: eventErrors, playerFailures, cpu: { start: startCPU, endMicros: lastCPU, scope: 'current renderer process, one logical core = 100%; interval deltas retained in chunks' },
@@ -303,7 +310,7 @@ function execute(options, protocol) {
           'No FFmpeg generation expected: existing complete caches only; auxiliary process resource usage not measured.',
           'Window visibility/focus is sampled; background draw stalls fail workload checks. Actual background execution still requires host verification.',
           'This workload does not replace foreground P01/P02 raw input latency traces or manual audio/drag experience.',
-          'Two independent 65-minute launches and an independent receipt audit are required; one saved run is insufficient.'] };
+          protocol === SHORT_PROTOCOL ? 'Short resource checks do not establish long-term stability or the historical65-minute protocol.' : 'Historical long protocol; current workflow follows the approved short checks and real-use observation.'] };
       function retainFailure(error) {
         let pendingSamples = null;
         try { if (pendingRows.length) pendingSamples = packRows(pendingRows); } catch (_) { /* Explicit failure; never invent dropped rows. */ }
@@ -314,11 +321,12 @@ function execute(options, protocol) {
       let receipt;
       try { receipt = save(summary); }
       catch (error) { retainFailure(error); throw error; }
-      return { complete: summary.complete, resourceGatePassed: summary.resourceGatePassed, cleanupVerified: cleanup.verified, receipts: [...chunks, receipt], summary };
+      return { complete: summary.complete, resourceGatePassed: summary.resourceGatePassed, shortResourceGatePassed: summary.shortResourceGatePassed,
+        cleanupVerified: cleanup.verified, receipts: [...chunks, receipt], summary };
     } finally { store.close(); }
   }
   const done = executeRound();
   return Object.freeze({ done, cancel(reason) { fail(reason ? String(reason.message || reason).slice(0, 2048) : '资源验证已取消。'); }, unsavedEvidence: () => unsaved,
     status: () => ({ phase, sample: sampleIndex, elapsedMs: recording ? now() - begin : null }) });
 }
-module.exports = { run, PROTOCOL, _test: { execute, trends, median, packRows, selections, hashSource } };
+module.exports = { run, PROTOCOL, SHORT_PROTOCOL, _test: { execute, trends, median, packRows, selections, hashSource } };
